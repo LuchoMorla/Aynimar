@@ -40,7 +40,7 @@ router.post(
 );
 
 router.post(
-  '/add-item',
+  '/add-commodity',
   validatorHandler(addCommoditieSchema, 'body'),
   async (req, res, next) => {
     try {

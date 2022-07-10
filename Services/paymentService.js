@@ -20,7 +20,7 @@ class PaymentService {
   async findByUser(userId) {
     const payments = await models.Payment.findAll({
       where: {
-        '$customer.user.id$': userId
+        '$recycler.user.id$': userId
       },
       include: [
         {

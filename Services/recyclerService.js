@@ -22,7 +22,7 @@ class RecyclerService {
   }
 
   async create(data) {
-    const hash = await bcrypt.hash(data.recycler.password, 10);
+    const hash = await bcrypt.hash(data.user.password, 10);
     const role = 'recycler';
     const newData = {
       ...data,

@@ -1,17 +1,17 @@
 const express = require('express');
 
-const WasteService = require('../Services/wasteService');
+const RecyclerService = require('../Services/recyclerService');
 const validationHandler = require('../middlewares/validatorHandler');
 const {
-  createWasteSchema,
-  getWasteSchema,
-  updateWasteSchema,
-} = require('../schemaODtos/WasteSchema');
+  getRecyclerSchema,
+  createRecyclerSchema,
+  updateRecyclerSchema,
+} = require('../schemaODtos/recyclerSchema');
 
 const router = express.Router();
-const service = new WasteService();
+const service = new RecyclerService();
 
-router.get('/',  async (req, res, next) => {
+router.get('/', async (req, res, next) => {
   try {
     res.json(await service.find());
   } catch (error) {
@@ -19,8 +19,9 @@ router.get('/',  async (req, res, next) => {
   }
 });
 
-router.post('/',
-  validationHandler(createWasteSchema, 'body'),
+router.post(
+  '/',
+  validationHandler(createRecyclerSchema, 'body'),
   async (req, res, next) => {
     try {
       const body = req.body;
@@ -31,9 +32,10 @@ router.post('/',
   }
 );
 
-router.patch('/:id',
-  validationHandler(getWasteSchema, 'params'),
-  validationHandler(updateWasteSchema, 'body'),
+router.patch(
+  '/:id',
+  validationHandler(getRecyclerSchema, 'params'),
+  validationHandler(updateRecyclerSchema, 'body'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
@@ -45,8 +47,9 @@ router.patch('/:id',
   }
 );
 
-router.delete('/:id',
-  validationHandler(getWasteSchema, 'params'),
+router.delete(
+  '/:id',
+  validationHandler(getRecyclerSchema, 'params'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
