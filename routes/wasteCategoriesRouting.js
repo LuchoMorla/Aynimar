@@ -16,7 +16,7 @@ const service = new WasteCategoryService();
 router.get(
   '/',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'seller', 'customer'),
+  checkRoles('admin', 'recycler', 'customer'),
   async (req, res, next) => {
     try {
       const wasteCategories = await service.find();
@@ -30,7 +30,7 @@ router.get(
 router.get(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'seller', 'customer'),
+  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(getWasteCategorySchema, 'params'),
   async (req, res, next) => {
     try {
@@ -63,7 +63,7 @@ router.post(
 router.patch(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'seller'),
+  checkRoles('admin'),
   validatorHandler(getWasteCategorySchema, 'params'),
   validatorHandler(updateWasteCategorySchema, 'body'),
   async (req, res, next) => {
@@ -81,7 +81,7 @@ router.patch(
 router.delete(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'seller'),
+  checkRoles('admin'),
   validatorHandler(getWasteCategorySchema, 'params'),
   async (req, res, next) => {
     try {
