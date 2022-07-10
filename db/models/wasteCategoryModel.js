@@ -32,7 +32,7 @@ class WasteCategory extends Model {
   static associate(models) {
     this.hasMany(models.Waste, {
       as: 'wastes',
-      foreignKey: 'WasteCategoryId'
+      foreignKey: 'wasteCategoryId'
     });
   }
 
