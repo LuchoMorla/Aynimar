@@ -1,9 +1,9 @@
 const Joi = require('joi');
 
 const id = Joi.number().integer();
-const customerId = Joi.number().integer();
-const orderId = Joi.number().integer();
-const productId = Joi.number().integer();
+const recyclerId = Joi.number().integer();
+const paymentId = Joi.number().integer();
+const wasteId = Joi.number().integer();
 const amount = Joi.number().integer();
 
 const getPaymentSchema = Joi.object({
@@ -11,12 +11,12 @@ const getPaymentSchema = Joi.object({
 });
 
 const createPaymentSchema = Joi.object({
-  customerId: customerId.required(),
+  recyclerId: recyclerId.required(),
 });
 
 const addCommoditieSchema = Joi.object({
-  orderId: orderId.required(),
-  productId: productId.required(),
+  paymentId: paymentId.required(),
+  wasteId: wasteId.required(),
   amount: amount.required(),
 });
 
