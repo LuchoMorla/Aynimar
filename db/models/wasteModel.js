@@ -33,8 +33,8 @@ const WasteSchema = {
     field: 'created_at',
     defaultValue: Sequelize.NOW,
   },
-  wasteId: {
-    field: 'waste_id',
+  wasteCategoryId: {
+    field: 'waste_category_id',
     allowNull: false,
     type: DataTypes.INTEGER,
     references: {
