@@ -46,7 +46,7 @@ router.get(
 router.post(
   '/',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin'),
+  checkRoles('admin', 'recycler'),
   passport.authenticate('jwt', { session: false }),
   validatorHandler(createWasteCategorySchema, 'body'),
   async (req, res, next) => {
