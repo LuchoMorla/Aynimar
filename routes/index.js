@@ -7,7 +7,10 @@ const orderRouter = require('./orderRouter');
 const customersRouter = require('./customersRouting');
 const authRouter = require('./authRouter');
 const profileRouter = require('./profileRouter');
-
+const wasteRouter = require('./wasteRouter');
+const recyclerRouter = require('./recyclerRouter');
+const paymentRouter = require('./paymentRouter');
+const wasteCategoryRouter = require('./wasteCategoriasRouting');
 
 function routerApi(app) {
     app.use('/products', productosRouting);
@@ -24,6 +27,10 @@ function routerApi(app) {
     routerV1.use('/customers', customersRouter);
     routerV1.use('/auth', authRouter);
     routerV1.use('/profile', profileRouter);
+    routerV1.use('/wastes', wasteRouter);
+    routerV1.use('/recyclers', recyclerRouter);
+    routerV1.use('/payments', paymentRouter);
+    routerV1.use('/waste-categories', wasteCategoryRouter);
 }
 
 module.exports = routerApi;

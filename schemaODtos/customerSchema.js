@@ -7,7 +7,6 @@ const phone =  Joi.string();
 const userId = Joi.number().integer();
 const email = Joi.string().email();
 const password =  Joi.string();
-
 const getCustomerSchema = Joi.object({
   id: id.required(),
 });

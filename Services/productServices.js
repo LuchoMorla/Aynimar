@@ -10,55 +10,15 @@ const { models } = require('../libs/sequelize');
 
 class ProductsService {
 
-    constructor() {
-        this.products = [];
-        //Vamos a decir que cada vez que corra una instancia del servicio, va a empezar y generar los productos:
-        this.generate();
-        /*  ya no utilizamos consultas por medio del pool
-        this.pool = pool;
-        this.pool.on('error', (err) => console.error(err)); */
-    }
-    // será el metodo para generar con la datafake
-    generate() {
-        const limit = 100; //size || 10;
-        for (let index = 0; index < limit; index++) {
-            this.products.push({
-                id: faker.datatype.uuid(),
-                name: faker.commerce.productName(),
-                price: parseInt(faker.commerce.price(), 10),
-                image: faker.image.imageUrl(),
-                //Nos crearemos el supuesto de que tuvieramos que utilizar un bloqueo de permiso para productos que se pueden o no presentar a un determinado cliente
-                isBlock: faker.datatype.boolean(),
-            });
-        }
-    }
+    constructor() {}
 
     async create(data) {
-/*       Antes de hacer el llamado a la base de datos
-      const newProduct = {
-            id: faker.datatype.uuid(),
-            ...data
-        }
-        this.products.push(newProduct);
-        return newProduct; */
         const newProduct = await models.Product.create(data);
         return newProduct;
     }
 
     async find(query) {
-/*         return new Promise((resolve) => {
-            setTimeout(() => {
-                resolve(this.products);
-            }, 1000); 
-        }); */
-        // Antes solo era un simple return this.products... :') como ah crecido la promesa!!!
-/*               Se utilizaba antes para hacer consultas desde la base de datos
-  const query = 'SELECT * FROM task'; */
-/*         const rta = await this.pool.query(query);
-        return rta.rows; */
-/*        Se utilizaba antes para hacer consultas desde la base de datos
- const [ data ] = await sequelize.query(query);
-        return data; */
+
         const options = {
             include: ['category'],
             where: {}

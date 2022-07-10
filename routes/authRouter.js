@@ -1,13 +1,19 @@
-const express = require('express');
-const passport = require('passport');
+const express = require('express'),
+  passport = require('passport'),
+  AuthService = require('./../Services/authService'),
+  service = new AuthService(),
+  router = express.Router(),
+  validatorHandler = require('../middlewares/validatorHandler'),
+  {
+    loginAuthSchema,
+    recoveryAuthSchema,
+    changePasswordAuthSchema,
+  } = require('../schemaODtos/authSchema');
 
-const AuthService = require('./../Services/authService');
-
-const router = express.Router();
-const service = new AuthService();
-
-router.post('/login',
-  passport.authenticate('local', {session: false}),
+router.post(
+  '/login',
+  validatorHandler(loginAuthSchema, 'body'),
+  passport.authenticate('local', { session: false }),
   async (req, res, next) => {
     try {
       const user = req.user;
@@ -18,7 +24,9 @@ router.post('/login',
   }
 );
 
-router.post('/recovery',
+router.post(
+  '/recovery',
+  validatorHandler(recoveryAuthSchema, 'body'),
   async (req, res, next) => {
     try {
       const { email } = req.body;
@@ -30,7 +38,9 @@ router.post('/recovery',
   }
 );
 
-router.post('/change-password',
+router.post(
+  '/change-password',
+  validatorHandler(changePasswordAuthSchema, 'body'),
   async (req, res, next) => {
     try {
       const { token, newPassword } = req.body;
