@@ -1,14 +1,14 @@
 const express = require('express');
 const passport = require('passport');
 
-const WasteCategoryService = require('./../Services/wasteCategoryService');
-const validatorHandler = require('./../middlewares/validatorHandler');
-const { checkRoles } = require('./../middlewares/authHandler');
+const WasteCategoryService = require('../Services/wasteCategoryService');
+const validatorHandler = require('../middlewares/validatorHandler');
+const { checkRoles } = require('../middlewares/authHandler');
 const {
   createWasteCategorySchema,
   updateWasteCategorySchema,
   getWasteCategorySchema,
-} = require('./../schemaODtos/wasteCategorySchema');
+} = require('../schemaODtos/wasteCategorySchema');
 
 const router = express.Router();
 const service = new WasteCategoryService();
