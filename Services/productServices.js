@@ -1,4 +1,3 @@
-const faker = require('faker');
 const boom = require('@hapi/boom');
 
 const { Op } = require('sequelize');
@@ -10,7 +9,9 @@ const { models } = require('../libs/sequelize');
 
 class ProductsService {
 
-    constructor() {}
+    constructor() {
+        this.products = [];
+    }
 
     async create(data) {
         const newProduct = await models.Product.create(data);

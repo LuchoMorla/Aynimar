@@ -8,7 +8,7 @@ const {
   updateWasteSchema,
   getWasteSchema,
   queryWasteSchema,
-} = require('../schemaODtos/userSchema');
+} = require('../schemaODtos/wasteSchema');
 
 const router = express.Router();
 const service = new WasteService();

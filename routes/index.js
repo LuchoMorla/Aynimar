@@ -27,7 +27,7 @@ function routerApi(app) {
     routerV1.use('/customers', customersRouter);
     routerV1.use('/auth', authRouter);
     routerV1.use('/profile', profileRouter);
-    routerV1.use('/wastes', wasteCategoryRouter);
+    routerV1.use('/wastes', wasteRouter);
     routerV1.use('/recyclers', recyclerRouter);
     routerV1.use('/payments', paymentRouter);
     routerV1.use('/waste-categories', wasteCategoryRouter);

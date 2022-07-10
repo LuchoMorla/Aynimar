@@ -1,4 +1,3 @@
-const faker = require('faker');
 const boom = require('@hapi/boom');
 
 const { Op } = require('sequelize');
@@ -15,13 +14,13 @@ class wasteService {
 
 
     async create(data) {
-        const newProduct = await models.Waste.create(data);
-        return newProduct;
+        const newWaste = await models.Waste.create(data);
+        return newWaste;
     }
 
     async find(query) {
         const options = {
-            include: ['category'],
+            include: ['waste_category'],
             where: {}
         }
         const { limit, offset } = query;
@@ -48,7 +47,7 @@ class wasteService {
     }
 
     async findOne(id) {
-        const waste = this.wastes.find(item => item.id === id);
+        const waste = this.wastes.find(commodity => commodity.id === id);
         if (!waste) {
             throw boom.notFound('waste not found');
         }
@@ -60,7 +59,7 @@ class wasteService {
     }
 
     async update(id, changes) {
-        const index = this.wastes.findIndex(item => item.id === id);
+        const index = this.wastes.findIndex(commodity => commodity.id === id);
         if (index === -1) {
             /* Comenzaremos a utilizar Boom!! y a manipular los errores de una forma diferente
             throw new Error('product not found'); */
