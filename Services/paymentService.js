@@ -12,7 +12,7 @@ class PaymentService {
     return newPayment;
   }
 
-  async addItem(data) {
+  async addCommodity(data) {
     const newcommoditie = await models.PaymentWaste.create(data);
     return newcommoditie;
   }

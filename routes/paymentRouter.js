@@ -5,7 +5,7 @@ const validatorHandler = require('../middlewares/validatorHandler');
 const {
   getPaymentSchema,
   createPaymentSchema,
-  addCommoditieSchema,
+  addCommoditySchema,
 } = require('../schemaODtos/paymentSchema');
 
 const router = express.Router();
@@ -41,12 +41,12 @@ router.post(
 
 router.post(
   '/add-commodity',
-  validatorHandler(addCommoditieSchema, 'body'),
+  validatorHandler(addCommoditySchema, 'body'),
   async (req, res, next) => {
     try {
       const body = req.body;
-      const newCommoditie = await service.addCommoditie(body);
-      res.status(201).json(newCommoditie);
+      const newCommodity = await service.addCommodity(body);
+      res.status(201).json(newCommodity);
     } catch (error) {
       next(error);
     }

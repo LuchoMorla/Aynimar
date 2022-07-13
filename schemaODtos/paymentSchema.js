@@ -14,7 +14,7 @@ const createPaymentSchema = Joi.object({
   recyclerId: recyclerId.required(),
 });
 
-const addCommoditieSchema = Joi.object({
+const addCommoditySchema = Joi.object({
   paymentId: paymentId.required(),
   wasteId: wasteId.required(),
   amount: amount.required(),
@@ -22,4 +22,4 @@ const addCommoditieSchema = Joi.object({
 
 //se le podrían agregar cosas como estados(entregada, se pago, no se pago, etc.), dirección, etc.
 
-module.exports = { getPaymentSchema, createPaymentSchema, addCommoditieSchema };
+module.exports = { getPaymentSchema, createPaymentSchema, addCommoditySchema };

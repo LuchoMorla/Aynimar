@@ -14,7 +14,9 @@ const puerto = process.env.PORT || 8080;
 app.use(expressModule.json());
 
 // implementando CORS para los dominios
-const whitelist = ['http://localhost:8080/frontend.html', 'http://localhost:8080/products', 'http://localhost:8080'];
+const whitelist = ['http://localhost:8080/frontend.html', 'http://localhost:8080/products',
+ 'http://localhost:8080','http://localhost:3000/',
+ 'http://localhost:3000/recycling'];
 const options = {
     origin: (origin, callback) => {
         if (whitelist.includes(origin) || !origin) {
