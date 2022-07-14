@@ -1,5 +1,6 @@
 const express = require('express');
 
+const passport = require('passport');
 const PaymentService = require('../Services/paymentService');
 const validatorHandler = require('../middlewares/validatorHandler');
 const {
@@ -27,10 +28,13 @@ router.get(
 
 router.post(
   '/',
+  passport.authenticate('jwt', { session: false }),
   validatorHandler(createPaymentSchema, 'body'),
   async (req, res, next) => {
     try {
-      const body = req.body;
+      const body = {
+        userId: req.user.sub
+      }
       const newPayment = await service.create(body);
       res.status(201).json(newPayment);
     } catch (error) {

@@ -1,6 +1,8 @@
 const express = require('express');
-
+const passport = require('passport');
 const OrderService = require('../Services/orderService');
+const CustomerService = require('../Services/customerService');
+const RecyclerService = require('../Services/recyclerService');
 const validatorHandler = require('../middlewares/validatorHandler');
 const {
   getOrderSchema,
@@ -10,6 +12,9 @@ const {
 
 const router = express.Router();
 const service = new OrderService();
+const customerService = new CustomerService();
+const recyclerService = new RecyclerService();
+
 
 router.get(
   '/:id',
@@ -27,10 +32,23 @@ router.get(
 
 router.post(
   '/',
+  passport.authenticate('jwt', {session: false}),
   validatorHandler(createOrderSchema, 'body'),
   async (req, res, next) => {
     try {
-      const body = req.body;
+      const body = {
+        userId: req.user.sub,
+        userRole: req.user.role
+      }
+      if (body.userRole === 'recycler') {
+        const findRecycler = await recyclerService.findByUserId(body.userId);
+        const haveCustomerId = await customerService.findByUserId(body.userId);
+        if (!haveCustomerId) {
+          const newCustomer = await customerService.createCustomerByRecycler(findRecycler);
+          return newCustomer;
+        }
+        console.log(haveCustomerId);
+      }
       const newOrder = await service.create(body);
       res.status(201).json(newOrder);
     } catch (error) {

@@ -21,6 +21,14 @@ class CustomerService {
     return user;
   }
 
+  async findByUserId(userId) {
+    const customer = await models.Customer.findOne({
+      where: { 'user_id': userId },
+      include: ['user'] 
+    });
+    return customer;
+  }
+
   async create(data) {
     const hash = await bcrypt.hash(data.user.password, 10);
     const newData = {
@@ -35,6 +43,17 @@ class CustomerService {
     });
     delete newCustomer.dataValues.user.dataValues.password;
     return newCustomer;
+  }
+
+  async createCustomerByRecycler(data) {
+    const recyclerCustomer = await models.Customer.create({
+      name: data.dataValues.name,
+      lastName: data.dataValues.lastName,
+      phone: data.dataValues.phone,
+      userId: data.dataValues.userId
+    });
+    console.log('USUARIO CREADO CON EXITO!!!!!!');
+    return recyclerCustomer;
   }
 
   async update(id, changes) {

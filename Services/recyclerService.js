@@ -21,6 +21,17 @@ class RecyclerService {
     return user;
   }
 
+  async findByUserId(userId) {
+    const recycler = await models.Recycler.findOne({
+      where: { 'user_id': userId },
+      include: ['user'] 
+    });
+    if (!recycler) {
+      throw boom.notFound('Recycler not found');
+    }
+    return recycler;
+  }
+
   async create(data) {
     const hash = await bcrypt.hash(data.user.password, 10);
     const role = 'recycler';

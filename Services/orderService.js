@@ -1,5 +1,4 @@
 const boom = require('@hapi/boom');
-
 const { models } = require('../libs/sequelize');
 
 class OrderService {
@@ -8,7 +7,16 @@ class OrderService {
   }
 
   async create(data) {
-    const newOrder = await models.Order.create(data);
+    const customer = await models.Customer.findOne({
+      where: {
+        '$user.id$': data.userId
+      },
+      include: ['user']
+    })
+    if (!customer) {
+      throw boom.badRequest('Customer not found os');
+    }
+    const newOrder = await models.Order.create({ customerId: customer.id });
     return newOrder;
   }
 

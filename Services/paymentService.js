@@ -8,7 +8,16 @@ class PaymentService {
   }
 
   async create(data) {
-    const newPayment = await models.Payment.create(data);
+    const recycler = await models.Recycler.findOne({
+      where: {
+        '$user.id$': data.userId
+      },
+      include: ['user']
+    })
+    if (!recycler) {
+      throw boom.badRequest('Recycler not found');
+    }
+    const newPayment = await models.Payment.create({ customerId: recycler.id });
     return newPayment;
   }
 
