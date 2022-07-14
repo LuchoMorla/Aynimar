@@ -52,7 +52,6 @@ class CustomerService {
       phone: data.dataValues.phone,
       userId: data.dataValues.userId
     });
-    console.log('USUARIO CREADO CON EXITO!!!!!!');
     return recyclerCustomer;
   }
 

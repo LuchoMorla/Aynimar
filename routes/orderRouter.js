@@ -40,14 +40,13 @@ router.post(
         userId: req.user.sub,
         userRole: req.user.role
       }
-      if (body.userRole === 'recycler') {
+      const haveCustomerId = await customerService.findByUserId(body.userId);
+      if (body.userRole === 'recycler' && !haveCustomerId) {
         const findRecycler = await recyclerService.findByUserId(body.userId);
-        const haveCustomerId = await customerService.findByUserId(body.userId);
-        if (!haveCustomerId) {
+/*         if (!haveCustomerId) { */
           const newCustomer = await customerService.createCustomerByRecycler(findRecycler);
           return newCustomer;
-        }
-        console.log(haveCustomerId);
+/*         } */
       }
       const newOrder = await service.create(body);
       res.status(201).json(newOrder);
