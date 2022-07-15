@@ -26,9 +26,10 @@ class RecyclerService {
       where: { 'user_id': userId },
       include: ['user'] 
     });
-    if (!recycler) {
+/*    lo saque para que funcione como un metodo tipo middleware
+     if (!recycler) {
       throw boom.notFound('Recycler not found');
-    }
+    } */
     return recycler;
   }
 
@@ -49,6 +50,16 @@ class RecyclerService {
     delete newRecycler.dataValues.user.dataValues.password;
     return newRecycler;
   }
+
+  async createRecyclerByCustomer(data) {
+    const customerRecycler = await models.Recycler.create({
+      name: data.dataValues.name,
+      lastName: data.dataValues.lastName,
+      phone: data.dataValues.phone,
+      userId: data.dataValues.userId
+    });
+    return customerRecycler;
+  }  
 
   async update(id, changes) {
     const model = await this.findOne(id);

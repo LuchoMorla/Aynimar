@@ -2,6 +2,8 @@ const express = require('express');
 
 const passport = require('passport');
 const PaymentService = require('../Services/paymentService');
+const CustomerService = require('../Services/customerService');
+const RecyclerService = require('../Services/recyclerService');
 const validatorHandler = require('../middlewares/validatorHandler');
 const {
   getPaymentSchema,
@@ -11,6 +13,8 @@ const {
 
 const router = express.Router();
 const service = new PaymentService();
+const customerService = new CustomerService();
+const recyclerService = new RecyclerService();
 
 router.get(
   '/:id',
@@ -33,8 +37,17 @@ router.post(
   async (req, res, next) => {
     try {
       const body = {
-        userId: req.user.sub
+        userId: req.user.sub,
+        userRole: req.user.role
       }
+
+      const haveRecyclerId = await recyclerService.findByUserId(body.userId);
+      if (body.userRole === 'customer' && !haveRecyclerId) {
+        const findCostumer = await customerService.findByUserId(body.userId);
+        const newRecycler = await recyclerService.createRecyclerByCustomer(findCostumer);
+        return newRecycler;
+      }
+
       const newPayment = await service.create(body);
       res.status(201).json(newPayment);
     } catch (error) {

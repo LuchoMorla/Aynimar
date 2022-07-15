@@ -29,6 +29,24 @@ const RecyclerSchema =  {
     allowNull: true,
     type: DataTypes.STRING,
   },
+  phoneTwo: {
+    allowNull: true,
+    type: DataTypes.STRING,
+  },  
+  provice: {
+    allowNull: true,
+    type: DataTypes.STRING,
+  },
+  city: {
+    allowNull: true,
+    type: DataTypes.STRING,
+    field: 'city',
+  },
+  postalCode: {
+    allowNull: true,
+    type: DataTypes.STRING,
+    field: 'postal_code'
+  },
   paymentType: {
     allowNull: true,
     type: DataTypes.STRING,
@@ -46,11 +64,6 @@ const RecyclerSchema =  {
     allowNull: true,
     type: DataTypes.STRING,
     field: 'count_number',
-  },
-  paymentCity: {
-    allowNull: true,
-    type: DataTypes.STRING,
-    field: 'payment_city',
   },
   paymentDate: {
     allowNull: true,

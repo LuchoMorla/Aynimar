@@ -11,7 +11,7 @@ const getPaymentSchema = Joi.object({
 });
 
 const createPaymentSchema = Joi.object({
-  recyclerId: recyclerId.required(),
+  recyclerId: recyclerId,
 });
 
 const addCommoditySchema = Joi.object({

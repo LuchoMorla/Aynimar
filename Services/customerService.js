@@ -22,6 +22,7 @@ class CustomerService {
   }
 
   async findByUserId(userId) {
+    //metodo tipo middleware para encontrar un customer por el userId
     const customer = await models.Customer.findOne({
       where: { 'user_id': userId },
       include: ['user'] 

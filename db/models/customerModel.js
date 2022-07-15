@@ -20,9 +20,31 @@ const CustomerSchema =  {
     type: DataTypes.STRING,
     field: 'last_name',
   },
+  identityNumber: {
+    allowNull: true,
+    type:DataTypes.INTEGER,
+    field: 'identity_number',
+  },
   phone: {
     allowNull: true,
     type: DataTypes.STRING,
+  },
+  phoneTwo: {
+    allowNull: true,
+    type: DataTypes.STRING,
+  },
+  provice: {
+    allowNull: true,
+    type: DataTypes.STRING,
+  },
+  city: {
+    allowNull: true,
+    type: DataTypes.STRING
+  },
+  postalCode: {
+    allowNull: true,
+    type: DataTypes.STRING,
+    field: 'postal_code'
   },
   createdAt: {
     allowNull: false,
