@@ -5,11 +5,14 @@ const name = Joi.string().min(3).max(30);
 const lastName = Joi.string();
 const identityNumber = Joi.number();
 const phone =  Joi.string();
+const phoneTwo = Joi.string();
+const province = Joi.string();
+const city = Joi.string();
+const postalCode = Joi.string();
 const paymentType = Joi.string();
 const bank = Joi.string();
 const typeCount = Joi.string();
 const countNumber = Joi.string();
-const paymentCity = Joi.string();
 const paymentDate = Joi.string();
 const stateOfThePayment = Joi.string().empty('');
 const userId = Joi.number().integer();
@@ -24,13 +27,16 @@ const getRecyclerSchema = Joi.object({
 const createRecyclerSchema = Joi.object({
   name: name.required(),
   lastName: lastName.required(),
-  phone: phone.required(),
   identityNumber: identityNumber.required(),
+  phone: phone.required(),
+  phoneTwo: phoneTwo,
+  province: province,
+  city: city,
+  postalCode: postalCode,
   paymentType: paymentType,
   bank: bank,
   typeCount: typeCount,
   countNumber: countNumber,
-  paymentCity: paymentCity,
   paymentDate: paymentDate,
   stateOfThePayment: stateOfThePayment,
   user: Joi.object({
@@ -43,14 +49,17 @@ const createRecyclerSchema = Joi.object({
 const updateRecyclerSchema = Joi.object({
   name,
   lastName,
-  phone,
   identityNumber,
+  phone,
+  phoneTwo,
+  province,
+  city,
+  postalCode,
   userId,
   paymentType,
   bank,
   typeCount,
   countNumber,
-  paymentCity,
   paymentDate,
   stateOfThePayment
 });

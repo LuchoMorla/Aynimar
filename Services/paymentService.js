@@ -17,7 +17,7 @@ class PaymentService {
     if (!recycler) {
       throw boom.badRequest('Recycler not found');
     }
-    const newPayment = await models.Payment.create({ customerId: recycler.id });
+    const newPayment = await models.Payment.create({ recyclerId: recycler.id });
     return newPayment;
   }
 

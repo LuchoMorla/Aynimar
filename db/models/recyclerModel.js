@@ -21,7 +21,7 @@ const RecyclerSchema =  {
     field: 'last_name',
   },
   identityNumber: {
-    allowNull: false,
+    allowNull: true,
     type:DataTypes.INTEGER,
     field: 'identity_number',
   },
@@ -32,8 +32,9 @@ const RecyclerSchema =  {
   phoneTwo: {
     allowNull: true,
     type: DataTypes.STRING,
+    field: 'phone_two'
   },  
-  provice: {
+  province: {
     allowNull: true,
     type: DataTypes.STRING,
   },
@@ -50,6 +51,7 @@ const RecyclerSchema =  {
   paymentType: {
     allowNull: true,
     type: DataTypes.STRING,
+/*     field: 'payment_type'       ASI debe ir en la migracion antes de mandar a produccion         */
   },
   bank: {
     allowNull: true,

@@ -32,8 +32,9 @@ const CustomerSchema =  {
   phoneTwo: {
     allowNull: true,
     type: DataTypes.STRING,
+    field: 'phone_two'
   },
-  provice: {
+  province: {
     allowNull: true,
     type: DataTypes.STRING,
   },
