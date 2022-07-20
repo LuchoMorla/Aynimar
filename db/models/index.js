@@ -9,6 +9,7 @@ const { Payment, PaymentSchema } = require('./paymentModel');
 const { Recycler, RecyclerSchema } = require('./recyclerModel');
 const { Waste, WasteSchema } = require('./wasteModel');
 const { WasteCategory, WasteCategorySchema } = require('./wasteCategoryModel');
+const { Wallet, WalletSchema } = require('./walletModel');
 
  function setupModels(sequelize) {
   User.init(UserSchema, User.config(sequelize));
@@ -22,6 +23,7 @@ const { WasteCategory, WasteCategorySchema } = require('./wasteCategoryModel');
   Waste.init(WasteSchema, Waste.config(sequelize));
   Payment.init(PaymentSchema, Payment.config(sequelize));
   PaymentWaste.init(PaymentWasteSchema, PaymentWaste.config(sequelize));
+  Wallet.init(WalletSchema, Wallet.config(sequelize));
 
   User.associate(sequelize.models);
   Customer.associate(sequelize.models);
@@ -32,6 +34,7 @@ const { WasteCategory, WasteCategorySchema } = require('./wasteCategoryModel');
   WasteCategory.associate(sequelize.models);
   Waste.associate(sequelize.models);
   Payment.associate(sequelize.models);
+  Wallet.associate(sequelize.models);
 }
 
 module.exports = setupModels;

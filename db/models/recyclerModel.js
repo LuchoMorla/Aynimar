@@ -1,15 +1,15 @@
 const { Model, DataTypes, Sequelize } = require('sequelize');
 
-const { USER_TABLE } = require('./userModel')
+const { USER_TABLE } = require('./userModel');
 
 const RECYCLER_TABLE = 'recyclers';
 
-const RecyclerSchema =  {
+const RecyclerSchema = {
   id: {
     allowNull: false,
     autoIncrement: true,
     primaryKey: true,
-    type: DataTypes.INTEGER
+    type: DataTypes.INTEGER,
   },
   name: {
     allowNull: false,
@@ -22,7 +22,7 @@ const RecyclerSchema =  {
   },
   identityNumber: {
     allowNull: true,
-    type:DataTypes.INTEGER,
+    type: DataTypes.INTEGER,
     field: 'identity_number',
   },
   phone: {
@@ -32,8 +32,8 @@ const RecyclerSchema =  {
   phoneTwo: {
     allowNull: true,
     type: DataTypes.STRING,
-    field: 'phone_two'
-  },  
+    field: 'phone_two',
+  },
   province: {
     allowNull: true,
     type: DataTypes.STRING,
@@ -46,12 +46,12 @@ const RecyclerSchema =  {
   postalCode: {
     allowNull: true,
     type: DataTypes.STRING,
-    field: 'postal_code'
+    field: 'postal_code',
   },
   paymentType: {
     allowNull: true,
     type: DataTypes.STRING,
-/*     field: 'payment_type'       ASI debe ir en la migracion antes de mandar a produccion         */
+    /*     field: 'payment_type'       ASI debe ir en la migracion antes de mandar a produccion         */
   },
   bank: {
     allowNull: true,
@@ -91,21 +91,24 @@ const RecyclerSchema =  {
     unique: true,
     references: {
       model: USER_TABLE,
-      key: 'id'
+      key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'SET NULL'
-  }
-}
+    onDelete: 'SET NULL',
+  },
+};
 
 class Recycler extends Model {
-
   static associate(models) {
-    this.belongsTo(models.User, {as: 'user'}),
-    this.hasMany(models.Payment, {
-      as: 'payments',
-      foreignKey: 'recyclerId',
-    });
+    this.belongsTo(models.User, { as: 'user' }),
+      this.hasMany(models.Payment, {
+        as: 'payments',
+        foreignKey: 'recyclerId',
+      }),
+      this.hasOne(models.Wallet, {
+        as: 'wallet',
+        foreignKey: 'recyclerId',
+      });
   }
 
   static config(sequelize) {
@@ -113,8 +116,8 @@ class Recycler extends Model {
       sequelize,
       tableName: RECYCLER_TABLE,
       modelName: 'Recycler',
-      timestamps: false
-    }
+      timestamps: false,
+    };
   }
 }
 

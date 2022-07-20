@@ -11,6 +11,7 @@ const wasteRouter = require('./wasteRouter');
 const recyclerRouter = require('./recyclerRouter');
 const paymentRouter = require('./paymentRouter');
 const wasteCategoryRouter = require('./wasteCategoriesRouting');
+const walletRouter = require('./walletRouter');
 
 function routerApi(app) {
     app.use('/products', productosRouting);
@@ -31,6 +32,7 @@ function routerApi(app) {
     routerV1.use('/recyclers', recyclerRouter);
     routerV1.use('/payments', paymentRouter);
     routerV1.use('/waste-categories', wasteCategoryRouter);
+    routerV1.use('/wallets', walletRouter);
 }
 
 module.exports = routerApi;
