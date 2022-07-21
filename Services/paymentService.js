@@ -59,9 +59,12 @@ class PaymentService {
   }
 
   async update(id, changes) {
+    const payment = await this.findOne(id);
+    const rta = await payment.update(changes);
     return {
       id,
       changes,
+      rta
     };
   }
 

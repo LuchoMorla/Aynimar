@@ -18,8 +18,7 @@ class WalletService {
   }
 
   async findOne(id) {
-    const credit = await models.Wallet.findOne({
-      where: { 'recycler_id': recyclerId },
+    const credit = await models.Wallet.findByPk(id, {
       include: ['recycler'] 
     });
     if (!credit) {

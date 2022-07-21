@@ -21,8 +21,9 @@ router.get('/', async (req, res, next) => {
     async (req, res, next) => {
       try {
         const { id } = req.params;
-        const category = await service.findOne(id);
-        res.json(category);
+        const body = req.body;
+        const wallet = await service.findOne(id);
+        res.json(wallet);
       } catch (error) {
         next(error);
       }

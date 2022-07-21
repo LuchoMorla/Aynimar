@@ -54,7 +54,8 @@ router.patch(
     try {
       const { id } = req.params;
       const body = req.body;
-      res.status(201).json(await service.update(id, body));
+      const updateRecycler = await service.update(id, body);
+      res.status(201).json(updateRecycler);
     } catch (error) {
       next(error);
     }

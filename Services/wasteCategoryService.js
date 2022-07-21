@@ -24,9 +24,12 @@ class WasteCategoryService {
   }
 
   async update(id, changes) {
+    const wasteCategory = await this.findOne(id);
+    const rta = await wasteCategory.update(changes);
     return {
       id,
       changes,
+      rta
     };
   }
 

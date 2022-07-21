@@ -72,19 +72,25 @@ class ProductsService {
             ...changes
         };
         return this.products[index]; */
+        const product = await this.findOne(id);
+        const rta = await product.update(changes);
         return {
-            id,
-            changes,
+          id,
+          changes,
+          rta
         };
     }
 
     async delete(id) {
-        const index = this.products.findIndex(item => item.id === id);
+       /*  const index = this.products.findIndex(item => item.id === id);
         if (index === -1) {
             throw boom.notFound('Producto not found');
         }
         this.products.splice(index, 1);
-        return {message: true, id}
+        return {message: true, id} */
+        const model = await this.findOne(id);
+        await model.destroy();
+        return { rta: true };
     }
 }
 module.exports = ProductsService;
