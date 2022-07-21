@@ -19,6 +19,20 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+router.get(
+  '/:id',
+  validationHandler(getRecyclerSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const recycler = await service.findOne(id);
+      res.json(recycler);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.post(
   '/',
   validationHandler(createRecyclerSchema, 'body'),

@@ -24,14 +24,20 @@ class CategoryService {
   }
 
   async update(id, changes) {
+    const category = await this.findOne(id);
+    const rta = await category.update(changes);
+    delete rta.dataValues.products;
     return {
       id,
       changes,
+      rta
     };
   }
 
   async delete(id) {
-    return { id };
+    const model = await this.findOne(id);
+    await model.destroy();
+    return { rta: true };
   }
 
 }

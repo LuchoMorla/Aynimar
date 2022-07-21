@@ -16,6 +16,19 @@ const service = new OrderService();
 const customerService = new CustomerService();
 const recyclerService = new RecyclerService();
 
+router.get(
+  '/',
+/*   validatorHandler(getOrderSchema, 'params'), */
+  async (req, res, next) => {
+    try {
+/*       const { id } = req.params; */
+      const orders = await service.find();
+      res.json(orders);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 router.get(
   '/:id',

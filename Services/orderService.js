@@ -41,7 +41,16 @@ class OrderService {
   }
 
   async find() {
-    return [];
+    const orders = await models.Order.findAll({
+      include: [
+        {
+          association: 'customer',
+          include: ['user']
+        },
+        'items'
+      ]
+    });
+    return orders;
   }
 
   async findOne(id) {
@@ -58,14 +67,19 @@ class OrderService {
   }
 
   async update(id, changes) {
+    const order = await this.findOne(id);
+    const rta = await order.update(changes);
     return {
       id,
       changes,
+      rta
     };
   }
 
   async delete(id) {
-    return { id };
+    const model = await this.findOne(id);
+    await model.destroy();
+    return { rta: true };
   }
 
 }

@@ -10,7 +10,7 @@ const { models } = require('../libs/sequelize');
 class ProductsService {
 
     constructor() {
-        this.products = [];
+/*         this.products = []; */
     }
 
     async create(data) {
@@ -48,30 +48,34 @@ class ProductsService {
     }
 
     async findOne(id) {
-        const product = this.products.find(item => item.id === id);
+        const product = await models.Product.findByPk(id);
         if (!product) {
             throw boom.notFound('Product not found');
         }
         //vamos a crear un bloqueo para los casos de productos bloqueados, seria algo de logica de negocio..sera un error del tipo conflicto
-        if (product.isBlock) {
+/*         if (product.isBlock) {
             throw boom.conflict('Product is block');
-        }
+        } */
         return product;
     }
 
     async update(id, changes) {
-        const index = this.products.findIndex(item => item.id === id);
-        if (index === -1) {
+        /* const index = await this.findOne(id); || this.products.findIndex(item => item.id === id) 
+        if (index === -1) {*/
             /* Comenzaremos a utilizar Boom!! y a manipular los errores de una forma diferente
             throw new Error('product not found'); */
-            throw boom.notFound('Product not found');
+/*             throw boom.notFound('Product not found');
         }
         const product = this.products[index];
         this.products[index] = {
             ...product,
             ...changes
         };
-        return this.products[index];
+        return this.products[index]; */
+        return {
+            id,
+            changes,
+        };
     }
 
     async delete(id) {

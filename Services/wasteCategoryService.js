@@ -31,7 +31,9 @@ class WasteCategoryService {
   }
 
   async delete(id) {
-    return { id };
+    const model = await this.findOne(id);
+    await model.destroy();
+    return { rta: true };
   }
 
 }
