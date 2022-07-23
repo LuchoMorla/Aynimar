@@ -3,6 +3,7 @@ const express = require('express'),
   AuthService = require('./../Services/authService'),
   service = new AuthService(),
   router = express.Router(),
+  { checkRoles } = require('../middlewares/authHandler'),
   validatorHandler = require('../middlewares/validatorHandler'),
   {
     loginAuthSchema,
@@ -12,8 +13,9 @@ const express = require('express'),
 
 router.post(
   '/login',
-  validatorHandler(loginAuthSchema, 'body'),
   passport.authenticate('local', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
+  validatorHandler(loginAuthSchema, 'body'),
   async (req, res, next) => {
     try {
       const user = req.user;
@@ -26,6 +28,8 @@ router.post(
 
 router.post(
   '/recovery',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(recoveryAuthSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -40,6 +44,8 @@ router.post(
 
 router.post(
   '/change-password',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(changePasswordAuthSchema, 'body'),
   async (req, res, next) => {
     try {

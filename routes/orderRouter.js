@@ -1,6 +1,9 @@
 const express = require('express');
 
 const passport = require('passport');
+
+const { checkRoles } = require('../middlewares/authHandler');
+
 const OrderService = require('../Services/orderService');
 const CustomerService = require('../Services/customerService');
 const RecyclerService = require('../Services/recyclerService');
@@ -18,10 +21,11 @@ const recyclerService = new RecyclerService();
 
 router.get(
   '/',
-/*   validatorHandler(getOrderSchema, 'params'), */
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin'),
   async (req, res, next) => {
     try {
-/*       const { id } = req.params; */
+      const { id } = req.params;
       const orders = await service.find();
       res.json(orders);
     } catch (error) {
@@ -32,6 +36,8 @@ router.get(
 
 router.get(
   '/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(getOrderSchema, 'params'),
   async (req, res, next) => {
     try {
@@ -45,22 +51,23 @@ router.get(
 );
 
 router.post(
-  '/',
-  passport.authenticate('jwt', {session: false}),
+  '/', 
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(createOrderSchema, 'body'),
   async (req, res, next) => {
     try {
       const body = {
         userId: req.user.sub,
-        userRole: req.user.role
-      }
+        userRole: req.user.role,
+      };
       const haveCustomerId = await customerService.findByUserId(body.userId);
       if (body.userRole === 'recycler' && !haveCustomerId) {
         const findRecycler = await recyclerService.findByUserId(body.userId);
-/*         if (!haveCustomerId) { */
-          const newCustomer = await customerService.createCustomerByRecycler(findRecycler);
-          return newCustomer;
-/*         } */
+        const newCustomer = await customerService.createCustomerByRecycler(
+          findRecycler
+        );
+        return newCustomer;
       }
       const newOrder = await service.create(body);
       res.status(201).json(newOrder);
@@ -72,6 +79,8 @@ router.post(
 
 router.post(
   '/add-item',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(addItemSchema, 'body'),
   async (req, res, next) => {
     try {

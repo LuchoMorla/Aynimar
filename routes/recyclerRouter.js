@@ -1,4 +1,7 @@
 const express = require('express');
+const passport = require('passport');
+
+const { checkRoles } = require('../middlewares/authHandler');
 
 const RecyclerService = require('../Services/recyclerService');
 const validationHandler = require('../middlewares/validatorHandler');
@@ -11,16 +14,23 @@ const {
 const router = express.Router();
 const service = new RecyclerService();
 
-router.get('/', async (req, res, next) => {
-  try {
-    res.json(await service.find());
-  } catch (error) {
-    next(error);
+router.get(
+  '/',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin'),
+  async (req, res, next) => {
+    try {
+      res.json(await service.find());
+    } catch (error) {
+      next(error);
+    }
   }
-});
+);
 
 router.get(
   '/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
   validationHandler(getRecyclerSchema, 'params'),
   async (req, res, next) => {
     try {

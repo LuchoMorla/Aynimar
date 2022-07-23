@@ -1,6 +1,8 @@
 const express = require('express');
 
 const passport = require('passport');
+
+const { checkRoles } = require('../middlewares/authHandler');
 const PaymentService = require('../Services/paymentService');
 const CustomerService = require('../Services/customerService');
 const RecyclerService = require('../Services/recyclerService');
@@ -17,7 +19,24 @@ const customerService = new CustomerService();
 const recyclerService = new RecyclerService();
 
 router.get(
+  '/',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const payments = await service.find();
+      res.json(payments);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
   '/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(getPaymentSchema, 'params'),
   async (req, res, next) => {
     try {
@@ -33,6 +52,7 @@ router.get(
 router.post(
   '/',
   passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(createPaymentSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -58,6 +78,8 @@ router.post(
 
 router.post(
   '/add-commodity',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(addCommoditySchema, 'body'),
   async (req, res, next) => {
     try {

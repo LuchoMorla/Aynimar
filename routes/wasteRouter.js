@@ -1,6 +1,8 @@
 const express = require('express');
+const passport = require('passport');
 
 const WasteService = require('./../Services/wasteService');
+const { checkRoles } = require('../middlewares/authHandler');
 
 const validatorHandler = require('../middlewares/validatorHandler');
 const {
@@ -15,6 +17,8 @@ const service = new WasteService();
 
 router.get(
   '/',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(queryWasteSchema, 'query'),
   async (req, res, next) => {
     try {
@@ -28,6 +32,8 @@ router.get(
 
 router.get(
   '/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(getWasteSchema, 'params'),
   async (req, res, next) => {
     try {
@@ -42,6 +48,8 @@ router.get(
 
 router.post(
   '/',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin'),
   validatorHandler(createWasteSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -56,6 +64,8 @@ router.post(
 
 router.patch(
   '/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin'),
   validatorHandler(getWasteSchema, 'params'),
   validatorHandler(updateWasteSchema, 'body'),
   async (req, res, next) => {
@@ -72,6 +82,8 @@ router.patch(
 
 router.delete(
   '/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin'),
   validatorHandler(getWasteSchema, 'params'),
   async (req, res, next) => {
     try {

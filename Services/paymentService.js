@@ -42,7 +42,16 @@ class PaymentService {
   }
 
   async find() {
-    return [];
+    const payments = await models.Payment.findAll({
+      include: [
+        {
+          association: 'recycler',
+          include: ['user']
+        },
+        'commodities'
+      ]
+    });
+    return payments;
   }
 
   async findOne(id) {
