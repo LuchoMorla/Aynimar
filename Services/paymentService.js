@@ -38,6 +38,9 @@ class PaymentService {
         }
       ]
     });
+    for (var i = 0; i < payments.length; i++) {
+      delete payments[i].dataValues.recycler.dataValues.user.dataValues.password;
+    }
     return payments;
   }
 
