@@ -48,7 +48,7 @@ router.get(
 router.post(
   '/',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin'),
   validatorHandler(createWalletSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -64,7 +64,7 @@ router.post(
 router.patch(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin'),
   validatorHandler(getWalletSchema, 'params'),
   validatorHandler(updateWalletSchema, 'body'),
   async (req, res, next) => {
@@ -82,7 +82,7 @@ router.patch(
 router.delete(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin'),
   validatorHandler(getWalletSchema, 'params'),
   async (req, res, next) => {
     try {

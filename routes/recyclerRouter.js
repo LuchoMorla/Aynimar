@@ -58,6 +58,8 @@ router.post(
 
 router.patch(
   '/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
   validationHandler(getRecyclerSchema, 'params'),
   validationHandler(updateRecyclerSchema, 'body'),
   async (req, res, next) => {
@@ -74,6 +76,8 @@ router.patch(
 
 router.delete(
   '/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
   validationHandler(getRecyclerSchema, 'params'),
   async (req, res, next) => {
     try {

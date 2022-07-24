@@ -20,6 +20,9 @@ class UserService {
     const rta = await models.User.findAll({
       include: ['customer', 'recycler']
     });
+    for (var i = 0; i < rta.length; i++) {
+      delete rta[i].dataValues.password;
+    }
     return rta;
   }
 
@@ -28,6 +31,7 @@ class UserService {
     if (!user) {
       throw boom.notFound('User not found');
     }
+    delete user.dataValues.password;
     return user;
   }
 

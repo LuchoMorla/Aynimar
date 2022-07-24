@@ -37,6 +37,11 @@ class OrderService {
         }
       ]
     });
+
+    for (var i = 0; i < orders.length; i++) {
+      delete orders[i].dataValues.customer.dataValues.user.dataValues.password;
+    }
+    
     return orders;
   }
 

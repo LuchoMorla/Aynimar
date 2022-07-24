@@ -10,6 +10,9 @@ class RecyclerService {
     const rta = await models.Recycler.findAll({
       include: ['user']
     });
+    for (var i = 0; i < rta.length; i++) {
+      delete rta[i].dataValues.user.dataValues.password;
+    }
     return rta;
   }
 
@@ -23,8 +26,8 @@ class RecyclerService {
 
   async findByUserId(userId) {
     const recycler = await models.Recycler.findOne({
-      where: { 'user_id': userId },
-      include: ['user'] 
+      where: { 'user_id': userId }/* ,
+      include: ['user']  comente esto por que no lo ocupo y deja a la fuga informacion importante */
     });
 /*    lo saque para que funcione como un metodo tipo middleware
      if (!recycler) {
