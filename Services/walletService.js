@@ -17,6 +17,25 @@ class WalletService {
     return rta;
   }
 
+  async findByUser(userId) {
+    console.log(userId);
+    const wallet = await models.Wallet.findAll({
+      where: {
+        '$recycler.user.id$': userId
+      },
+      include: [
+        { 
+          association: 'recycler',
+          include: ['user']
+        }
+      ]
+    });
+    for (var i = 0; i < wallet.length; i++) {
+      delete wallet[i].dataValues.recycler.dataValues.user.dataValues.password;
+    }
+    return wallet;
+  }
+
   async findOne(id) {
     const credit = await models.Wallet.findByPk(id, {
       include: ['recycler'] 
