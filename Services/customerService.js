@@ -11,7 +11,7 @@ class CustomerService {
       include: ['user']
     });
 
-    for (var i = 0; i < rta.length; i++) {
+    for (let i = 0; i < rta.length; i++) {
       delete rta[i].dataValues.user.dataValues.password;
     }
     

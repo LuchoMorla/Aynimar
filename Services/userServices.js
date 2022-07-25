@@ -20,7 +20,7 @@ class UserService {
     const rta = await models.User.findAll({
       include: ['customer', 'recycler']
     });
-    for (var i = 0; i < rta.length; i++) {
+    for (let i = 0; i < rta.length; i++) {
       delete rta[i].dataValues.password;
     }
     return rta;
