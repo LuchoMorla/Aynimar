@@ -18,7 +18,6 @@ class WalletService {
   }
 
   async findByUser(userId) {
-    console.log(userId);
     const wallet = await models.Wallet.findAll({
       where: {
         '$recycler.user.id$': userId

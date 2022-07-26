@@ -54,6 +54,11 @@ class PaymentService {
         'commodities'
       ]
     });
+
+    for (let i = 0; i < payments.length; i++) {
+      delete payments[i].dataValues.recycler.dataValues.user.dataValues.password;
+    }
+
     return payments;
   }
 
@@ -67,6 +72,7 @@ class PaymentService {
         'commodities'
       ]
     });
+    delete payment.dataValues.recycler.dataValues.user.dataValues.password;
     return payment;
   }
 

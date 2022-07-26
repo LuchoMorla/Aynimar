@@ -55,6 +55,11 @@ class OrderService {
         'items'
       ]
     });
+
+    for (var i = 0; i < orders.length; i++) {
+      delete orders[i].dataValues.customer.dataValues.user.dataValues.password;
+    }
+
     return orders;
   }
 
@@ -68,6 +73,7 @@ class OrderService {
         'items'
       ]
     });
+    delete order.dataValues.customer.dataValues.user.dataValues.password;
     return order;
   }
 
