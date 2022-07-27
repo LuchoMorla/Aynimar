@@ -3,12 +3,12 @@ const { Sequelize } = require('sequelize');
 const { config } = require('./../config/config');
 const setupModels = require('./../db/models');
 
-const USER = encodeURIComponent(config.dbUser);
+/* const USER = encodeURIComponent(config.dbUser);
 const PASSWORD = encodeURIComponent(config.dbPassword);
 const HOST = encodeURIComponent(config.dbHost);
 const DATABASE = encodeURIComponent(config.dbName);
 const PORT = encodeURIComponent(config.dbPort);
-const URI = `postgres://${USER}:${PASSWORD}@${HOST}:${PORT}/${DATABASE}`;
+const URI = `postgres://${USER}:${PASSWORD}@${HOST}:${PORT}/${DATABASE}`; */
 
 const options = {
   dialect: 'postgres',
@@ -16,8 +16,10 @@ const options = {
 }
 
 if (config.isProd) {
-  options.ssl = {
-    rejectUnauthorized: false
+  options.dialectOptions = {
+    ssl: {
+      rejectUnauthorized: false
+    }
   }
 }
 
