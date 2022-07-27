@@ -51,7 +51,7 @@ const RecyclerSchema = {
   paymentType: {
     allowNull: true,
     type: DataTypes.STRING,
-    /*     field: 'payment_type'       ASI debe ir en la migracion antes de mandar a produccion         */
+    field: 'payment_type'       
   },
   bank: {
     allowNull: true,
