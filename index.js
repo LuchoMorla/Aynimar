@@ -16,7 +16,7 @@ app.use(expressModule.json());
 // implementando CORS para los dominios
 const whitelist = ['http://localhost:8080/frontend.html', 'http://localhost:8080/products',
  'http://localhost:8080','http://localhost:3000/',
- 'http://localhost:3000/recycling'];
+ 'http://localhost:3000/recycling', 'http://192.168.1.6:3000', 'http://172.17.160.1:3000', 'http://192.168.56.1:3000'];
 const options = {
     origin: (origin, callback) => {
         if (whitelist.includes(origin) || !origin) {
