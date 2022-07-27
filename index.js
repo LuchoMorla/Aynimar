@@ -1,6 +1,6 @@
 const expressModule = require('express');
 const routerApi = require('./routes');
-const cors = require('cors');
+/* const cors = require('cors'); */
 const { checkApiKey } = require('./middlewares/authHandler');
 
 //Los middlewares del tipo error se deben crear despues de establecer el routing de nuestra aplicacion
@@ -14,7 +14,7 @@ const puerto = process.env.PORT || 8080;
 app.use(expressModule.json());
 
 // implementando CORS para los dominios
-const whitelist = ['http://localhost:8080/frontend.html', 'http://localhost:8080/products',
+/* const whitelist = ['http://localhost:8080/frontend.html', 'http://localhost:8080/products',
  'http://localhost:8080','http://localhost:3000/',
  'http://localhost:3000/recycling', 'http://192.168.1.6:3000', 'http://172.17.160.1:3000', 'http://192.168.56.1:3000'];
 const options = {
@@ -26,7 +26,7 @@ const options = {
         }
     }
 }
-app.use(cors(options));
+app.use(cors(options)); */
 
 //importare el index.js de auth para los login
 require('./utils/auth');
