@@ -15,6 +15,7 @@ const config = {
     smtpMailKey: process.env.GPASS,
     smtpMail: process.env.SMAIL,
     receivermail: process.env.RMAIL,
+    dbUrl: process.env.DATABASE_URL,
   }
   
   module.exports = { config };

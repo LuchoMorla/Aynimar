@@ -10,10 +10,18 @@ const DATABASE = encodeURIComponent(config.dbName);
 const PORT = encodeURIComponent(config.dbPort);
 const URI = `postgres://${USER}:${PASSWORD}@${HOST}:${PORT}/${DATABASE}`;
 
-const sequelize = new Sequelize(config.dbUrl, {
-    dialect: 'postgres',
-    logging: true,
-  });
+const options = {
+  dialect: 'postgres',
+  logging: config.isProd ? false : true,
+}
+
+if (config.isProd) {
+  options.ssl = {
+    rejectUnauthorized: false
+  }
+}
+
+const sequelize = new Sequelize(config.dbUrl, options);
   
   setupModels(sequelize);
 /*   Para adaptarme al entorno de producción, voy a dejar de utilizar el sync()
