@@ -20,7 +20,7 @@ const createCustomerSchema = Joi.object({
   name: name.required(),
   lastName: lastName.required(),
   identityNumber: identityNumber,
-  phone: phone.required(),
+  phone: phone,
   phoneTwo: phoneTwo,
   province: province,
   city: city,
