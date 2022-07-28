@@ -1,6 +1,6 @@
 const expressModule = require('express');
 const routerApi = require('./routes');
-/* const cors = require('cors'); */
+const cors = require('cors');
 const { checkApiKey } = require('./middlewares/authHandler');
 
 //Los middlewares del tipo error se deben crear despues de establecer el routing de nuestra aplicacion
@@ -25,8 +25,8 @@ const options = {
             callback(new Error('No permitidation, dont do it againo!'));
         }
     }
-}
-app.use(cors(options)); */
+} lo deshabilite para que acepte cualquier dominio*/
+app.use(cors());
 
 //importare el index.js de auth para los login
 require('./utils/auth');
