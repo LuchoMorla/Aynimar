@@ -16,7 +16,6 @@ const service = new CategoryService();
 router.get(
   '/',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
   async (req, res, next) => {
     try {
       const categories = await service.find();
@@ -30,7 +29,6 @@ router.get(
 router.get(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(getCategorySchema, 'params'),
   async (req, res, next) => {
     try {

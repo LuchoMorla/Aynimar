@@ -15,8 +15,6 @@ const service = new WasteCategoryService();
 
 router.get(
   '/',
-  passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
   async (req, res, next) => {
     try {
       const wasteCategories = await service.find();
@@ -29,8 +27,6 @@ router.get(
 
 router.get(
   '/:id',
-  passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(getWasteCategorySchema, 'params'),
   async (req, res, next) => {
     try {

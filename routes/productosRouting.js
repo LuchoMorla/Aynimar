@@ -18,8 +18,6 @@ const service = new ProductsService();
 
 router.get(
   '/',
-  passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(queryProductSchema, 'query'),
   async (req, res, next) => {
     try {
@@ -33,8 +31,6 @@ router.get(
 
 router.get(
   '/:id',
-  passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(getProductSchema, 'params'),
   async (req, res, next) => {
     try {

@@ -17,8 +17,6 @@ const service = new WasteService();
 
 router.get(
   '/',
-  passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(queryWasteSchema, 'query'),
   async (req, res, next) => {
     try {
