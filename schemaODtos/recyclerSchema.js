@@ -1,7 +1,7 @@
 const Joi = require('joi');
 
 const id = Joi.number().integer();
-const name = Joi.string().min(3).max(30);
+const name = Joi.string();
 const lastName = Joi.string();
 const identityNumber = Joi.number();
 const phone =  Joi.string();
