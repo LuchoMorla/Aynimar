@@ -6,6 +6,7 @@ const lastName = Joi.string();
 const identityNumber = Joi.string();
 const phone =  Joi.string();
 const phoneTwo = Joi.string();
+const countryOfResidence = Joi.string();
 const province = Joi.string();
 const city = Joi.string();
 const postalCode = Joi.string();
@@ -22,6 +23,7 @@ const createCustomerSchema = Joi.object({
   identityNumber: identityNumber,
   phone: phone,
   phoneTwo: phoneTwo,
+  countryOfResidence: countryOfResidence,
   province: province,
   city: city,
   postalCode: postalCode,
@@ -38,8 +40,8 @@ const updateCustomerSchema = Joi.object({
   phoneTwo,
   province,
   city,
-  postalCode,
-  userId
+  countryOfResidence,
+  postalCode
 });
 
 module.exports = { getCustomerSchema, createCustomerSchema, updateCustomerSchema };

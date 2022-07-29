@@ -6,6 +6,7 @@ const lastName = Joi.string();
 const identityNumber = Joi.number();
 const phone =  Joi.string();
 const phoneTwo = Joi.string();
+const countryOfResidence = Joi.string();
 const province = Joi.string();
 const city = Joi.string();
 const postalCode = Joi.string();
@@ -30,6 +31,7 @@ const createRecyclerSchema = Joi.object({
   identityNumber: identityNumber.required(),
   phone: phone.required(),
   phoneTwo: phoneTwo,
+  countryOfResidence: countryOfResidence,
   province: province,
   city: city,
   postalCode: postalCode,
@@ -52,10 +54,10 @@ const updateRecyclerSchema = Joi.object({
   identityNumber,
   phone,
   phoneTwo,
+  countryOfResidence,
   province,
   city,
   postalCode,
-  userId,
   paymentType,
   bank,
   typeCount,

@@ -34,6 +34,11 @@ const RecyclerSchema = {
     type: DataTypes.STRING,
     field: 'phone_two',
   },
+  countryOfResidence: {
+    allowNull: true,
+    type: DataTypes.STRING,
+    field: 'residence_country'
+  },
   province: {
     allowNull: true,
     type: DataTypes.STRING,
