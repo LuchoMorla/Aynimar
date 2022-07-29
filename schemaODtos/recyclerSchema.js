@@ -63,7 +63,8 @@ const updateRecyclerSchema = Joi.object({
   typeCount,
   countNumber,
   paymentDate,
-  stateOfThePayment
+  stateOfThePayment,
+  userId
 });
 
 module.exports = { getRecyclerSchema, createRecyclerSchema, updateRecyclerSchema };
