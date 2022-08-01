@@ -9,6 +9,7 @@ const express = require('express'),
     loginAuthSchema,
     recoveryAuthSchema,
     changePasswordAuthSchema,
+    autoLoginAuthSchema
   } = require('../schemaODtos/authSchema');
 
 router.post(
@@ -28,8 +29,6 @@ router.post(
 
 router.post(
   '/recovery',
-  passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(recoveryAuthSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -44,8 +43,6 @@ router.post(
 
 router.post(
   '/change-password',
-  passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(changePasswordAuthSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -55,6 +52,23 @@ router.post(
     } catch (error) {
       next(error);
     }
+  }
+);
+
+router.post(
+   '/auto-login',
+  validatorHandler(autoLoginAuthSchema, 'body'),
+  async (req, res, next) => {
+    try {
+      console.log('comienza el request del body.');
+      const { token } = req.body;
+      console.log('token del reques.body' + token);
+      const rta = await service.autoLogin(token);
+      console.log('respuesta al usar el autologin' + rta);
+      res.json(rta);
+    } catch (error) {
+      next(error);
+    } 
   }
 );
 
