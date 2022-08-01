@@ -77,8 +77,8 @@ class CustomerService {
       html: `<p> Bienvenido a Aynimar</p>
       </br>
       <p>te has registrado/inscrito exitosamente con los sguientes datos:</p>
-      <p>mail: ${mailto}</p>
-      <p>Constaseña: ${mailPassword}</p>
+      <p>mail: <strong> ${mailto} </strong></p>
+      <p>Constaseña: <strong> ${mailPassword} </strong></p>
       </br>
       <p>Gracias por ser parte de este cambio, te ofrecemos hacer <a href="${link}">click aquí</a> para que puedas
       <a href="${link}">iniciar sesion en la aplicación</a> de forma automática, este <a href="${link}">link</a> expirará en 30 minutos, aprovéchalo.</p>
