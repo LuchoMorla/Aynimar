@@ -4,6 +4,12 @@ const { models } = require('../libs/sequelize');
 const { config } = require('./../config/config');
 
 const nodemailer = require('nodemailer');
+const jwt = require('jsonwebtoken');
+
+const AuthService = require('./authService');
+const UserService = require('./userServices');
+const authService = new AuthService();
+const userService = new UserService();
 
 class RecyclerService {
 
