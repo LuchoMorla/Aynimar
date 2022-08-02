@@ -87,16 +87,13 @@ class AuthService {
   async autoLogin(token) {
     try {
         const payload = await jwt.verify(token, config.temporalyJwtSecret);
-        console.log('payload is :' + payload);
         const user = await service.findOne(payload.sub);
-        console.log('user is: '+user);
-        console.log('user.recovery token: ' + user.recoveryToken);
-        console.log('token :' + token);
         if (user.recoveryToken !== token) {
             throw boom.unauthorized();
         }
         await service.update(user.id, {recoveryToken: 'verified'});
-        return { message: 'user email has verified' }
+        const newToken = this.signToken(user);
+        return newToken;
     } catch (error) {
         throw boom.unauthorized();  
     }

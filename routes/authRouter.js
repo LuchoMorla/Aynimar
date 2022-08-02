@@ -60,11 +60,8 @@ router.post(
   validatorHandler(autoLoginAuthSchema, 'body'),
   async (req, res, next) => {
     try {
-      console.log('comienza el request del body.');
       const { token } = req.body;
-      console.log('token del reques.body' + token);
       const rta = await service.autoLogin(token);
-      console.log('respuesta al usar el autologin' + rta);
       res.json(rta);
     } catch (error) {
       next(error);
