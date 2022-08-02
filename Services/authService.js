@@ -42,14 +42,16 @@ class AuthService {
     }
     const payload = { sub: user.id };
     const token = jwt.sign(payload, config.temporalyJwtSecret, {expiresIn: '15min'});
-    const link = `https://myfrontend.com/recovery?token=${token}`;
+    const link = `http://localhost:3000/recovery?token=${token}`;
     await service.update(user.id, {recoveryToken: token});
     const mail = {
         from: config.smtpMail, // sender address
         to: `${user.email}`, // list of receivers
         subject: "Recuperacion de contraseña", // Subject line
 /*         text: "Hola santi", // plain text body   lo comente por que vamos a enviar solamente el html*/
-        html: `<p>Haz click <a href='${link}'>aquí</a> o ingresa al siguiente link para recuperar tu contraseña: =><b> ${link} </b></p><p>Este link expirara en 15 minutos </p>`, // html body
+        html: `<p>Has pedido un cambio de contraseña. </p>
+        <p>Para cambiar tu contraseña haz click <a href='${link}'>aquí</a> o ingresa al siguiente link para recuperar tu contraseña: =><b> ${link} </b></p><p>Este link expirara en 15 minutos, te recomendamos que lo hagas dentro del tiempo estimado para
+        que puedas generar una nueva contraseña. </p>`, // html body
     }
     const rta = await this.sendMail(mail);
     return rta;
@@ -78,7 +80,8 @@ class AuthService {
         }
         const hash = await bcrypt.hash(newPassword, 10);
         await service.update(user.id, {recoveryToken: null, password: hash});
-        return { message: 'password changed'}
+        const newToken = this.signToken(user);
+        return newToken;
     } catch (error) {
         throw boom.unauthorized();
     }
