@@ -30,8 +30,6 @@ router.get(
 
 router.get(
   '/:id',
-  passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(getWasteSchema, 'params'),
   async (req, res, next) => {
     try {
