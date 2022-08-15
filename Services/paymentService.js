@@ -35,7 +35,8 @@ class PaymentService {
         {
           association: 'recycler',
           include: ['user']
-        }
+        },
+        'commodities'
       ]
     });
     for (let i = 0; i < payments.length; i++) {

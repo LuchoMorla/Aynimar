@@ -5,6 +5,8 @@ const { checkRoles } = require('../middlewares/authHandler');
 
 const OrderService = require('../Services/orderService'),
       PaymentService = require('../Services/paymentService'),
+      CustomerService = require('../Services/customerService'),
+      RecyclerService = require('../Services/recyclerService'),
       WalletService = require('../Services/walletService');
 /* const validatorHandler = require('../middlewares/validatorHandler');
 const { getOrderSchema } = require('../schemaODtos/orderSchema'),
@@ -15,6 +17,36 @@ const router = express.Router();
 const orderService = new OrderService();
 const paymentService = new PaymentService();
 const walletService = new WalletService();
+const customerService = new CustomerService();
+const recyclerService = new RecyclerService();
+
+router.get('/my-customer-data',
+  passport.authenticate('jwt', {session: false}),
+  checkRoles('admin', 'recycler', 'customer'),
+  async (req, res, next) => {
+    try {
+      const user = req.user;
+      const customer = await customerService.findByUserId(user.sub);
+      res.json(customer);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get('/my-recycler-data',
+  passport.authenticate('jwt', {session: false}),
+  checkRoles('admin', 'recycler', 'customer'),
+  async (req, res, next) => {
+    try {
+      const user = req.user;
+      const recycler = await recyclerService.findByUserId(user.sub);
+      res.json(recycler);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 router.get('/my-orders',
   passport.authenticate('jwt', {session: false}),

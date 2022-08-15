@@ -24,7 +24,6 @@ router.get(
   checkRoles('admin'),
   async (req, res, next) => {
     try {
-      const { id } = req.params;
       const payments = await service.find();
       res.json(payments);
     } catch (error) {
@@ -43,6 +42,21 @@ router.get(
       const { id } = req.params;
       const payment = await service.findOne(id);
       res.json(payment);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  '/userId/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const payments = await service.findByUser(id);
+      res.json(payments);
     } catch (error) {
       next(error);
     }

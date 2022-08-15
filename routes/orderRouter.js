@@ -50,6 +50,21 @@ router.get(
   }
 );
 
+router.get(
+  '/userId/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const orders = await service.findByUser(id);
+      res.json(orders);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.post(
   '/', 
   passport.authenticate('jwt', { session: false }),
