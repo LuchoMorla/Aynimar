@@ -52,6 +52,11 @@ const CustomerSchema =  {
     type: DataTypes.STRING,
     field: 'postal_code'
   },
+  streetAddress: {
+    allowNull: true,
+    type: DataTypes.STRING,
+    field: 'street_address'
+  },
   createdAt: {
     allowNull: false,
     type: DataTypes.DATE,

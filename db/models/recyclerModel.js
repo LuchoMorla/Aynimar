@@ -53,6 +53,11 @@ const RecyclerSchema = {
     type: DataTypes.STRING,
     field: 'postal_code',
   },
+  streetAddress: {
+    allowNull: true,
+    type: DataTypes.STRING,
+    field: 'street_address'
+  },
   paymentType: {
     allowNull: true,
     type: DataTypes.STRING,
