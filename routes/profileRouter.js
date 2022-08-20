@@ -34,6 +34,21 @@ router.get('/my-customer-data',
   }
 );
 
+router.post('/my-customer-data',
+  passport.authenticate('jwt', {session: false}),
+  checkRoles('admin', 'recycler', 'customer'),
+  async (req, res, next) => {
+    try {
+      const user = req.user;
+      const findRecycler = await recyclerService.findByUserId(user.sub);
+      const customer = await customerService.createCustomerByRecycler(findRecycler);
+      res.json(customer);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.get('/my-recycler-data',
   passport.authenticate('jwt', {session: false}),
   checkRoles('admin', 'recycler', 'customer'),
@@ -41,6 +56,21 @@ router.get('/my-recycler-data',
     try {
       const user = req.user;
       const recycler = await recyclerService.findByUserId(user.sub);
+      res.json(recycler);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post('/my-recycler-data',
+  passport.authenticate('jwt', {session: false}),
+  checkRoles('admin', 'recycler', 'customer'),
+  async (req, res, next) => {
+    try {
+      const user = req.user;
+      const findRecycler = await customerService.findByUserId(user.sub);
+      const recycler = await recyclerService.createRecyclerByCustomer(findRecycler);
       res.json(recycler);
     } catch (error) {
       next(error);
