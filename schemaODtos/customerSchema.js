@@ -38,6 +38,7 @@ const createCustomerSchema = Joi.object({
 const updateCustomerSchema = Joi.object({
   name,
   lastName,
+  identityNumber,
   phone,
   phoneTwo,
   province,
