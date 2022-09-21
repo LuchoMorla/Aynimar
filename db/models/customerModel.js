@@ -57,6 +57,11 @@ const CustomerSchema =  {
     type: DataTypes.STRING,
     field: 'street_address'
   },
+  geolocation: {
+    allowNull: true,
+    type: DataTypes.STRING,
+    field: 'geolocation'
+  },
   createdAt: {
     allowNull: false,
     type: DataTypes.DATE,

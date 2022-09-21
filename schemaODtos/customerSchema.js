@@ -11,6 +11,7 @@ const province = Joi.string();
 const city = Joi.string();
 const postalCode = Joi.string();
 const streetAddress = Joi.string();
+const geolocation = Joi.string();
 const userId = Joi.number().integer();
 const email = Joi.string().email();
 const password =  Joi.string();
@@ -29,6 +30,7 @@ const createCustomerSchema = Joi.object({
   city: city,
   postalCode: postalCode,
   streetAddress: streetAddress,
+  geolocation: geolocation,
   user: Joi.object({
     email: email.required(),
     password: password.required()
@@ -46,6 +48,7 @@ const updateCustomerSchema = Joi.object({
   countryOfResidence,
   postalCode,
   streetAddress,
+  geolocation,
   userId
 });
 

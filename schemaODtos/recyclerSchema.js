@@ -11,6 +11,7 @@ const province = Joi.string();
 const city = Joi.string();
 const postalCode = Joi.string();
 const streetAddress = Joi.string();
+const geolocation = Joi.string();
 const paymentType = Joi.string();
 const bank = Joi.string();
 const typeCount = Joi.string();
@@ -37,6 +38,7 @@ const createRecyclerSchema = Joi.object({
   city: city,
   postalCode: postalCode,
   streetAddress: streetAddress,
+  geolocation: geolocation,
   paymentType: paymentType,
   bank: bank,
   typeCount: typeCount,
@@ -61,6 +63,7 @@ const updateRecyclerSchema = Joi.object({
   city,
   postalCode,
   streetAddress,
+  geolocation,
   paymentType,
   bank,
   typeCount,

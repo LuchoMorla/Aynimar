@@ -1,4 +1,4 @@
-'use strict';
+/* 'use strict';
 const { USER_TABLE } = require('../models/userModel');
 const { CUSTOMER_TABLE } = require('../models/customerModel');
 const { CATEGORY_TABLE } = require('../models/categoryModel');
@@ -507,3 +507,4 @@ module.exports = {
    await queryInterface.dropTable(WALLET_TABLE);
   }
 };
+ */
