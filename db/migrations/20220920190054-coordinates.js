@@ -12,4 +12,4 @@ module.exports = {
     await queryInterface.removeColumn(RECYCLER_TABLE, 'geolocation');
     await queryInterface.removeColumn(CUSTOMER_TABLE, 'geolocation');
   }
-};
+}; 
