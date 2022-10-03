@@ -14,7 +14,7 @@ const puerto = process.env.PORT || 8080;
 app.use(expressModule.json());
 
 // implementando CORS para los dominios
-const whitelist = [ 'https://aynimar.vercel.app', 'https://www.aynimar.com', 'https://aynimar.com',
+const whitelist = ['https://aynimar.vercel.app', 'https://www.aynimar.com', 'https://aynimar.com',
   'http://aynimar.vercel.app', 'http://www.aynimar.com', 'http://aynimar.com'];
 const options = {
     origin: (origin, callback) => {
