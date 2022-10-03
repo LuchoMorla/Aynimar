@@ -44,6 +44,7 @@ class ProductsService {
         }
 
         const products = await models.Product.findAll(options);
+        products.forEach((o) => o.price = o.price / 100);
         return products;
     }
 

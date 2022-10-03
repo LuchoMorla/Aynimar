@@ -14,19 +14,20 @@ const puerto = process.env.PORT || 8080;
 app.use(expressModule.json());
 
 // implementando CORS para los dominios
-/* const whitelist = ['http://localhost:8080/frontend.html', 'http://localhost:8080/products',
- 'http://localhost:8080','http://localhost:3000/',
- 'http://localhost:3000/recycling', 'http://192.168.1.6:3000', 'http://172.17.160.1:3000', 'http://192.168.56.1:3000'];
+const whitelist = [ 'https://aynimar.vercel.app', 'https://www.aynimar.com', 'https://aynimar.com',
+  'http://aynimar.vercel.app', 'http://www.aynimar.com', 'http://aynimar.com'];
 const options = {
     origin: (origin, callback) => {
         if (whitelist.includes(origin) || !origin) {
             callback(null, true);
         } else {
-            callback(new Error('No permitidation, dont do it againo!'));
-        }
+            callback(new Error('No permitidation, dont do it agai, no!'));
+        };
     }
-} lo deshabilite para que acepte cualquier dominio*/
-app.use(cors());
+}; /* comente para que aceptara cualquier tipo de dominio o dirección IP 'http://localhost:8080/frontend.html', 'http://localhost:8080/products',
+'http://localhost:8080','http://localhost:3000/',
+'http://localhost:3000/recycling',  */
+app.use(cors(options));
 
 //importare el index.js de auth para los login
 require('./utils/auth');
