@@ -11,7 +11,9 @@ const validatorHandler = require('../middlewares/validatorHandler');
 const {
   getOrderSchema,
   createOrderSchema,
+  updateItemSchema,
   addItemSchema,
+  getItemSchema
 } = require('../schemaODtos/orderSchema');
 
 const router = express.Router();
@@ -92,6 +94,43 @@ router.post(
   }
 );
 
+/* lo elimine por que no me interesa no veo a que se le pueda hacer update
+router.patch(
+  '/', 
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
+  validatorHandler(updateOrderSchema, 'body'),
+  async (req, res, next) => {
+    try {
+      const body = {
+        userId: req.user.sub,
+        userRole: req.user.role,
+      };
+
+      const newOrder = await service.create(body);
+      res.status(201).json(newOrder);
+    } catch (error) {
+      next(error);
+    }
+  }
+); */
+
+// ITEMS
+
+router.get(
+  '/add-item/:id',
+  validatorHandler(getItemSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const item = await service.findOneItem(id);
+      res.json(item);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.post(
   '/add-item',
   passport.authenticate('jwt', { session: false }),
@@ -102,6 +141,40 @@ router.post(
       const body = req.body;
       const newItem = await service.addItem(body);
       res.status(201).json(newItem);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.patch(
+  '/add-item/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
+  validatorHandler(getItemSchema, 'params'),
+  validatorHandler(updateItemSchema, 'body'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const body = req.body;
+      const updateItem = await service.updateItem(id, body);
+      res.status(201).json(updateItem);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.delete(
+  '/add-item/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
+  validatorHandler(getItemSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const deleteItem = await service.deleteItem(id);
+      res.status(201).json(deleteItem);
     } catch (error) {
       next(error);
     }

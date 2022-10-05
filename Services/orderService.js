@@ -20,11 +20,6 @@ class OrderService {
     return newOrder;
   }
 
-  async addItem(data) {
-    const newItem = await models.OrderProduct.create(data);
-    return newItem;
-  }
-
   async findByUser(userId) {
     const orders = await models.Order.findAll({
       where: {
@@ -91,6 +86,33 @@ class OrderService {
   async delete(id) {
     const model = await this.findOne(id);
     await model.destroy();
+    return { rta: true };
+  }
+
+  // Items 
+  async findOneItem(id) {
+    const item = await models.OrderProduct.findByPk(id);
+    return item;
+  }
+
+  async addItem(data) {
+    const newItem = await models.OrderProduct.create(data);
+    return newItem;
+  }
+
+  async updateItem(id, changes) {
+    const item = await this.findOneItem(id);
+    const rta = await item.update(changes);
+    return {
+      id,
+      changes,
+      rta
+    }
+  }
+
+  async deleteItem(id) {
+    const item = await this.findOneItem(id);
+    await item.destroy();
     return { rta: true };
   }
 
