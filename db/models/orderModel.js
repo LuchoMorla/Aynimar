@@ -21,6 +21,12 @@ const OrderSchema = {
     onUpdate: 'CASCADE',
     onDelete: 'SET NULL'
   },
+  state: {
+    field: 'state',
+    allowNull: true,
+    type: DataTypes.STRING,
+    defaultValue: 'carrito'
+  },
   createdAt: {
     allowNull: false,
     type: DataTypes.DATE,
