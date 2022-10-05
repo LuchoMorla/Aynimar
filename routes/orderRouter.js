@@ -11,6 +11,7 @@ const validatorHandler = require('../middlewares/validatorHandler');
 const {
   getOrderSchema,
   createOrderSchema,
+  updateOrderSchema,
   updateItemSchema,
   addItemSchema,
   getItemSchema
@@ -94,26 +95,39 @@ router.post(
   }
 );
 
-/* lo elimine por que no me interesa no veo a que se le pueda hacer update
 router.patch(
-  '/', 
+  '/:id', 
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'recycler', 'customer'),
+  validatorHandler(getOrderSchema, 'params'),
   validatorHandler(updateOrderSchema, 'body'),
   async (req, res, next) => {
     try {
-      const body = {
-        userId: req.user.sub,
-        userRole: req.user.role,
-      };
-
-      const newOrder = await service.create(body);
-      res.status(201).json(newOrder);
+      const { id } = req.params;
+      const body = req.body;
+      const rta = await service.update(id, body);
+      res.status(201).json(rta);
     } catch (error) {
       next(error);
     }
   }
-); */
+);
+
+router.delete(
+  '/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
+  validatorHandler(getOrderSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const deleteOrder = await service.delete(id);
+      res.status(201).json(deleteOrder);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 // ITEMS
 

@@ -5,6 +5,7 @@ const customerId = Joi.number().integer();
 const orderId = Joi.number().integer();
 const productId = Joi.number().integer();
 const amount = Joi.number().integer().min(1);
+const state = Joi.string();
 
 const getOrderSchema = Joi.object({
   id: id.required(),
@@ -12,6 +13,11 @@ const getOrderSchema = Joi.object({
 
 const createOrderSchema = Joi.object({
   customerId: customerId.required(),
+});
+
+const updateOrderSchema = Joi.object({
+  customerId: customerId,
+  state: state
 });
  //ITEMS
 const addItemSchema = Joi.object({
@@ -31,4 +37,4 @@ const updateItemSchema = Joi.object({
 });
 //se le podrían agregar cosas como estados(entregada, se pago, no se pago, etc.), dirección, etc.
 
-module.exports = { getOrderSchema, createOrderSchema, addItemSchema, updateItemSchema, getItemSchema };
+module.exports = { getOrderSchema, createOrderSchema, updateOrderSchema, addItemSchema, updateItemSchema, getItemSchema };
