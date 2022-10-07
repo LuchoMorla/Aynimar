@@ -72,6 +72,28 @@ class OrderService {
     delete order.dataValues.customer.dataValues.user.dataValues.password;
     return order;
   }
+//super llamado por user id filtrando estado de orden
+  async findOrderByUserIdAndState(userId, state) {
+    const orders = await this.findByUser(userId);
+    const ordersByState = orders.filter(order => order.state == state );
+    if (ordersByState.length == 0) {
+      throw boom.badRequest(`Order in state ${state} not found`);
+    }
+    return ordersByState[0];
+  }
+//llamado de orden por id validando que coincida con su sub
+  async findByOrderIdValidatedWidthUserId(userId, orderId) {
+    const order = await this.findOne(orderId);
+    if (!order) {
+      throw boom.badRequest('order not found');
+    }
+    const userToValidate = order.customer.userId;
+    if(userToValidate == userId){
+      return order;
+    } else {
+        throw boom.badRequest('is not your orderId');
+    }
+  }
 
   async update(id, changes) {
     const order = await this.findOne(id);
