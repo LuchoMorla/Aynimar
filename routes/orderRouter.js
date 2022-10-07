@@ -10,7 +10,9 @@ const RecyclerService = require('../Services/recyclerService');
 const validatorHandler = require('../middlewares/validatorHandler');
 const {
   getOrderSchema,
+  getOrderByUserIdAndOrderId,
   createOrderSchema,
+  getOrderByState,
   updateOrderSchema,
   updateItemSchema,
   addItemSchema,
@@ -46,6 +48,42 @@ router.get(
     try {
       const { id } = req.params;
       const order = await service.findOne(id);
+      res.json(order);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+//super llamado por user id filtrando estado de orden
+router.get(
+  '/user/state',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
+  validatorHandler(getOrderByState, 'body'),
+  async (req, res, next) => {
+    try {
+      const userId = req.user.sub;
+      const body = req.body;
+      const state = body.state;
+      const order = await service.findOrderByUserIdAndState(userId, state);
+      res.json(order);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+//llamado de orden por id validando que coincida con su sub
+router.get(
+  '/user/order',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer'),
+  validatorHandler(getOrderByUserIdAndOrderId, 'body'),
+  async (req, res, next) => {
+    try {
+      const userId = req.user.sub;
+      const body = req.body;
+      const orderId = body.id;
+      const order = await service.findByOrderIdValidatedWidthUserId(userId, orderId);
       res.json(order);
     } catch (error) {
       next(error);
