@@ -70,12 +70,24 @@ class OrderService {
       ]
     });
     delete order.dataValues.customer.dataValues.user.dataValues.password;
+/*     const nueva = order.forEach((item) => {
+      item.dataValues.items.forEach((itemsitos) => itemsitos.price / 100);
+    });
+    console.log(nueva);
+ */ 
     return order;
   }
 //super llamado por user id filtrando estado de orden
   async findOrderByUserIdAndState(userId, state) {
     const orders = await this.findByUser(userId);
     const ordersByState = orders.filter(order => order.state == state );
+
+/*     const nueva = ordersByState.forEach((item) => {
+      item.dataValues.items.forEach((itemsitos) => itemsitos.price / 100);
+    });
+    console.log(nueva);
+    
+    console.log(nueva.dataValues.items.dataValues.price); */
     if (ordersByState.length == 0) {
       throw boom.badRequest(`Order in state ${state} not found`);
     }

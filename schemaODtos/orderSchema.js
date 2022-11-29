@@ -18,9 +18,9 @@ const getOrderByState = Joi.object({
 const getOrderByUserIdAndOrderId = Joi.object({
   id: id.required(),
 });
-
+/* No estoy tran seguro de decar el create order sin el required */
 const createOrderSchema = Joi.object({
-  customerId: customerId.required(),
+  customerId: customerId,
 });
 
 const updateOrderSchema = Joi.object({

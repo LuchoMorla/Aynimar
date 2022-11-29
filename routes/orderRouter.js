@@ -59,12 +59,14 @@ router.get(
   '/user/state',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'recycler', 'customer'),
-  validatorHandler(getOrderByState, 'body'),
+  validatorHandler(getOrderByState, 'query'),
   async (req, res, next) => {
     try {
       const userId = req.user.sub;
-      const body = req.body;
-      const state = body.state;
+      const body = req.query;
+      console.log(body);
+      const { state } = body;
+      console.log(state);
       const order = await service.findOrderByUserIdAndState(userId, state);
       res.json(order);
     } catch (error) {
@@ -120,9 +122,7 @@ router.post(
       const haveCustomerId = await customerService.findByUserId(body.userId);
       if (body.userRole === 'recycler' && !haveCustomerId) {
         const findRecycler = await recyclerService.findByUserId(body.userId);
-        const newCustomer = await customerService.createCustomerByRecycler(
-          findRecycler
-        );
+        const newCustomer = await customerService.createCustomerByRecycler(findRecycler);
         return newCustomer;
       }
       const newOrder = await service.create(body);
