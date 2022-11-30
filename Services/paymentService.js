@@ -76,7 +76,7 @@ class PaymentService {
       html: `<p>gracias por usar nuestro servicio ${recycler.name}</p>
       </br>
       <p>Usted ah realizado exitosamente un pedido de compra.</p>
-      <p>recuerde actualizar sus datos en la url http://localhost:3000/mi_cuenta/recycler, en caso no los tenga actualizados, para evitar cualquier inconveniente al momento de comunicarnos con usted para cerrar el proceso de compra de su articulo a reciclar.</p>
+      <p>recuerde actualizar sus datos en la url https://aynimar.com/mi_cuenta/recycler, en caso no los tenga actualizados, para evitar cualquier inconveniente al momento de comunicarnos con usted para cerrar el proceso de compra de su articulo a reciclar.</p>
       `, // html body
     }
     await this.sendMail(mailUser);

@@ -68,7 +68,7 @@ class RecyclerService {
     const payload = { sub: user.id };
     //sign token and save recoveryToken
     const token = jwt.sign(payload, config.temporalyJwtSecret, {expiresIn: '30min'});
-    const link = `http://localhost:3000/autoLogin?token=${token}`;
+    const link = `https://aynimar.com/autoLogin?token=${token}`;
     await userService.update(user.id, {recoveryToken: token});
     // send Email
     const mailContent = {

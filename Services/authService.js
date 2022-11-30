@@ -42,7 +42,7 @@ class AuthService {
     }
     const payload = { sub: user.id };
     const token = jwt.sign(payload, config.temporalyJwtSecret, {expiresIn: '15min'});
-    const link = `http://localhost:3000/recovery?token=${token}`;
+    const link = `https://aynimar.com/recovery?token=${token}`;
     await service.update(user.id, {recoveryToken: token});
     const mail = {
         from: config.smtpMail, // sender address
