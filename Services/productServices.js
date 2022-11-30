@@ -50,6 +50,7 @@ class ProductsService {
 
     async findOne(id) {
         const product = await models.Product.findByPk(id);
+        product.price = product.price / 100;
         if (!product) {
             throw boom.notFound('Product not found');
         }
