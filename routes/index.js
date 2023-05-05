@@ -9,6 +9,9 @@ const authRouter = require('./authRouter');
 const profileRouter = require('./profileRouter');
 const wasteRouter = require('./wasteRouter');
 const recyclerRouter = require('./recyclerRouter');
+
+const debitRouter = require('./debitRouter');
+
 const paymentRouter = require('./paymentRouter');
 const wasteCategoryRouter = require('./wasteCategoriesRouting');
 const walletRouter = require('./walletRouter');
@@ -35,6 +38,7 @@ function routerApi(app) {
     routerV1.use('/waste-categories', wasteCategoryRouter);
     routerV1.use('/wallets', walletRouter);
     routerV1.use('/mail', mailRouter);
+    routerV1.use('/debits', debitRouter);
 }
 
 module.exports = routerApi;

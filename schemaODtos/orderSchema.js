@@ -14,7 +14,7 @@ const getOrderSchema = Joi.object({
 const getOrderByState = Joi.object({
   state: state.required(),
 });
-
+/* me parece que es su id es el orderID que hay que enviarle */
 const getOrderByUserIdAndOrderId = Joi.object({
   id: id.required(),
 });
