@@ -14,6 +14,8 @@ const {
 const router = express.Router();
 const service = new DebitService();
 
+const customerService = new CustomerService();
+
 router.get('/',
 passport.authenticate('jwt', { session: false }),
 checkRoles('admin', 'recycler', 'customer'),
@@ -50,7 +52,8 @@ router.post('/',
     async (req, res, next) => {
         try {
             const body = req.body;
-            const postDebit = await service.create(body);
+            const userId = req.user.sub;
+            const postDebit = await service.create(body, userId);
           res.json(postDebit);
         } catch (error) {
             next(error);
