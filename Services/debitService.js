@@ -39,7 +39,13 @@ class DebitService {
         subject: "Compra realizada con exito", // Subject line
         html: `<p>Muchas gracias por tú compra, se ah realizado con exito</p>
         </br>
-        <p>Muchas gracias ${user.email} por tú compra, tú pago ah sido realizado de forma segura y esta siendo procesado por los respectivos bancos.</p>
+        <p>Muchas gracias Estimado(a) ${user.email} por tú compra, tú pago ah sido realizado de forma segura y exitosa.</p>
+        Queremos agradecerte por tu compra en Aynimar. <br> Tu número de orden es <strong>${data.orderId}</strong>, y tu compra se realizó el ${data.paymentDate}.</br> Adjunto a este correo electrónico encontrarás una copia de la factura de tu compra.</p>
+        <p>Queremos que sepas que estamos procesando tu compra y que te enviaremos una confirmación de envío o entrega tan pronto como sea posible. Si tienes alguna pregunta o inquietud, no dudes en ponerte en contacto con nuestro equipo de soporte en https://www.aynimar.com/contact.</p>
+        <p>Gracias por confiar en nosotros y por elegir Aynimar para tus compras. Esperamos que disfrutes de tus productos.</p>
+        <p>Saludos cordiales,</p>
+        <p>El equipo de Aynimar</p>
+        <img src="https://www.aynimar.com/_next/static/media/logo-Aynimar.c247031e.svg" alt="Aynimar-logo">
         <p>Datos de Factura:</p>
         <p>
         <p>transactionId: ${data.transactionId} </p>
