@@ -56,11 +56,11 @@ router.post('/',
             const body = req.body;
             const userId = req.user.sub;
             const postDebit = await service.create(body, userId);
-            const changeOrderState = await orderService.update(body.orderId, {
+/*             const changeOrderState = await orderService.update(body.orderId, {
               state: "pagada"
             });
             console.log('cambiamos estado de orden:');
-            console.log(changeOrderState);
+            console.log(changeOrderState); */
           res.json(postDebit);
         } catch (error) {
             next(error);
