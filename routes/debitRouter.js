@@ -1,6 +1,7 @@
 const express = require('express');
 const passport = require('passport');
 const CustomerService = require('../Services/customerService');
+const OrderService = require('../Services/orderService');
 
 const { checkRoles } = require('../middlewares/authHandler');
 
@@ -15,6 +16,7 @@ const router = express.Router();
 const service = new DebitService();
 
 const customerService = new CustomerService();
+const orderService = new OrderService();
 
 router.get('/',
 passport.authenticate('jwt', { session: false }),
@@ -54,6 +56,11 @@ router.post('/',
             const body = req.body;
             const userId = req.user.sub;
             const postDebit = await service.create(body, userId);
+            const changeOrderState = await orderService.update(body.orderId, {
+              state: "pagada"
+            });
+            console.log('cambiamos estado de orden:');
+            console.log(changeOrderState);
           res.json(postDebit);
         } catch (error) {
             next(error);

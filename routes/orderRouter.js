@@ -97,6 +97,7 @@ router.get(
   '/userId/:id',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'recycler', 'customer'),
+  validatorHandler(getOrderSchema, 'params'),
   async (req, res, next) => {
     try {
       const { id } = req.params;

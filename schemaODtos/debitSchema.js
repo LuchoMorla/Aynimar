@@ -9,7 +9,7 @@ const paymentDate = Joi.date();
 const paymentStatus = Joi.string();
 const authorizationCode = Joi.string();
 
-const amount = Joi.number().integer();
+const amount = Joi.number()/* .integer() */;
 
 const getDebitSchema = Joi.object({
   id: id.required(),
@@ -19,7 +19,7 @@ const createDebitSchema = Joi.object({
   customerId: customerId.required(),
   orderId: orderId.required(),
   transactionId: transactionId.required(),
-  amount: amount,
+  amount: amount.required(),
   paymentDate: paymentDate,
   paymentStatus: paymentStatus,
   authorizationCode: authorizationCode,
