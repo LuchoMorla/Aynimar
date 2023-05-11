@@ -118,7 +118,7 @@ class OrderService {
     if (ordersByState.length == 0) {
       throw boom.badRequest(`Order in state ${state} not found`);
     }
-    return ordersByState[0];
+    return ordersByState;
   }
 
   async update(id, changes) {
