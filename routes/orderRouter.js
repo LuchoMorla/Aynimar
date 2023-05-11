@@ -56,7 +56,7 @@ router.get(
 );
 // llamado para obtener todas las ordenes con un estado
 router.get(
-  '/state',
+  '/state/',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin'),
   validatorHandler(getOrderByState, 'body'),
