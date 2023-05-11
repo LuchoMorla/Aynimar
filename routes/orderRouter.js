@@ -59,12 +59,12 @@ router.get(
   '/by/state',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin'),
-  validatorHandler(getOrderByState, 'query'),
+  validatorHandler(getOrderByState, 'body'),
   async (req, res, next) => {
     try {/* 
       const { id } = req.params; *//* 
       const orders = await service.find(); */   
-      const body = req.query;
+      const body = req.body;
       const { state } = body;
       const orders = await service.findOrdersByState(state);
       res.json(orders);
