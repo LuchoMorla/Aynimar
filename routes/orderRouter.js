@@ -54,6 +54,26 @@ router.get(
     }
   }
 );
+// llamado para obtener todas las ordenes con un estado
+router.get(
+  '/state',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin'),
+  validatorHandler(getOrderByState, 'body'),
+  async (req, res, next) => {
+    try {/* 
+      const { id } = req.params; *//* 
+      const orders = await service.find(); */   
+      const body = req.query;
+      const { state } = body;
+      const orders = await service.findOrdersByState(state);
+      res.json(orders);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 //super llamado por user id filtrando estado de orden
 router.get(
   '/user/state',
@@ -64,9 +84,7 @@ router.get(
     try {
       const userId = req.user.sub;
       const body = req.query;
-      console.log(body);
       const { state } = body;
-      console.log(state);
       const order = await service.findOrderByUserIdAndState(userId, state);
       res.json(order);
     } catch (error) {

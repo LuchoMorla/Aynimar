@@ -107,6 +107,20 @@ class OrderService {
     }
   }
 
+  //Servicio para obtener las ordenes filtradas por un estado
+
+  async findOrdersByState(state) {
+    const orders = await this.find();
+    if (!orders) {
+      throw boom.badRequest('order not found');
+    }
+    const ordersByState = orders.filter(order => order.state == state );
+    if (ordersByState.length == 0) {
+      throw boom.badRequest(`Order in state ${state} not found`);
+    }
+    return ordersByState[0];
+  }
+
   async update(id, changes) {
     const order = await this.findOne(id);
     const rta = await order.update(changes);
