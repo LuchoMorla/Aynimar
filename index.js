@@ -26,7 +26,7 @@ const options = {
             callback(new Error('No permitidation, dont do it agai, no!'));
         };
     },
-    methods: ['GET', 'POST', 'PUT', 'DELETE'], // Especifica los métodos HTTP permitidos
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],  // Especifica los métodos HTTP permitidos
     allowedHeaders: ['Content-Type', 'Authorization'] // Especifica los encabezados permitidos
 };
 /*  //comente para que aceptara cualquier tipo de dominio o dirección IP 'http://localhost:8080/frontend.html', 'http://localhost:8080/products',
