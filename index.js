@@ -14,8 +14,10 @@ const puerto = process.env.PORT || 8080;
 app.use(expressModule.json());
 
 // implementando CORS para los dominios
-/* const whitelist = ['https://aynimar.vercel.app', 'https://www.aynimar.com', 'https://aynimar.com',
-  'http://aynimar.vercel.app', 'http://www.aynimar.com', 'http://aynimar.com'];
+const whitelist = [
+    'https://aynimar.vercel.app', 'https://www.aynimar.com', 'https://aynimar.com',
+    'http://aynimar.vercel.app', 'http://www.aynimar.com', 'http://aynimar.com', 'https://aynimar-luchomorla.vercel.app/'
+];
 const options = {
     origin: (origin, callback) => {
         if (whitelist.includes(origin) || !origin) {
@@ -23,12 +25,14 @@ const options = {
         } else {
             callback(new Error('No permitidation, dont do it agai, no!'));
         };
-    }
-}; */ /* comente para que aceptara cualquier tipo de dominio o dirección IP 'http://localhost:8080/frontend.html', 'http://localhost:8080/products',
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE'], // Especifica los métodos HTTP permitidos
+    allowedHeaders: ['Content-Type', 'Authorization'] // Especifica los encabezados permitidos
+};/*  //comente para que aceptara cualquier tipo de dominio o dirección IP 'http://localhost:8080/frontend.html', 'http://localhost:8080/products',
 'http://localhost:8080','http://localhost:3000/',
-'http://localhost:3000/recycling',  
- app.use(cors(options)); */
-app.use(cors());
+'http://localhost:3000/recycling',   */
+ app.use(cors(options));
+/* app.use(cors()); */
 //importare el index.js de auth para los login
 require('./utils/auth');
 
