@@ -2,8 +2,8 @@ const Joi = require('joi');
 const regularExpresion = /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_.+/=]*$/;
 
 const email = Joi.string().email(),
-  password = Joi.string().min(8),
-  newPassword = Joi.string().min(8),
+  password = Joi.string()/* .min() */, //tenia una validacion de 8 carateres y le quite
+  newPassword = Joi.string()/* .min() */,
   token = Joi.string().regex(regularExpresion);
 
 const loginAuthSchema = Joi.object({
