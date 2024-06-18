@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 const boom = require('@hapi/boom');
 
 const { Op } = require('sequelize');
@@ -14,8 +15,29 @@ class ProductsService {
     }
 
     async create(data) {
-        const newProduct = await models.Product.create(data);
-        return newProduct;
+        try {
+            const category = await models.Category.findByPk(data.categoryId);
+            if (!category) {
+                console.error('Invalid category ID');
+            }
+            const newProduct = await models.Product.create(data);
+            return newProduct;
+        } catch (err) {
+            if (err.name === 'SequelizeForeignKeyConstraintError') {
+                console.error('Invalid category ID');
+            }
+            console.error('Internal server error');
+        }
+    }
+
+    async findAll() {
+        const options = {
+            include: ['category'],
+            where: {}
+        }
+
+        const products = await models.Product.findAll(options);
+        return products;
     }
 
     async find(query) {

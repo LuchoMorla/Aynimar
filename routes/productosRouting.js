@@ -30,6 +30,18 @@ router.get(
 );
 
 router.get(
+  '/all',
+  async (req, res, next) => {
+    try {
+      const products = await service.findAll();
+      res.json(products);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
   '/:id',
   validatorHandler(getProductSchema, 'params'),
   async (req, res, next) => {
