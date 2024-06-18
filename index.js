@@ -32,8 +32,11 @@ const options = {
 /*  //comente para que aceptara cualquier tipo de dominio o dirección IP 'http://localhost:8080/frontend.html', 'http://localhost:8080/products', 
 'http://localhost:8080','http://localhost:3000/',
 'http://localhost:3000/recycling',  */
-
- app.use(cors(options));
+if (process.env.NODE_ENV === 'production') {
+    app.use(cors(options));
+} else {
+    app.use(cors());
+}
 /* app.use(cors()); */
 //importare el index.js de auth para los login
 require('./utils/auth');

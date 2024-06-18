@@ -18,6 +18,16 @@ class ProductsService {
         return newProduct;
     }
 
+    async findAll() {
+        const options = {
+            include: ['category'],
+            where: {}
+        }
+
+        const products = await models.Product.findAll(options);
+        return products;
+    }
+
     async find(query) {
 
         const options = {
