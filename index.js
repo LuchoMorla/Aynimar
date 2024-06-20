@@ -2,9 +2,11 @@ const expressModule = require('express');
 const routerApi = require('./routes');
 const cors = require('cors');
 const { checkApiKey } = require('./middlewares/authHandler');
+const multer = require('multer')
+const path = require("path")
 
 //Los middlewares del tipo error se deben crear despues de establecer el routing de nuestra aplicacion
-const { logErrors, errorHandler, boomErrorHandler, sqlQueryErrorHandler, ormErrorHandler } = require('./middlewares/errorsHandler');
+const { logErrors, errorHandler, boomErrorHandler, ormErrorHandler } = require('./middlewares/errorsHandler');
 
 const app = expressModule();
 
@@ -12,6 +14,18 @@ const puerto = process.env.PORT || 8080;
 
 // implementamos el middleware nativo de express para exportar archivos en formato json
 app.use(expressModule.json());
+app.use(expressModule.static("uploads"))
+
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, './uploads'); // Directory where files will be stored
+    },
+    filename: function (req, file, cb) {
+        cb(null, Date.now() + path.extname(file.originalname)); // File name will be timestamp + extension
+    }
+});
+
+const upload = multer({ storage })
 
 // implementando CORS para los dominios
 const whitelist = [
@@ -51,6 +65,39 @@ app.get('/', (req, res) => {
 app.get('/nueva-ruta', checkApiKey, (req, res) =>{
     res.send('hola, soy tu nueva ruta');
 });
+
+app.post("/api/v1/products/upload", upload.array('images', 5) ,async(req, res)=>{
+    try {
+        const files = req.files;
+        if (!files || files.length === 0) {
+          return res.status(400).send('No files uploaded.');
+        }
+        // Array to store file URLs
+        const fileUrls = [];
+        // Generate URLs for each uploaded file
+        files.forEach(file => {
+          const fileUrl = path.join("uploads", file.filename);
+          fileUrls.push(fileUrl);
+        });
+        res.json(fileUrls[0]);
+        // res.sendFile(fileUrls[0])
+
+    } catch (error) {
+        res.send({"error": "Unable to upload image"})
+    }
+})
+
+app.get("/uploads/:id", async(req, res)=>{
+    const {id} = req.params
+    try {
+        const imagePath = path.join(__dirname, "uploads", id)
+        res.sendFile(imagePath)
+        // res.sendFile(fileUrls[0])
+
+    } catch (error) {
+        res.send({"error": "Unable to upload image"})
+    }
+})
 
 routerApi(app);
 
