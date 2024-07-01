@@ -41,9 +41,13 @@ class User extends Model {
     this.hasOne(models.Customer, {
       as: 'customer',
       foreignKey: 'userId'
-    }),
+    });
     this.hasOne(models.Recycler, {
       as: 'recycler',
+      foreignKey: 'userId'
+    });
+    this.hasOne(models.BusinessOwner, {
+      as: 'business_owner',
       foreignKey: 'userId'
     });
   }
