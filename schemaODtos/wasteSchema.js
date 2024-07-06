@@ -8,8 +8,9 @@ const name = Joi.string().min(3).max(50);
 // const name = Joi.string().alphanum().min(3).max(15);
 const price = Joi.number().integer().min(10);
 const description = Joi.string().min(10);
-const image = Joi.string().uri(); 
+const image = Joi.string().uri();
 const wasteCategoryId = Joi.number().integer();
+const businessId = Joi.number().integer();
 
 //recibiremos un limit y un offset
 const limit = Joi.number().integer();
@@ -24,7 +25,8 @@ const createWasteSchema = Joi.object({
     price: price.required(),
     description: description.required(),
     image: image.required(),
-    wasteCategoryId : wasteCategoryId .required()
+    wasteCategoryId: wasteCategoryId.required(),
+    businessId: businessId
 });
 
 const updateWasteSchema = Joi.object({
@@ -32,7 +34,7 @@ const updateWasteSchema = Joi.object({
     price: price,
     image: image,
     description: description,
-    wasteCategoryId : wasteCategoryId 
+    wasteCategoryId: wasteCategoryId
 });
 
 const getWasteSchema = Joi.object({

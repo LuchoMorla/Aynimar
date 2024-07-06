@@ -1,20 +1,27 @@
-const { Boom } = require('@hapi/boom');
+const Boom = require('@hapi/boom');
 const { models } = require('../libs/sequelize');
 
 class BusinessService {
   async findOne(id) {
-    const user = await models.Recycler.findByPk(id);
-    if (!user) {
+    const business = await models.Business.findByPk(id, {
+      include: ["products"]
+    });
+    if (!business) {
       throw Boom.notFound('Business not found');
     }
-    return user;
+    return business;
   }
 
-  async create() {
-    const newBusiness = await models.Business.create({}, {
-      include: ['user']
-    });
+  async create(data) {
+    const newBusiness = await models.Business.create(data);
     return newBusiness;
+  }
+
+  async find() {
+    const business = await models.Business.findAll({
+
+    });
+    return business;
   }
 
 }

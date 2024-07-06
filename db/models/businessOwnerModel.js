@@ -41,7 +41,7 @@ const BussinesOwnerSchema = {
 
 class BusinessOwner extends Model {
   static associate(models) {
-    this.belongsTo(models.User, { as: 'user', foreignKey: 'user_id' });
+    this.belongsTo(models.User, { as: 'user' });
     this.hasMany(models.Business, { as: "business", foreignKey: "business_owner_id" });
   }
 

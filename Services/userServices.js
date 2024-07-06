@@ -4,7 +4,7 @@ const bcrypt = require('bcrypt');
 const { models } = require('./../libs/sequelize');
 
 class UserService {
-  constructor() {}
+  constructor() { }
 
   async create(data) {
     const hash = await bcrypt.hash(data.password, 10);
@@ -18,7 +18,7 @@ class UserService {
 
   async find() {
     const rta = await models.User.findAll({
-      include: ['customer', 'recycler']
+      include: ['customer', 'recycler', 'business_owner']
     });
     for (let i = 0; i < rta.length; i++) {
       delete rta[i].dataValues.password;
@@ -45,7 +45,7 @@ class UserService {
   async update(id, changes) {
     const user = await this.findOne(id);
     const rta = await user.update(changes);
-    return rta; 
+    return rta;
   }
 
   async delete(id) {

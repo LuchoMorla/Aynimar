@@ -16,7 +16,19 @@ const BusinessSchema = {
     field: 'created_at',
     defaultValue: Sequelize.NOW,
   },
-  owner: {
+  name: {
+    allowNull: false,
+    type: DataTypes.STRING,
+  },
+  image: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  description: {
+    type: DataTypes.TEXT,
+    allowNull: false,
+  },
+  ownerId: {
     field: 'business_owner_id',
     allowNull: false,
     type: DataTypes.INTEGER,

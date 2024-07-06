@@ -3,40 +3,33 @@ const passport = require('passport');
 
 const { checkRoles } = require('../middlewares/authHandler');
 
-const ProductsService = require('./../Services/productServices');
-
+const BusinessService = require('../Services/businessService');
 const validatorHandler = require('../middlewares/validatorHandler');
-const {
-  createProductSchema,
-  updateProductSchema,
-  getProductSchema,
-  queryProductSchema,
-} = require('../schemaODtos/productSchema');
+const { createBusinessSchema, updateBusinessSchema } = require('../schemaODtos/businessSchema');
 
 const router = express.Router();
-const service = new ProductsService();
+const service = new BusinessService();
 
-router.get(
-  '/',
-  validatorHandler(queryProductSchema, 'query'),
+router.get('/',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin'),
   async (req, res, next) => {
     try {
-      const products = await service.find(req.query);
-      res.json(products);
+      res.json(await service.find());
     } catch (error) {
       next(error);
     }
-  }
-);
+  });
 
 router.get(
   '/:id',
-  validatorHandler(getProductSchema, 'params'),
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const product = await service.findOne(id);
-      res.json(product);
+      const business = await service.findOne(id);
+      res.json(business);
     } catch (error) {
       next(error);
     }
@@ -46,13 +39,12 @@ router.get(
 router.post(
   '/',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', "business_owner"),
-  validatorHandler(createProductSchema, 'body'),
+  checkRoles('admin', 'business_owner'),
+  validatorHandler(createBusinessSchema, "body"),
   async (req, res, next) => {
     try {
       const body = req.body;
-      const newProduct = await service.create(body);
-      res.status(201).json(newProduct);
+      res.status(201).json(await service.create(body));
     } catch (error) {
       next(error);
     }
@@ -62,15 +54,13 @@ router.post(
 router.patch(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin'),
-  validatorHandler(getProductSchema, 'params'),
-  validatorHandler(updateProductSchema, 'body'),
+  checkRoles('admin', 'business_owner'),
+  validatorHandler(updateBusinessSchema, "body"),
   async (req, res, next) => {
     try {
       const { id } = req.params;
       const body = req.body;
-      const product = await service.update(id, body);
-      res.json(product);
+      res.status(201).json(await service.update(id, body));
     } catch (error) {
       next(error);
     }
@@ -80,13 +70,11 @@ router.patch(
 router.delete(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin'),
-  validatorHandler(getProductSchema, 'params'),
+  checkRoles('admin', 'business_owner'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      await service.delete(id);
-      res.status(201).json({ id });
+      res.status(200).json(await service.delete(id));
     } catch (error) {
       next(error);
     }

@@ -15,7 +15,7 @@ const express = require('express'),
 router.post(
   '/login',
   passport.authenticate('local', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(loginAuthSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -56,7 +56,7 @@ router.post(
 );
 
 router.post(
-   '/auto-login',
+  '/auto-login',
   validatorHandler(autoLoginAuthSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -65,7 +65,7 @@ router.post(
       res.json(rta);
     } catch (error) {
       next(error);
-    } 
+    }
   }
 );
 

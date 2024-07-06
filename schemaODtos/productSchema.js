@@ -8,8 +8,9 @@ const name = Joi.string().min(3).max(50);
 // const name = Joi.string().alphanum().min(3).max(15);
 const price = Joi.number().integer()/* .min(10) */;
 const description = Joi.string().min(10);
-const image = Joi.string().uri(); 
+const image = Joi.string().uri();
 const categoryId = Joi.number().integer();
+const businnesId = Joi.number().integer();
 
 //recibiremos un limit y un offset
 const limit = Joi.number().integer();
@@ -24,7 +25,8 @@ const createProductSchema = Joi.object({
     price: price.required(),
     description: description.required(),
     image: image.required(),
-    categoryId: categoryId.required()
+    categoryId: categoryId.required(),
+    businessId: businnesId,
 });
 
 const updateProductSchema = Joi.object({
@@ -32,7 +34,8 @@ const updateProductSchema = Joi.object({
     price: price,
     image: image,
     description: description,
-    categoryId: categoryId
+    categoryId: categoryId,
+    businessId: businnesId,
 });
 
 const getProductSchema = Joi.object({

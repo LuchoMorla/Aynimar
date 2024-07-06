@@ -16,6 +16,8 @@ const paymentRouter = require('./paymentRouter');
 const wasteCategoryRouter = require('./wasteCategoriesRouting');
 const walletRouter = require('./walletRouter');
 const mailRouter = require('./contactRouter');
+const businessRouter = require('./businessRouter');
+const businessOwnerRouter = require('./businessOwnerRouter');
 
 function routerApi(app) {
     app.use('/products', productosRouting);
@@ -39,6 +41,9 @@ function routerApi(app) {
     routerV1.use('/wallets', walletRouter);
     routerV1.use('/mail', mailRouter);
     routerV1.use('/debits', debitRouter);
+    routerV1.use('/debits', debitRouter);
+    routerV1.use('/business', businessRouter);
+    routerV1.use('/business-owner', businessOwnerRouter);
 }
 
 module.exports = routerApi;

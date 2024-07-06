@@ -14,7 +14,7 @@ const nodemailer = require('nodemailer');
 
 class CustomerService {
 
-  constructor() {}
+  constructor() { }
 
   async find() {
     const rta = await models.Customer.findAll({
@@ -24,7 +24,7 @@ class CustomerService {
     for (let i = 0; i < rta.length; i++) {
       delete rta[i].dataValues.user.dataValues.password;
     }
-    
+
     return rta;
   }
 
@@ -42,7 +42,7 @@ class CustomerService {
       where: { 'user_id': userId }/* ,
       include: ['user']  comente esto por que no lo ocupo y deja a la fuga informacion importante*/
     });
-/*     delete customer.dataValues.user.dataValues.password; */
+    /*     delete customer.dataValues.user.dataValues.password; */
     return customer;
   }
 
@@ -66,9 +66,9 @@ class CustomerService {
     const user = await authService.getUser(mailto, mailPassword);
     const payload = { sub: user.id };
     //sign token and save recoveryToken
-    const token = jwt.sign(payload, config.temporalyJwtSecret, {expiresIn: '30min'});
+    const token = jwt.sign(payload, config.temporalyJwtSecret, { expiresIn: '30min' });
     const link = `https://aynimar.com/autoLogin?token=${token}`;
-    await userService.update(user.id, {recoveryToken: token});
+    await userService.update(user.id, { recoveryToken: token });
     // send Email
     const mailContent = {
       from: config.smtpMail, // sender address
@@ -76,7 +76,7 @@ class CustomerService {
       subject: "Bienvenido a Aynimar", // Subject line
       html: `<p> Bienvenido a Aynimar</p>
       </br>
-      <p>te has registrado/inscrito exitosamente con los sguientes datos:</p>
+      <p>te has registrado/inscrito exitosamente con los siguientes datos:</p>
       <p>mail: <strong> ${mailto} </strong></p>
       <p>Constaseña: <strong> ${mailPassword} </strong></p>
       </br>
@@ -101,7 +101,7 @@ class CustomerService {
       phone: data.dataValues.phone,
       userId: data.dataValues.userId
     });
-/*     delete recyclerCustomer.dataValues.user.dataValues.password; */
+    /*     delete recyclerCustomer.dataValues.user.dataValues.password; */
     return recyclerCustomer;
   }
 
@@ -129,7 +129,7 @@ class CustomerService {
       }
     });
     await transporter.sendMail(infoMail);
-    return { message:  `mail sent to ${infoMail.to}` };
+    return { message: `mail sent to ${infoMail.to}` };
   }
 
 }
