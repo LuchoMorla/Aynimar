@@ -9,6 +9,7 @@ const {
   updateUserSchema,
   createUserSchema,
   getUserSchema,
+  queryUserSchema,
 } = require('../schemaODtos/userSchema');
 
 const router = expressModule.Router();
@@ -31,12 +32,15 @@ router.get(
 router.get(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getUserSchema, 'params'),
+  validatorHandler(queryUserSchema, 'query'),
   async (req, res, next) => {
     try {
+      const { include } = req.query;
+      console.log(include)
       const { id } = req.params;
-      const user = await service.findOne(id);
+      const user = await service.findOne(id, include ? include.split(",") : []);
       res.json(user);
     } catch (error) {
       next(error);

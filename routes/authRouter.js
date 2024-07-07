@@ -27,6 +27,21 @@ router.post(
   }
 );
 
+router.get(
+  '/profile',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  async (req, res, next) => {
+    try {
+      const { user } = req;
+      delete user.iat;
+      res.json(user);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.post(
   '/recovery',
   validatorHandler(recoveryAuthSchema, 'body'),
