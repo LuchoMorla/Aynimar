@@ -32,7 +32,6 @@ const BusinessSchema = {
     field: 'business_owner_id',
     allowNull: false,
     type: DataTypes.INTEGER,
-    unique: true,
     references: {
       model: BUSINESS_OWNER,
       key: 'id',

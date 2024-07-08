@@ -35,6 +35,21 @@ router.get(
   }
 );
 
+router.get(
+  '/by-user/:id',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const customer = await service.findByUserId(+id);
+      res.json(customer);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.post(
   '/',
   validatorHandler(createBusinessOwnerSchema, 'body'),

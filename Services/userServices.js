@@ -26,11 +26,8 @@ class UserService {
     return rta;
   }
 
-  async findOne(id, include = []) {
-    console.log(include)
-    const user = await models.User.findByPk(id, {
-      include,
-    });
+  async findOne(id) {
+    const user = await models.User.findByPk(id);
     if (!user) {
       throw boom.notFound('User not found');
     }

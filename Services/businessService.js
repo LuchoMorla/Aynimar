@@ -4,7 +4,7 @@ const { models } = require('../libs/sequelize');
 class BusinessService {
   async findOne(id) {
     const business = await models.Business.findByPk(id, {
-      include: ["products"]
+      include: ["products", "wastes"]
     });
     if (!business) {
       throw Boom.notFound('Business not found');
@@ -18,9 +18,7 @@ class BusinessService {
   }
 
   async find() {
-    const business = await models.Business.findAll({
-
-    });
+    const business = await models.Business.findAll();
     return business;
   }
 

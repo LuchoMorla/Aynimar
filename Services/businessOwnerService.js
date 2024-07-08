@@ -32,6 +32,7 @@ class BusinessOwnerService {
   async findByUserId(userId) {
     const businessOwner = await models.BusinessOwner.findOne({
       where: { 'user_id': userId },
+      include: ['business']
     });
     return businessOwner;
   }

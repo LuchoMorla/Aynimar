@@ -8,8 +8,7 @@ const validatorHandler = require('../middlewares/validatorHandler');
 const {
   updateUserSchema,
   createUserSchema,
-  getUserSchema,
-  queryUserSchema,
+  getUserSchema
 } = require('../schemaODtos/userSchema');
 
 const router = expressModule.Router();
@@ -34,13 +33,10 @@ router.get(
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getUserSchema, 'params'),
-  validatorHandler(queryUserSchema, 'query'),
   async (req, res, next) => {
     try {
-      const { include } = req.query;
-      console.log(include)
       const { id } = req.params;
-      const user = await service.findOne(id, include ? include.split(",") : []);
+      const user = await service.findOne(id);
       res.json(user);
     } catch (error) {
       next(error);

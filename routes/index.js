@@ -18,6 +18,7 @@ const walletRouter = require('./walletRouter');
 const mailRouter = require('./contactRouter');
 const businessRouter = require('./businessRouter');
 const businessOwnerRouter = require('./businessOwnerRouter');
+const filesRouting = require('./filesRouting');
 
 function routerApi(app) {
     app.use('/products', productosRouting);
@@ -27,6 +28,7 @@ function routerApi(app) {
     const routerV1 = express.Router();
     app.use('/api/v1', routerV1);
 
+    routerV1.use("/files", filesRouting);
     routerV1.use('/products', productosRouting);
     routerV1.use('/categories', categoriasRouting);
     routerV1.use('/users', usersRuta);
