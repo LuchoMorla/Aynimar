@@ -13,7 +13,7 @@ const userService = new UserService();
 
 class RecyclerService {
 
-  constructor() {}
+  constructor() { }
 
   async find() {
     const rta = await models.Recycler.findAll({
@@ -38,10 +38,10 @@ class RecyclerService {
       where: { 'user_id': userId }/* ,
       include: ['user']  comente esto por que no lo ocupo y deja a la fuga informacion importante */
     });
-/*    lo saque para que funcione como un metodo tipo middleware
-     if (!recycler) {
-      throw boom.notFound('Recycler not found');
-    } */
+    /*    lo saque para que funcione como un metodo tipo middleware
+         if (!recycler) {
+          throw boom.notFound('Recycler not found');
+        } */
     return recycler;
   }
 
@@ -57,6 +57,7 @@ class RecyclerService {
         role: role
       }
     }
+
     const newRecycler = await models.Recycler.create(newData, {
       include: ['user']
     });
@@ -67,9 +68,9 @@ class RecyclerService {
     const user = await authService.getUser(mailto, mailPassword);
     const payload = { sub: user.id };
     //sign token and save recoveryToken
-    const token = jwt.sign(payload, config.temporalyJwtSecret, {expiresIn: '30min'});
+    const token = jwt.sign(payload, config.temporalyJwtSecret, { expiresIn: '30min' });
     const link = `https://aynimar.com/autoLogin?token=${token}`;
-    await userService.update(user.id, {recoveryToken: token});
+    await userService.update(user.id, { recoveryToken: token });
     // send Email
     const mailContent = {
       from: config.smtpMail, // sender address
@@ -77,7 +78,7 @@ class RecyclerService {
       subject: "Bienvenido a Aynimar", // Subject line
       html: `<p> Bienvenido a Aynimar</p>
       </br>
-      <p>te has registrado/inscrito exitosamente con los sguientes datos:</p>
+      <p>te has registrado/inscrito exitosamente con los siguientes datos:</p>
       <p>mail: <strong> ${mailto} </strong></p>
       <p>Constaseña: <strong> ${mailPassword} </strong></p>
       </br>
@@ -103,7 +104,7 @@ class RecyclerService {
       userId: data.dataValues.userId
     });
     return customerRecycler;
-  }  
+  }
 
   async update(id, changes) {
     const model = await this.findOne(id);
@@ -121,7 +122,7 @@ class RecyclerService {
   async sendMail(infoMail) {
     const transporter = nodemailer.createTransport({
       host: "smtp.gmail.com",
-      secure: true, // true for 465, false for other ports
+      secure: false, // true for 465, false for other ports
       port: 465,
       auth: {
         user: config.smtpMail,
@@ -129,7 +130,7 @@ class RecyclerService {
       }
     });
     await transporter.sendMail(infoMail);
-    return { message:  `mail sent to ${infoMail.to}` };
+    return { message: `mail sent to ${infoMail.to}` };
   }
 
 }

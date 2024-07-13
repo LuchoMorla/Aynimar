@@ -63,7 +63,7 @@ router.get(
   async (req, res, next) => {
     try {/* 
       const { id } = req.params; *//* 
-      const orders = await service.find(); */   
+      const orders = await service.find(); */
       const body = req.body;
       const { state } = body;
       const orders = await service.findOrdersByState(state);
@@ -73,6 +73,22 @@ router.get(
     }
   }
 );
+
+router.get("/by/business/:businessId",
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  async (req, res, next) => {
+    try {
+      const { businessId } = req.params;
+
+      const orders = await service.findOrdersByBusinessId(businessId);
+      res.json(orders);
+    } catch (error) {
+      next(error);
+    }
+  }
+)
+
 
 //super llamado por user id filtrando estado de orden
 router.get(
@@ -128,7 +144,7 @@ router.get(
 );
 
 router.post(
-  '/', 
+  '/',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(createOrderSchema, 'body'),
@@ -153,7 +169,7 @@ router.post(
 );
 
 router.patch(
-  '/:id', 
+  '/:id',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'recycler', 'customer'),
   validatorHandler(getOrderSchema, 'params'),

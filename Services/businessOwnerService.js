@@ -1,62 +1,56 @@
+const { models } = require('../libs/sequelize');
 const boom = require('@hapi/boom');
 const bcrypt = require('bcrypt');
-const { models } = require('../libs/sequelize');
-const { config } = require('./../config/config');
 
+const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 
 const AuthService = require('./authService');
 const UserService = require('./userServices');
+const { config } = require('../config/config');
 const authService = new AuthService();
 const userService = new UserService();
 
-const nodemailer = require('nodemailer');
-
-class CustomerService {
-
-  constructor() { }
-
-  async find() {
-    const rta = await models.Customer.findAll({
-      include: ['user']
-    });
-
-    for (let i = 0; i < rta.length; i++) {
-      delete rta[i].dataValues.user.dataValues.password;
-    }
-
-    return rta;
-  }
-
+class BusinessOwnerService {
   async findOne(id) {
-    const user = await models.Customer.findByPk(id);
+    const user = await models.BusinessOwner.findByPk(id, {
+      include: ["business"]
+    });
     if (!user) {
-      throw boom.notFound('customer not found');
+      throw boom.notFound('Business Owner not found');
     }
     return user;
   }
 
-  async findByUserId(userId) {
-    //metodo tipo middleware para encontrar un customer por el userId
-    const customer = await models.Customer.findOne({
-      where: { 'user_id': userId }/* ,
-      include: ['user']  comente esto por que no lo ocupo y deja a la fuga informacion importante*/
+  async createBusiness() {
+    const newBusinessOwner = await models.BusinessOwner.create({}, {
+      include: ['user']
     });
-    /*     delete customer.dataValues.user.dataValues.password; */
-    return customer;
+    return newBusinessOwner;
+  }
+
+  async findByUserId(userId) {
+    const businessOwner = await models.BusinessOwner.findOne({
+      where: { 'user_id': userId },
+      include: ['business']
+    });
+    return businessOwner;
   }
 
   async create(data) {
     const mailPassword = data.user.password;
     const hash = await bcrypt.hash(data.user.password, 10);
+    const role = 'business_owner';
     const newData = {
       ...data,
       user: {
         ...data.user,
-        password: hash
+        password: hash,
+        role: role
       }
     }
-    const newCustomer = await models.Customer.create(newData, {
+    console.log(newData)
+    const newBusinessOwner = await models.BusinessOwner.create(newData, {
       include: ['user']
     });
 
@@ -64,11 +58,13 @@ class CustomerService {
 
     //authenticate
     const user = await authService.getUser(mailto, mailPassword);
+
     const payload = { sub: user.id };
     //sign token and save recoveryToken
     const token = jwt.sign(payload, config.temporalyJwtSecret, { expiresIn: '30min' });
     const link = `https://aynimar.com/autoLogin?token=${token}`;
     await userService.update(user.id, { recoveryToken: token });
+
     // send Email
     const mailContent = {
       from: config.smtpMail, // sender address
@@ -90,31 +86,22 @@ class CustomerService {
 
     await this.sendMail(mailContent);
 
-    delete newCustomer.dataValues.user.dataValues.password;
-    return newCustomer;
+    delete newBusinessOwner.dataValues.user.dataValues.password;
+    return newBusinessOwner;
   }
 
-  async createCustomerByRecycler(data) {
-    const recyclerCustomer = await models.Customer.create({
-      name: data.dataValues.name,
-      lastName: data.dataValues.lastName,
-      phone: data.dataValues.phone,
-      userId: data.dataValues.userId
+  async find() {
+    const bota = await models.BusinessOwner.findAll({
+      include: ['user']
     });
-    /*     delete recyclerCustomer.dataValues.user.dataValues.password; */
-    return recyclerCustomer;
-  }
 
-  async update(id, changes) {
-    const model = await this.findOne(id);
-    const rta = await model.update(changes);
-    return rta;
-  }
+    const businessOwners = bota.map((businessOwner) => {
+      businessOwner.dataValues.user = Object.fromEntries(Object.entries(businessOwner.dataValues.user.dataValues).filter(([key]) => key !== 'password'));
 
-  async delete(id) {
-    const model = await this.findOne(id);
-    await model.destroy();
-    return { rta: true };
+      return businessOwner;
+    });
+
+    return businessOwners;
   }
 
   //Other services to costumers
@@ -134,4 +121,4 @@ class CustomerService {
 
 }
 
-module.exports = CustomerService;
+module.exports = BusinessOwnerService;

@@ -8,7 +8,7 @@ const validatorHandler = require('../middlewares/validatorHandler');
 const {
   updateUserSchema,
   createUserSchema,
-  getUserSchema,
+  getUserSchema
 } = require('../schemaODtos/userSchema');
 
 const router = expressModule.Router();
@@ -31,7 +31,7 @@ router.get(
 router.get(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getUserSchema, 'params'),
   async (req, res, next) => {
     try {
@@ -47,7 +47,7 @@ router.get(
 router.post(
   '/',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(createUserSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -63,7 +63,7 @@ router.post(
 router.patch(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getUserSchema, 'params'),
   validatorHandler(updateUserSchema, 'body'),
   async (req, res, next) => {
@@ -81,7 +81,7 @@ router.patch(
 router.delete(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getUserSchema, 'params'),
   async (req, res, next) => {
     try {

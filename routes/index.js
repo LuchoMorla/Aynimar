@@ -16,6 +16,10 @@ const paymentRouter = require('./paymentRouter');
 const wasteCategoryRouter = require('./wasteCategoriesRouting');
 const walletRouter = require('./walletRouter');
 const mailRouter = require('./contactRouter');
+const businessRouter = require('./businessRouter');
+const businessOwnerRouter = require('./businessOwnerRouter');
+const filesRouting = require('./filesRouting');
+const offersRouter = require('./offersRouting');
 
 function routerApi(app) {
     app.use('/products', productosRouting);
@@ -25,6 +29,7 @@ function routerApi(app) {
     const routerV1 = express.Router();
     app.use('/api/v1', routerV1);
 
+    routerV1.use("/files", filesRouting);
     routerV1.use('/products', productosRouting);
     routerV1.use('/categories', categoriasRouting);
     routerV1.use('/users', usersRuta);
@@ -39,6 +44,10 @@ function routerApi(app) {
     routerV1.use('/wallets', walletRouter);
     routerV1.use('/mail', mailRouter);
     routerV1.use('/debits', debitRouter);
+    routerV1.use('/debits', debitRouter);
+    routerV1.use('/business', businessRouter);
+    routerV1.use('/business-owner', businessOwnerRouter);
+    routerV1.use('/offers', offersRouter);
 }
 
 module.exports = routerApi;

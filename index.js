@@ -14,26 +14,29 @@ const puerto = process.env.PORT || 8080;
 app.use(expressModule.json());
 
 // implementando CORS para los dominios
-const whitelist = [
-    'https://aynimar.vercel.app', 'https://www.aynimar.com', 'https://aynimar.com',
-    'http://aynimar.vercel.app', 'http://www.aynimar.com', 'http://aynimar.com', 'https://aynimar-luchomorla.vercel.app/'
-];
-const options = {
-    origin: (origin, callback) => {
-        if (whitelist.includes(origin) || !origin) {
-            callback(null, true);
-        } else {
-            callback(new Error('No permitidation, dont do it agai, no!'));
-        };
-    },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],  // Especifica los métodos HTTP permitidos
-    allowedHeaders: ['Content-Type', 'Authorization'] // Especifica los encabezados permitidos
-};
+// const whitelist = [
+//     'https://aynimar.vercel.app', 'https://www.aynimar.com', 'https://aynimar.com',
+//     'http://aynimar.vercel.app', 'http://www.aynimar.com', 'http://aynimar.com', 'https://aynimar-luchomorla.vercel.app/'
+// ];
+// const options = {
+//     origin: (origin, callback) => {
+//         if (whitelist.includes(origin) || !origin) {
+//             callback(null, true);
+//         } else {
+//             callback(new Error('No permitidation, dont do it again, no!'));
+//         };
+//     },
+//     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],  // Especifica los métodos HTTP permitidos
+//     allowedHeaders: ['Content-Type', 'Authorization'] // Especifica los encabezados permitidos
+// };
+
+
 /*  //comente para que aceptara cualquier tipo de dominio o dirección IP 'http://localhost:8080/frontend.html', 'http://localhost:8080/products', 
 'http://localhost:8080','http://localhost:3000/',
 'http://localhost:3000/recycling',  */
 
- app.use(cors(options));
+app.use(cors());
+// TODO: Add files upload
 /* app.use(cors()); */
 //importare el index.js de auth para los login
 require('./utils/auth');
@@ -45,7 +48,7 @@ app.get('/', (req, res) => {
 });
 
 // un ejemplo de protección de nuestra api con un key o apiKey de ejemplo
-app.get('/nueva-ruta', checkApiKey, (req, res) =>{
+app.get('/nueva-ruta', checkApiKey, (req, res) => {
     res.send('hola, soy tu nueva ruta');
 });
 
@@ -62,6 +65,6 @@ app.listen(puerto, () => {
     console.log('Mi port is ' + puerto)
     console.log(`listening at http://localhost:${puerto}`)
     console.log(new Date)
-/*     lo que es lo mismo que:
-    console.log("lestening at http://localhost:" + puerto) */
+    /*     lo que es lo mismo que:
+        console.log("lestening at http://localhost:" + puerto) */
 });

@@ -1,6 +1,7 @@
 const { Model, DataTypes, Sequelize } = require('sequelize');
 
 const { CATEGORY_TABLE } = require('./categoryModel');
+const { BUSINESS_TABLE } = require('./businessModel');
 
 const PRODUCT_TABLE = 'products';
 
@@ -43,6 +44,17 @@ const ProductSchema = {
     },
     onUpdate: 'CASCADE',
     onDelete: 'SET NULL'
+  },
+  businessId: {
+    field: 'business_id',
+    allowNull: true,
+    type: DataTypes.INTEGER,
+    references: {
+      model: BUSINESS_TABLE,
+      key: 'id'
+    },
+    onUpdate: 'CASCADE',
+    onDelete: 'SET NULL'
   }
 }
 
@@ -51,6 +63,7 @@ class Product extends Model {
 
   static associate(models) {
     this.belongsTo(models.Category, { as: 'category' });
+    this.belongsTo(models.Business, { as: 'business' });
   }
 
   static config(sequelize) {

@@ -42,7 +42,7 @@ router.get(
 router.post(
   '/',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin'),
+  checkRoles('admin', 'business_owner'),
   passport.authenticate('jwt', { session: false }),
   validatorHandler(createWasteCategorySchema, 'body'),
   async (req, res, next) => {
@@ -59,7 +59,7 @@ router.post(
 router.patch(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin'),
+  checkRoles('admin', 'business_owner'),
   validatorHandler(getWasteCategorySchema, 'params'),
   validatorHandler(updateWasteCategorySchema, 'body'),
   async (req, res, next) => {
@@ -77,7 +77,7 @@ router.patch(
 router.delete(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin'),
+  checkRoles('admin', 'business_owner'),
   validatorHandler(getWasteCategorySchema, 'params'),
   async (req, res, next) => {
     try {

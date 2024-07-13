@@ -1,6 +1,7 @@
 const { Model, DataTypes, Sequelize } = require('sequelize');
 
 const { WASTE_CATEGORY_TABLE } = require('./wasteCategoryModel');
+const { BUSINESS_TABLE } = require('./businessModel');
 
 const WASTE_TABLE = 'wastes';
 
@@ -24,7 +25,7 @@ const WasteSchema = {
     allowNull: false,
   },
   price: {
-    type: DataTypes.INTEGER,
+    type: DataTypes.FLOAT,
     allowNull: false,
   },
   createdAt: {
@@ -43,6 +44,17 @@ const WasteSchema = {
     },
     onUpdate: 'CASCADE',
     onDelete: 'SET NULL'
+  },
+  businessId: {
+    field: 'business_id',
+    allowNull: true,
+    type: DataTypes.INTEGER,
+    references: {
+      model: BUSINESS_TABLE,
+      key: 'id'
+    },
+    onUpdate: 'CASCADE',
+    onDelete: 'SET NULL'
   }
 }
 
@@ -50,6 +62,7 @@ const WasteSchema = {
 class Waste extends Model {
 
   static associate(models) {
+    this.belongsTo(models.Business, { as: 'business' });
     this.belongsTo(models.WasteCategory, { as: 'waste_category' });
   }
 

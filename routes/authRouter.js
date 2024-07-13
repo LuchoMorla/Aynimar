@@ -15,12 +15,27 @@ const express = require('express'),
 router.post(
   '/login',
   passport.authenticate('local', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(loginAuthSchema, 'body'),
   async (req, res, next) => {
     try {
       const user = req.user;
       res.json(service.signToken(user));
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  '/profile',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  async (req, res, next) => {
+    try {
+      const { user } = req;
+      delete user.iat;
+      res.json(user);
     } catch (error) {
       next(error);
     }
@@ -56,7 +71,7 @@ router.post(
 );
 
 router.post(
-   '/auto-login',
+  '/auto-login',
   validatorHandler(autoLoginAuthSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -65,7 +80,7 @@ router.post(
       res.json(rta);
     } catch (error) {
       next(error);
-    } 
+    }
   }
 );
 

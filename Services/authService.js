@@ -23,6 +23,13 @@ class AuthService {
     return user;
   }
 
+  async getProfile({ sub }) {
+    const user = await service.findOne(sub);
+    delete user.dataValues.password;
+    delete user.dataValues.recoveryToken;
+    return user;
+  }
+
   signToken(user) {
     const payload = {
       sub: user.id,
@@ -41,15 +48,15 @@ class AuthService {
       throw boom.unauthorized();
     }
     const payload = { sub: user.id };
-    const token = jwt.sign(payload, config.temporalyJwtSecret, {expiresIn: '15min'});
+    const token = jwt.sign(payload, config.temporalyJwtSecret, { expiresIn: '15min' });
     const link = `https://aynimar.com/recovery?token=${token}`;
-    await service.update(user.id, {recoveryToken: token});
+    await service.update(user.id, { recoveryToken: token });
     const mail = {
-        from: config.smtpMail, // sender address
-        to: `${user.email}`, // list of receivers
-        subject: "Recuperacion de contraseña", // Subject line
-/*         text: "Hola santi", // plain text body   lo comente por que vamos a enviar solamente el html*/
-        html: `<p>Has pedido un cambio de contraseña. </p>
+      from: config.smtpMail, // sender address
+      to: `${user.email}`, // list of receivers
+      subject: "Recuperacion de contraseña", // Subject line
+      /*         text: "Hola santi", // plain text body   lo comente por que vamos a enviar solamente el html*/
+      html: `<p>Has pedido un cambio de contraseña. </p>
         <p>Para cambiar tu contraseña haz click <a href='${link}'>aquí</a> o ingresa al siguiente link para recuperar tu contraseña: =><b> ${link} </b></p><p>Este link expirara en 15 minutos, te recomendamos que lo hagas dentro del tiempo estimado para
         que puedas generar una nueva contraseña. </p>`, // html body
     }
@@ -68,37 +75,37 @@ class AuthService {
       }
     });
     await transporter.sendMail(infoMail);
-    return { message:  `mail sent to ${infoMail.to}` };
+    return { message: `mail sent to ${infoMail.to}` };
   }
 
   async changePassword(token, newPassword) {
     try {
-        const payload = jwt.verify(token, config.temporalyJwtSecret);
-        const user = await service.findOne(payload.sub);
-        if (user.recoveryToken !== token) {
-            throw boom.unauthorized();
-        }
-        const hash = await bcrypt.hash(newPassword, 10);
-        await service.update(user.id, {recoveryToken: null, password: hash});
-        const newToken = this.signToken(user);
-        return newToken;
-    } catch (error) {
+      const payload = jwt.verify(token, config.temporalyJwtSecret);
+      const user = await service.findOne(payload.sub);
+      if (user.recoveryToken !== token) {
         throw boom.unauthorized();
+      }
+      const hash = await bcrypt.hash(newPassword, 10);
+      await service.update(user.id, { recoveryToken: null, password: hash });
+      const newToken = this.signToken(user);
+      return newToken;
+    } catch (error) {
+      throw boom.unauthorized();
     }
   }
 
   async autoLogin(token) {
     try {
-        const payload = await jwt.verify(token, config.temporalyJwtSecret);
-        const user = await service.findOne(payload.sub);
-        if (user.recoveryToken !== token) {
-            throw boom.unauthorized();
-        }
-        await service.update(user.id, {recoveryToken: 'verified'});
-        const newToken = this.signToken(user);
-        return newToken;
+      const payload = await jwt.verify(token, config.jwtSecret);
+      const user = await service.findOne(payload.sub);
+      if (user.recoveryToken !== token) {
+        throw boom.unauthorized();
+      }
+      await service.update(user.id, { recoveryToken: 'verified' });
+      const newToken = this.signToken(user);
+      return newToken;
     } catch (error) {
-        throw boom.unauthorized();  
+      throw boom.unauthorized();
     }
   }
 }

@@ -203,3 +203,5 @@ data
 # ignore
 Dockerfile
 user/src/app
+
+uploads/**

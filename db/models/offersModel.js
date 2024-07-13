@@ -1,10 +1,8 @@
 const { Model, DataTypes, Sequelize } = require('sequelize');
-
 const { PAYMENT_TABLE } = require('./paymentModel');
-const { WASTE_TABLE } = require('./wasteModel');
-const PAYMENT_WASTE_TABLE = 'payments_wastes';
+const OFFER_TABLE = 'offers';
 
-const PaymentWasteSchema = {
+const OfferSchema = {
   id: {
     allowNull: false,
     autoIncrement: true,
@@ -17,10 +15,13 @@ const PaymentWasteSchema = {
     field: 'created_at',
     defaultValue: Sequelize.NOW,
   },
-  amount: {
+
+  status: {
     allowNull: false,
-    type: DataTypes.INTEGER
+    type: DataTypes.STRING,
+    defaultValue: 'pending'
   },
+
   paymentId: {
     field: 'payment_id',
     allowNull: false,
@@ -31,33 +32,25 @@ const PaymentWasteSchema = {
     },
     onUpdate: 'CASCADE',
     onDelete: 'SET NULL'
-  },
-  wasteId: {
-    field: 'waste_id',
-    allowNull: false,
-    type: DataTypes.INTEGER,
-    references: {
-      model: WASTE_TABLE,
-      key: 'id'
-    },
-    onUpdate: 'CASCADE',
-    onDelete: 'SET NULL'
   }
-}
+};
 
-class PaymentWaste extends Model {
-
+class Offer extends Model {
   static associate(models) {
+    this.belongsTo(models.Payment, {
+      foreignKey: "paymentId",
+      as: 'payment'
+    });
   }
 
   static config(sequelize) {
     return {
       sequelize,
-      tableName: PAYMENT_WASTE_TABLE,
-      modelName: 'PaymentWaste',
+      tableName: OFFER_TABLE,
+      modelName: 'Offers',
       timestamps: false
-    }
+    };
   }
 }
 
-module.exports = { PaymentWaste, PaymentWasteSchema, PAYMENT_WASTE_TABLE };
+module.exports = { Offer, OfferSchema, OFFER_TABLE };
