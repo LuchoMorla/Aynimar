@@ -10,7 +10,7 @@ const { models } = require('../libs/sequelize');
 class ProductsService {
 
     constructor() {
-/*         this.products = []; */
+        /*         this.products = []; */
     }
 
     async create(data) {
@@ -50,46 +50,46 @@ class ProductsService {
 
     async findOne(id) {
         const product = await models.Product.findByPk(id);
-        product.price = product.price / 100;
         if (!product) {
             throw boom.notFound('Product not found');
         }
+        product.price = product.price / 100;
         //vamos a crear un bloqueo para los casos de productos bloqueados, seria algo de logica de negocio..sera un error del tipo conflicto
-/*         if (product.isBlock) {
-            throw boom.conflict('Product is block');
-        } */
+        /*         if (product.isBlock) {
+                    throw boom.conflict('Product is block');
+                } */
         return product;
     }
 
     async update(id, changes) {
         /* const index = await this.findOne(id); || this.products.findIndex(item => item.id === id) 
         if (index === -1) {*/
-            /* Comenzaremos a utilizar Boom!! y a manipular los errores de una forma diferente
-            throw new Error('product not found'); */
-/*             throw boom.notFound('Product not found');
-        }
-        const product = this.products[index];
-        this.products[index] = {
-            ...product,
-            ...changes
-        };
-        return this.products[index]; */
+        /* Comenzaremos a utilizar Boom!! y a manipular los errores de una forma diferente
+        throw new Error('product not found'); */
+        /*             throw boom.notFound('Product not found');
+                }
+                const product = this.products[index];
+                this.products[index] = {
+                    ...product,
+                    ...changes
+                };
+                return this.products[index]; */
         const product = await this.findOne(id);
         const rta = await product.update(changes);
         return {
-          id,
-          changes,
-          rta
+            id,
+            changes,
+            rta
         };
     }
 
     async delete(id) {
-       /*  const index = this.products.findIndex(item => item.id === id);
-        if (index === -1) {
-            throw boom.notFound('Producto not found');
-        }
-        this.products.splice(index, 1);
-        return {message: true, id} */
+        /*  const index = this.products.findIndex(item => item.id === id);
+         if (index === -1) {
+             throw boom.notFound('Producto not found');
+         }
+         this.products.splice(index, 1);
+         return {message: true, id} */
         const model = await this.findOne(id);
         await model.destroy();
         return { rta: true };

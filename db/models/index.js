@@ -14,6 +14,7 @@ const { BusinessOwner, BussinesOwnerSchema } = require('./businessOwnerModel');
 const { Business, BusinessSchema } = require('./businessModel');
 
 const { Debit, DebitSchema } = require('./debitModel');
+const { Offer, OfferSchema } = require('./offersModel');
 
 
 function setupModels(sequelize) {
@@ -32,6 +33,7 @@ function setupModels(sequelize) {
   BusinessOwner.init(BussinesOwnerSchema, BusinessOwner.config(sequelize));
   Business.init(BusinessSchema, Business.config(sequelize));
   Debit.init(DebitSchema, Debit.config(sequelize));
+  Offer.init(OfferSchema, Offer.config(sequelize));
 
   User.associate(sequelize.models);
   Customer.associate(sequelize.models);
@@ -45,8 +47,10 @@ function setupModels(sequelize) {
   Wallet.associate(sequelize.models);
   BusinessOwner.associate(sequelize.models);
   Business.associate(sequelize.models);
-
+  Offer.associate(sequelize.models);
   Debit.associate(sequelize.models);
+  PaymentWaste.associate(sequelize.models);
+
 }
 
 module.exports = setupModels;

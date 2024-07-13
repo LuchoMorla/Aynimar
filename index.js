@@ -5,7 +5,6 @@ const { checkApiKey } = require('./middlewares/authHandler');
 
 //Los middlewares del tipo error se deben crear despues de establecer el routing de nuestra aplicacion
 const { logErrors, errorHandler, boomErrorHandler, sqlQueryErrorHandler, ormErrorHandler } = require('./middlewares/errorsHandler');
-const fileUpload = require('express-fileupload');
 
 const app = expressModule();
 
@@ -38,7 +37,6 @@ app.use(expressModule.json());
 
 app.use(cors());
 // TODO: Add files upload
-app.use(fileUpload());
 /* app.use(cors()); */
 //importare el index.js de auth para los login
 require('./utils/auth');
