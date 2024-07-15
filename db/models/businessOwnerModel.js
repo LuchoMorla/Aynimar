@@ -22,7 +22,7 @@ const BussinesOwnerSchema = {
   },
   identityNumber: {
     allowNull: true,
-    type: DataTypes.INTEGER,
+    type: DataTypes.STRING,
     field: 'identity_number',
   },
   userId: {
