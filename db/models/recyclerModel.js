@@ -22,7 +22,7 @@ const RecyclerSchema = {
   },
   identityNumber: {
     allowNull: true,
-    type: DataTypes.INTEGER,
+    type: DataTypes.STRING,
     field: 'identity_number',
   },
   phone: {
@@ -66,7 +66,7 @@ const RecyclerSchema = {
   paymentType: {
     allowNull: true,
     type: DataTypes.STRING,
-    field: 'payment_type'       
+    field: 'payment_type'
   },
   bank: {
     allowNull: true,

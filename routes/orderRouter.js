@@ -16,7 +16,8 @@ const {
   updateOrderSchema,
   updateItemSchema,
   addItemSchema,
-  getItemSchema
+  getItemSchema,
+  getOrdersByBusinessId
 } = require('../schemaODtos/orderSchema');
 
 const router = express.Router();
@@ -30,7 +31,6 @@ router.get(
   checkRoles('admin'),
   async (req, res, next) => {
     try {
-      const { id } = req.params;
       const orders = await service.find();
       res.json(orders);
     } catch (error) {
@@ -74,9 +74,11 @@ router.get(
   }
 );
 
+// Router for get the orders of a business
 router.get("/by/business/:businessId",
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'business_owner'),
+  validatorHandler(getOrdersByBusinessId, 'params'),
   async (req, res, next) => {
     try {
       const { businessId } = req.params;
