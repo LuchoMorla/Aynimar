@@ -17,11 +17,11 @@ module.exports = {
      * Example:
      * await queryInterface.createTable('users', { id: Sequelize.INTEGER });
      */
-    await queryInterface.addColumn(RECYCLER_TABLE, RecyclerSchema.identityNumber.field, {
+    await queryInterface.changeColumn(RECYCLER_TABLE, RecyclerSchema.identityNumber.field, {
       allowNull: true,
       type: DataTypes.STRING,
     });
-    await queryInterface.addColumn(BUSINESS_OWNER, BussinesOwnerSchema.identityNumber.field, {
+    await queryInterface.changeColumn(BUSINESS_OWNER, BussinesOwnerSchema.identityNumber.field, {
       allowNull: true,
       type: DataTypes.STRING,
     });
@@ -39,7 +39,5 @@ module.exports = {
      * Example:
      * await queryInterface.dropTable('users');
      */
-    await queryInterface.removeColumn(RECYCLER_TABLE, RecyclerSchema.identityNumber.field);
-    await queryInterface.removeColumn(BUSINESS_OWNER, BussinesOwnerSchema.identityNumber.field);
   }
 };

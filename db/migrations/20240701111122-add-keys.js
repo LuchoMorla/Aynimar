@@ -10,8 +10,7 @@ module.exports = {
      * Example:
      * await queryInterface.createTable('users', { id: Sequelize.INTEGER });
      */
-    await queryInterface.addColumn(BUSINESS_TABLE, BusinessSchema.ownerId.field, BusinessSchema.ownerId);
-
+    await queryInterface.changeColumn(BUSINESS_TABLE, BusinessSchema.ownerId.field, BusinessSchema.ownerId);
   },
 
   async down(queryInterface, Sequelize) {
@@ -20,6 +19,5 @@ module.exports = {
      *
      * Example:
     */
-    await queryInterface.removeColumn(BUSINESS_TABLE, BusinessSchema.ownerId.field);
   }
 };
