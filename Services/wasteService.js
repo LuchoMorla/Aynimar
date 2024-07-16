@@ -43,19 +43,18 @@ class wasteService {
         }
 
         const products = await models.Waste.findAll(options);
-        products.forEach((o) => o.price = o.price / 100);
         return products;
     }
 
     async findOne(id) {
-/*         const waste = this.wastes.find(commodity => commodity.id === id);
-        if (!waste) {
-            throw boom.notFound('waste not found');
-        } */
+        /*         const waste = this.wastes.find(commodity => commodity.id === id);
+                if (!waste) {
+                    throw boom.notFound('waste not found');
+                } */
         //vamos a crear un bloqueo para los casos de wasteos bloqueados, seria algo de logica de negocio..sera un error del tipo conflicto
-/*         if (waste.isBlock) {
-            throw boom.conflict('waste is block');
-        } */
+        /*         if (waste.isBlock) {
+                    throw boom.conflict('waste is block');
+                } */
         const waste = await models.Waste.findByPk(id);
         if (!waste) {
             throw boom.notFound('Waste not found');
@@ -64,34 +63,34 @@ class wasteService {
     }
 
     async update(id, changes) {
-/*         const index = this.wastes.findIndex(commodity => commodity.id === id);
-        if (index === -1) { */
-            /* Comenzaremos a utilizar Boom!! y a manipular los errores de una forma diferente
-            throw new Error('product not found'); */
-  /*           throw boom.notFound('Product not found');
-        }
-        const waste = this.wastes[index];
-        this.wastes[index] = {
-            ...waste,
-            ...changes
-        };
-        return this.wastes[index]; */
+        /*         const index = this.wastes.findIndex(commodity => commodity.id === id);
+                if (index === -1) { */
+        /* Comenzaremos a utilizar Boom!! y a manipular los errores de una forma diferente
+        throw new Error('product not found'); */
+        /*           throw boom.notFound('Product not found');
+              }
+              const waste = this.wastes[index];
+              this.wastes[index] = {
+                  ...waste,
+                  ...changes
+              };
+              return this.wastes[index]; */
         const waste = await this.findOne(id);
         const rta = await waste.update(changes);
         return {
-          id,
-          changes,
-          rta
+            id,
+            changes,
+            rta
         };
     }
 
     async delete(id) {
-/*         const index = this.wastes.findIndex(item => item.id === id);
-        if (index === -1) {
-            throw boom.notFound('Producto not found');
-        }
-        this.wastes.splice(index, 1);
-        return {message: true, id} */
+        /*         const index = this.wastes.findIndex(item => item.id === id);
+                if (index === -1) {
+                    throw boom.notFound('Producto not found');
+                }
+                this.wastes.splice(index, 1);
+                return {message: true, id} */
         const model = await this.findOne(id);
         await model.destroy();
         return { rta: true };

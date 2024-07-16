@@ -44,7 +44,6 @@ class ProductsService {
         }
 
         const products = await models.Product.findAll(options);
-        products.forEach((o) => o.price = o.price / 100);
         return products;
     }
 
@@ -53,7 +52,6 @@ class ProductsService {
         if (!product) {
             throw boom.notFound('Product not found');
         }
-        product.price = product.price / 100;
         //vamos a crear un bloqueo para los casos de productos bloqueados, seria algo de logica de negocio..sera un error del tipo conflicto
         /*         if (product.isBlock) {
                     throw boom.conflict('Product is block');
