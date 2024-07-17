@@ -21,6 +21,7 @@ const config = {
   redirectUri: process.env.REDIRECT_URI,
   accessToken: process.env.ACCESS_TOKEN,
   refreshToken: process.env.REFRESH_TOKEN,
+  proposalEmailRmail: process.env.PROPOSAL_EMAIL_RMAIL,
 }
 
 module.exports = { config };
