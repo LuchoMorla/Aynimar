@@ -20,6 +20,7 @@ const businessRouter = require('./businessRouter');
 const businessOwnerRouter = require('./businessOwnerRouter');
 const filesRouting = require('./filesRouting');
 const offersRouter = require('./offersRouting');
+const proposalRouter = require('./proposalRouter');
 
 function routerApi(app) {
     app.use('/products', productosRouting);
@@ -48,6 +49,7 @@ function routerApi(app) {
     routerV1.use('/business', businessRouter);
     routerV1.use('/business-owner', businessOwnerRouter);
     routerV1.use('/offers', offersRouter);
+    routerV1.use('/proposals', proposalRouter);
 }
 
 module.exports = routerApi;
