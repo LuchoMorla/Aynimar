@@ -4,7 +4,7 @@ const passport = require('passport');
 const { checkRoles } = require('../middlewares/authHandler');
 const BusinessOwnerService = require('../Services/businessOwnerService');
 const validatorHandler = require('../middlewares/validatorHandler');
-const { createBusinessOwnerSchema, updateBusinessOwnerSchema } = require('../schemaODtos/businessOwnerSchema');
+const { createBusinessOwnerSchema, updateBusinessOwnerSchema, getBusinessOwnerSchema } = require('../schemaODtos/businessOwnerSchema');
 
 const router = express.Router();
 const service = new BusinessOwnerService();
@@ -24,6 +24,7 @@ router.get(
   '/:id',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'business_owner'),
+  validatorHandler(getBusinessOwnerSchema, 'params'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
@@ -39,6 +40,7 @@ router.get(
   '/by-user/:id',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'business_owner'),
+  validatorHandler(getBusinessOwnerSchema, 'params'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
