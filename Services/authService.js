@@ -96,7 +96,7 @@ class AuthService {
 
   async autoLogin(token) {
     try {
-      const payload = await jwt.verify(token, config.jwtSecret);
+      const payload = jwt.verify(token, config.temporalyJwtSecret);
       const user = await service.findOne(payload.sub);
       if (user.recoveryToken !== token) {
         throw boom.unauthorized();

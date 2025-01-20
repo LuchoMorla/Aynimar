@@ -12,7 +12,7 @@ const { PAYMENT_TABLE } = require('../models/paymentModel');
 const { PAYMENT_WASTE_TABLE } = require('../models/payment-wasteModel');
 const { WALLET_TABLE } = require('../models/walletModel');
 
-const { Sequelize, DataTypes } = require('sequelize');
+const {DataTypes } = require('sequelize');
 
 module.exports = {
   async up(queryInterface, Sequelize) {
