@@ -65,7 +65,7 @@ class BusinessOwnerService {
     const payload = { sub: user.id };
     //sign token and save recoveryToken
     const token = jwt.sign(payload, config.temporalyJwtSecret, { expiresIn: '30min' });
-    const link = `https://aynimar.com/autoLogin?token=${token}`;
+    const link = `https://circular-merchant.aynimar.com/auth-login?token=${token}`;
     await userService.update(user.id, { recoveryToken: token });
 
     // send Email
