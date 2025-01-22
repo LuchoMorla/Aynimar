@@ -27,6 +27,7 @@ const whitelist = [
   'http://www.aynimar.com',
   'http://aynimar.com',
   'https://aynimar-luchomorla.vercel.app/',
+  'https://circular-merchant.aynimar.com'
 ];
 const options = {
   origin: (origin, callback) => {
