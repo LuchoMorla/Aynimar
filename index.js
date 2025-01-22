@@ -4,7 +4,7 @@ const cors = require('cors');
 const { checkApiKey } = require('./middlewares/authHandler');
 
 //Los middlewares del tipo error se deben crear despues de establecer el routing de nuestra aplicacion
-const { logErrors, errorHandler, boomErrorHandler, sqlQueryErrorHandler, ormErrorHandler } = require('./middlewares/errorsHandler');
+const { logErrors, errorHandler, boomErrorHandler, ormErrorHandler } = require('./middlewares/errorsHandler');
 
 const app = expressModule();
 
@@ -31,7 +31,7 @@ app.use(expressModule.json());
 // };
 
 
-/*  //comente para que aceptara cualquier tipo de dominio o dirección IP 'http://localhost:8080/frontend.html', 'http://localhost:8080/products', 
+/*  //comente para que aceptara cualquier tipo de dominio o dirección IP 'http://localhost:8080/frontend.html', 'http://localhost:8080/products',
 'http://localhost:8080','http://localhost:3000/',
 'http://localhost:3000/recycling',  */
 
