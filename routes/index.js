@@ -18,7 +18,6 @@ const walletRouter = require('./walletRouter');
 const mailRouter = require('./contactRouter');
 const businessRouter = require('./businessRouter');
 const businessOwnerRouter = require('./businessOwnerRouter');
-const filesRouting = require('./filesRouting');
 const offersRouter = require('./offersRouting');
 const proposalRouter = require('./proposalRouter');
 
@@ -30,7 +29,6 @@ function routerApi(app) {
     const routerV1 = express.Router();
     app.use('/api/v1', routerV1);
 
-    routerV1.use("/files", filesRouting);
     routerV1.use('/products', productosRouting);
     routerV1.use('/categories', categoriasRouting);
     routerV1.use('/users', usersRuta);
