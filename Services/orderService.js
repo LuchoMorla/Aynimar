@@ -1,6 +1,5 @@
 const boom = require('@hapi/boom');
 const { models } = require('../libs/sequelize');
-const { Op } = require('sequelize');
 
 class OrderService {
 
@@ -87,7 +86,7 @@ class OrderService {
           item.dataValues.items.forEach((itemsitos) => itemsitos.price / 100);
         });
         console.log(nueva);
-        
+
         console.log(nueva.dataValues.items.dataValues.price); */
     if (ordersByState.length == 0) {
       throw boom.badRequest(`Order in state ${state} not found`);
@@ -167,7 +166,7 @@ class OrderService {
     return { rta: true };
   }
 
-  // Items 
+  // Items
   async findOneItem(id) {
     const item = await models.OrderProduct.findByPk(id);
     return item;

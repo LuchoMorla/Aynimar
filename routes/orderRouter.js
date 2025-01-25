@@ -17,7 +17,7 @@ const {
   updateItemSchema,
   addItemSchema,
   getItemSchema,
-  getOrdersByBusinessId
+  getOrdersByBusinessId,
 } = require('../schemaODtos/orderSchema');
 
 const router = express.Router();
@@ -61,8 +61,9 @@ router.get(
   checkRoles('admin'),
   validatorHandler(getOrderByState, 'body'),
   async (req, res, next) => {
-    try {/* 
-      const { id } = req.params; *//* 
+    try {
+      /*
+      const { id } = req.params; */ /*
       const orders = await service.find(); */
       const body = req.body;
       const { state } = body;
@@ -75,7 +76,8 @@ router.get(
 );
 
 // Router for get the orders of a business
-router.get("/by/business/:businessId",
+router.get(
+  '/by/business/:businessId',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'business_owner'),
   validatorHandler(getOrdersByBusinessId, 'params'),
@@ -89,8 +91,7 @@ router.get("/by/business/:businessId",
       next(error);
     }
   }
-)
-
+);
 
 //super llamado por user id filtrando estado de orden
 router.get(
@@ -121,7 +122,10 @@ router.get(
       const userId = req.user.sub;
       const body = req.body;
       const orderId = body.id;
-      const order = await service.findByOrderIdValidatedWidthUserId(userId, orderId);
+      const order = await service.findByOrderIdValidatedWidthUserId(
+        userId,
+        orderId
+      );
       res.json(order);
     } catch (error) {
       next(error);
@@ -159,7 +163,9 @@ router.post(
       const haveCustomerId = await customerService.findByUserId(body.userId);
       if (body.userRole === 'recycler' && !haveCustomerId) {
         const findRecycler = await recyclerService.findByUserId(body.userId);
-        const newCustomer = await customerService.createCustomerByRecycler(findRecycler);
+        const newCustomer = await customerService.createCustomerByRecycler(
+          findRecycler
+        );
         return newCustomer;
       }
       const newOrder = await service.create(body);
@@ -173,7 +179,7 @@ router.post(
 router.patch(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getOrderSchema, 'params'),
   validatorHandler(updateOrderSchema, 'body'),
   async (req, res, next) => {

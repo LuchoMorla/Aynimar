@@ -46,6 +46,7 @@ const options = {
 'http://localhost:3000/recycling',  */
 
 app.use(cors(options));
+// app.use(cors());
 // TODO: Add files upload
 /* app.use(cors()); */
 //importare el index.js de auth para los login

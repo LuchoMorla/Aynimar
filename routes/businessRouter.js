@@ -5,12 +5,16 @@ const { checkRoles } = require('../middlewares/authHandler');
 
 const BusinessService = require('../Services/businessService');
 const validatorHandler = require('../middlewares/validatorHandler');
-const { createBusinessSchema, updateBusinessSchema } = require('../schemaODtos/businessSchema');
+const {
+  createBusinessSchema,
+  updateBusinessSchema,
+} = require('../schemaODtos/businessSchema');
 
 const router = express.Router();
 const service = new BusinessService();
 
-router.get('/',
+router.get(
+  '/',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin'),
   async (req, res, next) => {
@@ -19,7 +23,8 @@ router.get('/',
     } catch (error) {
       next(error);
     }
-  });
+  }
+);
 
 router.get(
   '/:id',
@@ -40,7 +45,7 @@ router.post(
   '/',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'business_owner'),
-  validatorHandler(createBusinessSchema, "body"),
+  validatorHandler(createBusinessSchema, 'body'),
   async (req, res, next) => {
     try {
       const body = req.body;
@@ -55,7 +60,7 @@ router.patch(
   '/:id',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'business_owner'),
-  validatorHandler(updateBusinessSchema, "body"),
+  validatorHandler(updateBusinessSchema, 'body'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
@@ -74,7 +79,10 @@ router.delete(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      res.status(200).json(await service.delete(id));
+      await service.delete(id);
+      res.status(200).json({
+        id,
+      });
     } catch (error) {
       next(error);
     }
