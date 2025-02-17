@@ -120,9 +120,9 @@ class OrderService {
   async findOrdersByBusinessId(businessId) {
     const orders = await models.Order.findAll({
       where: {
-        // state: {
-        //   [Op.eq]: 'pagada',
-        // },
+        state: {
+          [Op.eq]: 'pagada',
+        },
       },
       include: [
         {
