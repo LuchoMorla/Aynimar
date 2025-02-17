@@ -10,7 +10,7 @@ const ProductSchema = {
     allowNull: false,
     autoIncrement: true,
     primaryKey: true,
-    type: DataTypes.INTEGER
+    type: DataTypes.INTEGER,
   },
   name: {
     type: DataTypes.STRING,
@@ -28,6 +28,22 @@ const ProductSchema = {
     type: DataTypes.FLOAT,
     allowNull: false,
   },
+  isDeleted: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    field: 'is_deleted',
+  },
+  stock: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
+  showShop: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+    field: 'show_shop',
+  },
   createdAt: {
     allowNull: false,
     type: DataTypes.DATE,
@@ -40,10 +56,10 @@ const ProductSchema = {
     type: DataTypes.INTEGER,
     references: {
       model: CATEGORY_TABLE,
-      key: 'id'
+      key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'SET NULL'
+    onDelete: 'SET NULL',
   },
   businessId: {
     field: 'business_id',
@@ -51,16 +67,14 @@ const ProductSchema = {
     type: DataTypes.INTEGER,
     references: {
       model: BUSINESS_TABLE,
-      key: 'id'
+      key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'SET NULL'
-  }
-}
-
+    onDelete: 'SET NULL',
+  },
+};
 
 class Product extends Model {
-
   static associate(models) {
     this.belongsTo(models.Category, { as: 'category' });
     this.belongsTo(models.Business, { as: 'business' });
@@ -71,8 +85,8 @@ class Product extends Model {
       sequelize,
       tableName: PRODUCT_TABLE,
       modelName: 'Product',
-      timestamps: false
-    }
+      timestamps: false,
+    };
   }
 }
 

@@ -1,6 +1,6 @@
 const Joi = require('joi');
 
-/*  ya no lo necesitamos, ahora que nos vamos a conectar a la base de datos y tenemos id id con la regla de autoincremental... ya podemos ignorar el uuid y utilizarlo como un 
+/*  ya no lo necesitamos, ahora que nos vamos a conectar a la base de datos y tenemos id id con la regla de autoincremental... ya podemos ignorar el uuid y utilizarlo como un
 integer
 const id = Joi.string().uuid(); */
 const id = Joi.number().integer();
@@ -11,6 +11,9 @@ const description = Joi.string().min(10);
 const image = Joi.string().uri();
 const categoryId = Joi.number().integer();
 const businnesId = Joi.number().integer();
+const isDeleted = Joi.boolean();
+const stock = Joi.number().integer().allow(null);
+const showShop = Joi.boolean();
 
 //recibiremos un limit y un offset
 const limit = Joi.number().integer();
@@ -27,6 +30,9 @@ const createProductSchema = Joi.object({
     image: image.required(),
     categoryId: categoryId.required(),
     businessId: businnesId,
+    isDeleted: isDeleted,
+    stock: stock,
+    showShop: showShop,
 });
 
 const updateProductSchema = Joi.object({
@@ -36,6 +42,9 @@ const updateProductSchema = Joi.object({
     description: description,
     categoryId: categoryId,
     businessId: businnesId,
+    isDeleted: isDeleted,
+    stock: stock,
+    showShop: showShop,
 });
 
 const getProductSchema = Joi.object({
@@ -50,7 +59,8 @@ const queryProductSchema = Joi.object({
     price_max: price_max.when('price_min', {
         is: Joi.number().integer(),
         then: Joi.required(),
-    })
+    }),
+    show_shop: showShop,
 });
 
 module.exports = { createProductSchema, updateProductSchema, getProductSchema, queryProductSchema }

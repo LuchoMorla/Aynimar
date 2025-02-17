@@ -1,18 +1,17 @@
 const boom = require('@hapi/boom');
 const { models } = require('../libs/sequelize');
+const { Op } = require('sequelize');
 
 class OrderService {
-
-  constructor() {
-  }
+  constructor() {}
 
   async create(data) {
     const customer = await models.Customer.findOne({
       where: {
-        '$user.id$': data.userId
+        '$user.id$': data.userId,
       },
-      include: ['user']
-    })
+      include: ['user'],
+    });
     if (!customer) {
       throw boom.badRequest('Customer not found os');
     }
@@ -23,15 +22,15 @@ class OrderService {
   async findByUser(userId) {
     const orders = await models.Order.findAll({
       where: {
-        '$customer.user.id$': userId
+        '$customer.user.id$': userId,
       },
       include: [
         {
           association: 'customer',
-          include: ['user']
+          include: ['user'],
         },
-        'items'
-      ]
+        'items',
+      ],
     });
 
     for (var i = 0; i < orders.length; i++) {
@@ -46,10 +45,10 @@ class OrderService {
       include: [
         {
           association: 'customer',
-          include: ['user']
+          include: ['user'],
         },
-        'items'
-      ]
+        'items',
+      ],
     });
 
     for (var i = 0; i < orders.length; i++) {
@@ -59,15 +58,26 @@ class OrderService {
     return orders;
   }
 
+  async verifyProductIsInOrderActive(productId, businnesId) {
+    const orders = await this.findOrdersByBusinessId(businnesId);
+    const activeOrders = orders.filter(
+      (order) => !['entregado', 'cancelado'].includes(order.stateOrder)
+    );
+
+    return activeOrders.some((order) =>
+      order.items.some((item) => item.id === +productId)
+    );
+  }
+
   async findOne(id) {
     const order = await models.Order.findByPk(id, {
       include: [
         {
           association: 'customer',
-          include: ['user']
+          include: ['user'],
         },
-        'items'
-      ]
+        'items',
+      ],
     });
     delete order.dataValues.customer.dataValues.user.dataValues.password;
     /*     const nueva = order.forEach((item) => {
@@ -80,7 +90,7 @@ class OrderService {
   //super llamado por user id filtrando estado de orden
   async findOrderByUserIdAndState(userId, state) {
     const orders = await this.findByUser(userId);
-    const ordersByState = orders.filter(order => order.state == state);
+    const ordersByState = orders.filter((order) => order.state == state);
 
     /*     const nueva = ordersByState.forEach((item) => {
           item.dataValues.items.forEach((itemsitos) => itemsitos.price / 100);
@@ -107,31 +117,32 @@ class OrderService {
     }
   }
 
-
   async findOrdersByBusinessId(businessId) {
     const orders = await models.Order.findAll({
       where: {
         // state: {
-        // [Op.not]: "carrito",
-        // }
+        //   [Op.eq]: 'pagada',
+        // },
       },
       include: [
         {
-          association: "customer",
-          include: [{
-            association: "user",
-            attributes: {
-              exclude: ["password", "recoveryToken"]
-            }
-          }]
+          association: 'customer',
+          include: [
+            {
+              association: 'user',
+              attributes: {
+                exclude: ['password', 'recoveryToken'],
+              },
+            },
+          ],
         },
         {
-          association: "items",
+          association: 'items',
           where: {
-            businessId
-          }
-        }
-      ]
+            businessId,
+          },
+        },
+      ],
     });
 
     return orders;
@@ -143,7 +154,7 @@ class OrderService {
     if (!orders) {
       throw boom.badRequest('order not found');
     }
-    const ordersByState = orders.filter(order => order.state == state);
+    const ordersByState = orders.filter((order) => order.state == state);
     if (ordersByState.length == 0) {
       throw boom.badRequest(`Order in state ${state} not found`);
     }
@@ -153,10 +164,26 @@ class OrderService {
   async update(id, changes) {
     const order = await this.findOne(id);
     const rta = await order.update(changes);
+
+    if (changes.state === 'pagada') {
+      const orderItems = await models.OrderProduct.findAll({
+        where: {
+          orderId: id,
+        },
+      });
+
+      for (let i = 0; i < orderItems.length; i++) {
+        const product = await models.Product.findByPk(orderItems[i].productId);
+        await product.update({
+          stock: product.stock - orderItems[i].amount,
+        });
+      }
+    }
+
     return {
       id,
       changes,
-      rta
+      rta,
     };
   }
 
@@ -183,8 +210,8 @@ class OrderService {
     return {
       id,
       changes,
-      rta
-    }
+      rta,
+    };
   }
 
   async deleteItem(id) {
@@ -192,7 +219,6 @@ class OrderService {
     await item.destroy();
     return { rta: true };
   }
-
 }
 
 module.exports = OrderService;

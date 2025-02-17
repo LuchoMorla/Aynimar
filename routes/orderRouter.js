@@ -18,6 +18,7 @@ const {
   addItemSchema,
   getItemSchema,
   getOrdersByBusinessId,
+  getVerifyProductIsInOrderActive,
 } = require('../schemaODtos/orderSchema');
 
 const router = express.Router();
@@ -149,6 +150,28 @@ router.get(
   }
 );
 
+router.get(
+  '/verify-product-is-in-order-active/:id/:businessId',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  validatorHandler(getVerifyProductIsInOrderActive, 'params'),
+  async (req, res, next) => {
+    try {
+      const { id, businessId } = req.params;
+
+      const isVerified = await service.verifyProductIsInOrderActive(
+        id,
+        businessId
+      );
+      res.json({
+        isVerified,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.post(
   '/',
   passport.authenticate('jwt', { session: false }),
@@ -197,7 +220,7 @@ router.patch(
 router.delete(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getOrderSchema, 'params'),
   async (req, res, next) => {
     try {

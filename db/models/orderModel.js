@@ -8,7 +8,7 @@ const OrderSchema = {
     allowNull: false,
     autoIncrement: true,
     primaryKey: true,
-    type: DataTypes.INTEGER
+    type: DataTypes.INTEGER,
   },
   customerId: {
     field: 'customer_id',
@@ -16,16 +16,36 @@ const OrderSchema = {
     type: DataTypes.INTEGER,
     references: {
       model: CUSTOMER_TABLE,
-      key: 'id'
+      key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'SET NULL'
+    onDelete: 'SET NULL',
   },
   state: {
     field: 'state',
     allowNull: true,
     type: DataTypes.STRING,
-    defaultValue: 'carrito'
+    defaultValue: 'carrito',
+  },
+  stateOrder: {
+    field: 'state_order',
+    allowNull: false,
+    type: DataTypes.ENUM(
+      'comprado_pendiente_pago',
+      'comprado_pendiente_negocio',
+      'aprobado',
+      'en_preparacion',
+      'necesita_edicion',
+      'enviado',
+      'entregado',
+      'cancelado',
+      'en_controversia',
+      "controversia_escalada",
+      "controversia_resuelta",
+      'por_devolver',
+      'devuelto'
+    ),
+    defaultValue: 'comprado_pendiente_pago',
   },
   createdAt: {
     allowNull: false,
@@ -37,22 +57,20 @@ const OrderSchema = {
     type: DataTypes.VIRTUAL,
     get() {
       //Reviso si tenemos productos
-      if(this.items) {
-        console.log('existen items en la orden')
-      if (this.items.length > 0) {
-        return this.items.reduce((total, item) => {
-          return total + (item.price * item.OrderProduct.amount);
-        }, 0);
+      if (this.items) {
+        console.log('existen items en la orden');
+        if (this.items.length > 0) {
+          return this.items.reduce((total, item) => {
+            return total + item.price * item.OrderProduct.amount;
+          }, 0);
+        }
+        return 0;
       }
-      return 0;
-    }
-    }
-  }
-}
-
+    },
+  },
+};
 
 class Order extends Model {
-
   static associate(models) {
     this.belongsTo(models.Customer, {
       as: 'customer',
@@ -61,7 +79,8 @@ class Order extends Model {
       as: 'items',
       through: models.OrderProduct,
       foreignKey: 'orderId',
-      otherKey: 'productId'
+      onDelete: 'CASCADE',
+      otherKey: 'productId',
     });
   }
 
@@ -70,8 +89,8 @@ class Order extends Model {
       sequelize,
       tableName: ORDER_TABLE,
       modelName: 'Order',
-      timestamps: false
-    }
+      timestamps: false,
+    };
   }
 }
 

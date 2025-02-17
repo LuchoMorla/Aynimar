@@ -5,7 +5,7 @@ const passport = require('passport');
 const { checkRoles } = require('../middlewares/authHandler');
 const OffersService = require('../Services/offersService');
 const validatorHandler = require('../middlewares/validatorHandler');
-const { paramsOfferSchema, createOfferSchema, updateOfferSchema } = require('../schemaODtos/offersSchema');
+const { paramsOfferSchema, updateOfferSchema } = require('../schemaODtos/offersSchema');
 
 const router = express.Router();
 const service = new OffersService();
@@ -29,7 +29,6 @@ router.get(
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'business_owner'),
   validatorHandler(paramsOfferSchema, "params"),
-  validatorHandler(createOfferSchema, "body"),
   async (req, res, next) => {
     try {
       const { id } = req.params;
