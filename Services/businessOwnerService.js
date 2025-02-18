@@ -14,7 +14,7 @@ const userService = new UserService();
 class BusinessOwnerService {
   async findOne(id) {
     const user = await models.BusinessOwner.findByPk(id, {
-      include: ["business"]
+      include: ['business'],
     });
     if (!user) {
       throw boom.notFound('Business Owner not found');
@@ -23,19 +23,25 @@ class BusinessOwnerService {
   }
 
   async createBusiness() {
-    const newBusinessOwner = await models.BusinessOwner.create({}, {
-      include: ['user']
-    });
+    const newBusinessOwner = await models.BusinessOwner.create(
+      {},
+      {
+        include: ['user'],
+      }
+    );
     return newBusinessOwner;
   }
 
   async findByUserId(userId) {
     const businessOwner = await models.BusinessOwner.findOne({
-      where: { 'user_id': userId },
-      include: ['business', {
-        association: "user",
-        attributes: { exclude: ['password', 'recoveryToken'] }
-      }]
+      where: { user_id: userId },
+      include: [
+        'business',
+        {
+          association: 'user',
+          attributes: { exclude: ['password', 'recoveryToken'] },
+        },
+      ],
     });
     return businessOwner;
   }
@@ -49,12 +55,12 @@ class BusinessOwnerService {
       user: {
         ...data.user,
         password: hash,
-        role: role
-      }
-    }
-    console.log(newData)
+        role: role,
+      },
+    };
+
     const newBusinessOwner = await models.BusinessOwner.create(newData, {
-      include: ['user']
+      include: ['user'],
     });
 
     const mailto = data.user.email;
@@ -64,7 +70,9 @@ class BusinessOwnerService {
 
     const payload = { sub: user.id };
     //sign token and save recoveryToken
-    const token = jwt.sign(payload, config.temporalyJwtSecret, { expiresIn: '30min' });
+    const token = jwt.sign(payload, config.temporalyJwtSecret, {
+      expiresIn: '30min',
+    });
     const link = `https://circular-merchant.aynimar.com/auth-login?token=${token}`;
     await userService.update(user.id, { recoveryToken: token });
 
@@ -72,7 +80,7 @@ class BusinessOwnerService {
     const mailContent = {
       from: config.smtpMail, // sender address
       to: `${mailto}`, // list of receivers
-      subject: "Bienvenido a Aynimar", // Subject line
+      subject: 'Bienvenido a Aynimar', // Subject line
       html: `<p> Bienvenido a Aynimar</p>
       </br>
       <p>te has registrado/inscrito exitosamente con los siguientes datos:</p>
@@ -85,7 +93,7 @@ class BusinessOwnerService {
       <p><strong>Te aconsejamos no guardar y borrar este correo para que un atacante no pueda tener acceso a la aplicación y
       recuerda no guardar tus contraseñas en lugares donde atacantes puedan acceder,
        como por ejemplo el gestor de contraseñas del navegador</strong></p>`, // html body
-    }
+    };
 
     await this.sendMail(mailContent);
 
@@ -95,11 +103,15 @@ class BusinessOwnerService {
 
   async find() {
     const bota = await models.BusinessOwner.findAll({
-      include: ['user']
+      include: ['user'],
     });
 
     const businessOwners = bota.map((businessOwner) => {
-      businessOwner.dataValues.user = Object.fromEntries(Object.entries(businessOwner.dataValues.user.dataValues).filter(([key]) => key !== 'password'));
+      businessOwner.dataValues.user = Object.fromEntries(
+        Object.entries(businessOwner.dataValues.user.dataValues).filter(
+          ([key]) => key !== 'password'
+        )
+      );
 
       return businessOwner;
     });
@@ -110,18 +122,37 @@ class BusinessOwnerService {
   //Other services to costumers
   async sendMail(infoMail) {
     const transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
+      host: 'smtp.gmail.com',
       secure: true, // true for 465, false for other ports
       port: 465,
       auth: {
         user: config.smtpMail,
-        pass: config.smtpMailKey
-      }
+        pass: config.smtpMailKey,
+      },
     });
     await transporter.sendMail(infoMail);
     return { message: `mail sent to ${infoMail.to}` };
   }
 
+  async createByUser(data) {
+    const user = await models.User.findByPk(data.userId);
+
+    if (!user) {
+      throw boom.notFound('User not found');
+    }
+
+    await user.update({ role: 'business_owner' });
+
+    await models.BusinessOwner.create(data, {
+      include: ['user'],
+    });
+
+    const token = authService.signToken(user);
+
+    return {
+      token: token.token,
+    };
+  }
 }
 
 module.exports = BusinessOwnerService;

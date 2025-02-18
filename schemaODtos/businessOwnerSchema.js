@@ -24,6 +24,13 @@ const createBusinessOwnerSchema = Joi.object({
   })
 });
 
+const createBusinessOwnerUserIdSchema = Joi.object({
+  name: name.required(),
+  lastName: lastName.required(),
+  identityNumber: identityNumber.required(),
+  userId: userId.required()
+});
+
 const updateBusinessOwnerSchema = Joi.object({
   name,
   lastName,
@@ -31,4 +38,4 @@ const updateBusinessOwnerSchema = Joi.object({
   userId
 });
 
-module.exports = { getBusinessOwnerSchema, createBusinessOwnerSchema, updateBusinessOwnerSchema };
+module.exports = { getBusinessOwnerSchema, createBusinessOwnerSchema, updateBusinessOwnerSchema, createBusinessOwnerUserIdSchema };

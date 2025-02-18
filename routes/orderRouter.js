@@ -43,7 +43,7 @@ router.get(
 router.get(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getOrderSchema, 'params'),
   async (req, res, next) => {
     try {
@@ -98,7 +98,7 @@ router.get(
 router.get(
   '/user/state',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getOrderByState, 'query'),
   async (req, res, next) => {
     try {
@@ -116,7 +116,7 @@ router.get(
 router.get(
   '/user/order',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getOrderByUserIdAndOrderId, 'body'),
   async (req, res, next) => {
     try {
@@ -137,7 +137,7 @@ router.get(
 router.get(
   '/userId/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getOrderSchema, 'params'),
   async (req, res, next) => {
     try {
@@ -175,7 +175,7 @@ router.get(
 router.post(
   '/',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(createOrderSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -252,7 +252,7 @@ router.get(
 router.post(
   '/add-item',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(addItemSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -268,7 +268,7 @@ router.post(
 router.patch(
   '/add-item/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getItemSchema, 'params'),
   validatorHandler(updateItemSchema, 'body'),
   async (req, res, next) => {
@@ -286,7 +286,7 @@ router.patch(
 router.delete(
   '/add-item/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getItemSchema, 'params'),
   async (req, res, next) => {
     try {

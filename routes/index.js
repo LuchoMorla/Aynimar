@@ -43,7 +43,6 @@ function routerApi(app) {
     routerV1.use('/wallets', walletRouter);
     routerV1.use('/mail', mailRouter);
     routerV1.use('/debits', debitRouter);
-    routerV1.use('/debits', debitRouter);
     routerV1.use('/business', businessRouter);
     routerV1.use('/business-owner', businessOwnerRouter);
     routerV1.use('/offers', offersRouter);

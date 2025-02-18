@@ -31,12 +31,11 @@ router.get(
 router.get(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getWalletSchema, 'params'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const body = req.body;
       const wallet = await service.findOne(id);
       res.json(wallet);
     } catch (error) {

@@ -22,7 +22,7 @@ const recyclerService = new RecyclerService();
 
 router.get('/my-customer-data',
   passport.authenticate('jwt', {session: false}),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   async (req, res, next) => {
     try {
       const user = req.user;
@@ -36,7 +36,7 @@ router.get('/my-customer-data',
 
 router.post('/my-customer-data',
   passport.authenticate('jwt', {session: false}),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   async (req, res, next) => {
     try {
       const user = req.user;
@@ -51,7 +51,7 @@ router.post('/my-customer-data',
 
 router.get('/my-recycler-data',
   passport.authenticate('jwt', {session: false}),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   async (req, res, next) => {
     try {
       const user = req.user;
@@ -65,7 +65,7 @@ router.get('/my-recycler-data',
 
 router.post('/my-recycler-data',
   passport.authenticate('jwt', {session: false}),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   async (req, res, next) => {
     try {
       const user = req.user;
@@ -80,7 +80,7 @@ router.post('/my-recycler-data',
 
 router.get('/my-orders',
   passport.authenticate('jwt', {session: false}),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
 /*   validatorHandler(getOrderSchema, 'params'), */
   async (req, res, next) => {
     try {
@@ -95,7 +95,7 @@ router.get('/my-orders',
 
 router.get('/my-credits',
   passport.authenticate('jwt', {session: false}),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
 /*   validatorHandler(getWalletSchema, 'params'), */
   async (req, res, next) => {
     try {
@@ -110,7 +110,7 @@ router.get('/my-credits',
 
 router.get('/mis-reciclajes',
   passport.authenticate('jwt', {session: false}),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
 /*   validatorHandler(getPaymentSchema, 'params'), */
   async (req, res, next) => {
     try {

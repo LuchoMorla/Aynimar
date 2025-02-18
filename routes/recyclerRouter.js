@@ -30,7 +30,7 @@ router.get(
 router.get(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validationHandler(getRecyclerSchema, 'params'),
   async (req, res, next) => {
     try {
@@ -59,7 +59,7 @@ router.post(
 router.patch(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validationHandler(getRecyclerSchema, 'params'),
   validationHandler(updateRecyclerSchema, 'body'),
   async (req, res, next) => {
@@ -77,7 +77,7 @@ router.patch(
 router.delete(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer'),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validationHandler(getRecyclerSchema, 'params'),
   async (req, res, next) => {
     try {

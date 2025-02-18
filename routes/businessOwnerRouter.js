@@ -4,12 +4,18 @@ const passport = require('passport');
 const { checkRoles } = require('../middlewares/authHandler');
 const BusinessOwnerService = require('../Services/businessOwnerService');
 const validatorHandler = require('../middlewares/validatorHandler');
-const { createBusinessOwnerSchema, updateBusinessOwnerSchema, getBusinessOwnerSchema } = require('../schemaODtos/businessOwnerSchema');
+const {
+  createBusinessOwnerSchema,
+  updateBusinessOwnerSchema,
+  getBusinessOwnerSchema,
+  createBusinessOwnerUserIdSchema,
+} = require('../schemaODtos/businessOwnerSchema');
 
 const router = express.Router();
 const service = new BusinessOwnerService();
 
-router.get('/',
+router.get(
+  '/',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin'),
   async (req, res, next) => {
@@ -18,7 +24,8 @@ router.get('/',
     } catch (error) {
       next(error);
     }
-  });
+  }
+);
 
 router.get(
   '/:id',
@@ -59,6 +66,19 @@ router.post(
     try {
       const body = req.body;
       res.status(201).json(await service.create(body));
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  '/by-user',
+  validatorHandler(createBusinessOwnerUserIdSchema, 'body'),
+  async (req, res, next) => {
+    try {
+      const body = req.body;
+      res.status(201).json(await service.createByUser(body));
     } catch (error) {
       next(error);
     }
