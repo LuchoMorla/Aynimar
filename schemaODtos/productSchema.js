@@ -1,11 +1,7 @@
 const Joi = require('joi');
 
-/*  ya no lo necesitamos, ahora que nos vamos a conectar a la base de datos y tenemos id id con la regla de autoincremental... ya podemos ignorar el uuid y utilizarlo como un
-integer
-const id = Joi.string().uuid(); */
 const id = Joi.number().integer();
 const name = Joi.string().min(3).max(50);
-// const name = Joi.string().alphanum().min(3).max(15);
 const price = Joi.number().min(0);
 const description = Joi.string().min(10);
 const image = Joi.string().uri();
@@ -15,52 +11,65 @@ const isDeleted = Joi.boolean();
 const stock = Joi.number().integer().allow(null);
 const showShop = Joi.boolean();
 
-//recibiremos un limit y un offset
 const limit = Joi.number().integer();
 const offset = Joi.number().integer();
-
-// filtrando por rango de precios
 const price_min = Joi.number().integer();
 const price_max = Joi.number().integer();
 
 const createProductSchema = Joi.object({
-    name: name.required(),
-    price: price.required(),
-    description: description.required(),
-    image: image.required(),
-    categoryId: categoryId.required(),
-    businessId: businnesId,
-    isDeleted: isDeleted,
-    stock: stock,
-    showShop: showShop,
+  name: name.required(),
+  price: price.required(),
+  description: description.required(),
+  image: image.required(),
+  categoryId: categoryId.required(),
+  businessId: businnesId,
+  isDeleted,
+  stock,
+  showShop,
 });
 
 const updateProductSchema = Joi.object({
-    name: name,
-    price: price,
-    image: image,
-    description: description,
-    categoryId: categoryId,
-    businessId: businnesId,
-    isDeleted: isDeleted,
-    stock: stock,
-    showShop: showShop,
+  name,
+  price,
+  image,
+  description,
+  categoryId,
+  businessId: businnesId,
+  isDeleted,
+  stock,
+  showShop,
 });
 
 const getProductSchema = Joi.object({
-    id: id.required(),
+  id: id.required(),
 });
 
 const queryProductSchema = Joi.object({
-    limit,
-    offset,
-    price,
-    price_min,
-    price_max: price_max.when('price_min', {
-        is: Joi.number().integer(),
-        then: Joi.required(),
-    }),
-    show_shop: showShop,
+  limit,
+  offset,
+  price,
+  price_min,
+  price_max,
+  show_shop: showShop,
+}).custom((value, helpers) => {
+  const { price_min, price_max } = value;
+
+  if ((price_min !== undefined && price_max === undefined) ||
+      (price_max !== undefined && price_min === undefined)) {
+    return helpers.message('Si usas price_min o price_max, debes enviar ambos');
+  }
+
+  if (price_min !== undefined && price_max !== undefined && price_min > price_max) {
+    return helpers.message('price_min no puede ser mayor que price_max');
+  }
+
+  return value;
 });
 
-module.exports = { createProductSchema, updateProductSchema, getProductSchema, queryProductSchema }
+module.exports = {
+  createProductSchema,
+  updateProductSchema,
+  getProductSchema,
+  queryProductSchema
+};
+

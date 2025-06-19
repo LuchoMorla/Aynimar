@@ -29,16 +29,20 @@ class OrderService {
           association: 'customer',
           include: ['user'],
         },
-        'items',
+        {
+          association: 'items',
+          through: { attributes: ['amount'] }, // 
+        },
       ],
     });
 
-    for (var i = 0; i < orders.length; i++) {
-      delete orders[i].dataValues.customer.dataValues.user.dataValues.password;
+    for (const order of orders) {
+      delete order.dataValues.customer.dataValues.user.dataValues.password;
     }
 
     return orders;
   }
+
 
   async find() {
     const orders = await models.Order.findAll({
@@ -47,16 +51,20 @@ class OrderService {
           association: 'customer',
           include: ['user'],
         },
-        'items',
+        {
+          association: 'items',
+          through: { attributes: ['amount'] }, // 
+        },
       ],
     });
 
-    for (var i = 0; i < orders.length; i++) {
-      delete orders[i].dataValues.customer.dataValues.user.dataValues.password;
+    for (const order of orders) {
+      delete order.dataValues.customer.dataValues.user.dataValues.password;
     }
 
     return orders;
   }
+
 
   async verifyProductIsInOrderActive(productId, businnesId) {
     const orders = await this.findOrdersByBusinessId(businnesId);
@@ -69,24 +77,24 @@ class OrderService {
     );
   }
 
-  async findOne(id) {
-    const order = await models.Order.findByPk(id, {
-      include: [
-        {
-          association: 'customer',
-          include: ['user'],
-        },
-        'items',
-      ],
-    });
-    delete order.dataValues.customer.dataValues.user.dataValues.password;
-    /*     const nueva = order.forEach((item) => {
-          item.dataValues.items.forEach((itemsitos) => itemsitos.price / 100);
-        });
-        console.log(nueva);
-     */
-    return order;
-  }
+async findOne(id) {
+  const order = await models.Order.findByPk(id, {
+    include: [
+      {
+        association: 'customer',
+        include: ['user'],
+      },
+      {
+        association: 'items',
+        through: { attributes: ['amount'] }, //
+      },
+    ],
+  });
+
+  delete order.dataValues.customer.dataValues.user.dataValues.password;
+  return order;
+}
+  
   //super llamado por user id filtrando estado de orden
   async findOrderByUserIdAndState(userId, state) {
     const orders = await this.findByUser(userId);
@@ -133,7 +141,7 @@ class OrderService {
               attributes: {
                 exclude: ['password', 'recoveryToken'],
               },
-            },
+            },  
           ],
         },
         {
@@ -141,7 +149,8 @@ class OrderService {
           where: {
             businessId,
           },
-        },
+          through: { attributes: ['amount'] }, //
+        }
       ],
     });
 
