@@ -29,6 +29,18 @@ const createOrderSchema = Joi.object({
   customerId: customerId,
 });
 
+// --- ESQUEMA para asociar la orden ---
+const associateOrderSchema = Joi.object({
+  orderId: orderId.required(),
+});
+
+// --- ESQUEMA para agregar item como invitado ---
+const addItemGuestSchema = Joi.object({
+  orderId: orderId.required(),
+  productId: productId.required(),
+  amount: amount.required(),
+});
+
 const updateOrderSchema = Joi.object({
   customerId: customerId,
   state: state,
@@ -61,6 +73,8 @@ module.exports = {
   getOrderByUserIdAndOrderId,
   getOrderByState,
   createOrderSchema,
+  associateOrderSchema,
+  addItemGuestSchema,
   updateOrderSchema,
   addItemSchema,
   updateItemSchema,

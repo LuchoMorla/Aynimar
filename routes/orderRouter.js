@@ -12,6 +12,8 @@ const {
   getOrderSchema,
   getOrderByUserIdAndOrderId,
   createOrderSchema,
+  addItemGuestSchema,     // <-- Importar
+  associateOrderSchema,   // <-- Importar
   getOrderByState,
   updateOrderSchema,
   updateItemSchema,
@@ -25,6 +27,89 @@ const router = express.Router();
 const service = new OrderService();
 const customerService = new CustomerService();
 const recyclerService = new RecyclerService();
+
+// --- NUEVAS RUTAS PÚBLICAS (colócalas antes de las rutas protegidas) ---
+
+// Ruta para que un invitado cree su carrito inicial
+router.post(
+  '/guest-order',
+  async (req, res, next) => {
+    try {
+      const newOrder = await service.createGuestOrder();
+      res.status(201).json(newOrder);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Ruta para que un invitado agregue productos a su carrito
+router.post(
+  '/add-item-guest',
+  validatorHandler(addItemGuestSchema, 'body'), // Usamos el nuevo schema
+  async (req, res, next) => {
+    try {
+      const body = req.body;
+      const newItem = await service.addItemToGuestOrder(body);
+      res.status(201).json(newItem);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// --- FIN DE RUTAS PÚBLICAS ---
+
+// --- NUEVA RUTA PROTEGIDA (puede ir con las otras rutas PATCH o POST protegidas) ---
+
+// Ruta para asociar la orden de invitado con el usuario que acaba de loguearse/registrarse
+router.patch(
+  '/associate-order',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'), // Todos los roles pueden reclamar su carrito
+  validatorHandler(associateOrderSchema, 'body'),
+  async (req, res, next) => {
+    try {
+      const { sub: userId } = req.user;
+      const { orderId } = req.body;
+      const updatedOrder = await service.associateOrderToCustomer(orderId, userId);
+      res.json(updatedOrder);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// --- AÑADIR ESTA NUEVA RUTA PÚBLICA (junto a las otras de invitado) ---
+router.get(
+  '/guest-order/:id',
+  validatorHandler(getOrderSchema, 'params'), // Reutilizamos el schema que solo valida el ID
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const order = await service.findGuestOrderById(id);
+      res.json(order);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// --- NUEVA RUTA PÚBLICA (La que añadimos) ---
+router.delete(
+  '/item-guest/:id', // Usamos una nueva URL para no chocar con la protegida
+  validatorHandler(getItemSchema, 'params'), // Reutilizamos el mismo validador
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      // ¡Aquí está la magia! Llamamos al mismo método de servicio.
+      const deleteItem = await service.deleteItem(id); 
+      res.status(200).json(deleteItem);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 router.get(
   '/',

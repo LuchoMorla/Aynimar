@@ -21,6 +21,62 @@ class OrderService {
     const newOrder = await models.Order.create({ customerId: customer.id });
     return newOrder;
   }
+
+   // 1. MÉTODO PARA CREAR ORDEN DE INVITADO (nuevo)
+  async createGuestOrder() {
+    const newGuestOrder = await models.Order.create({});
+    return newGuestOrder;
+  }
+
+  // 2. MÉTODO PARA AÑADIR ITEM A ORDEN DE INVITADO (nuevo y muy importante)
+  async addItemToGuestOrder(data) {
+    const order = await models.Order.findByPk(data.orderId);
+    if (!order) {
+      throw boom.notFound('Order not found');
+    }
+    // ¡Medida de seguridad! Solo se pueden agregar items a órdenes que NO tienen cliente.
+    if (order.customerId) {
+      throw boom.forbidden('This order is already associated with a customer. Use the standard endpoint.');
+    }
+    const newItem = await models.OrderProduct.create(data);
+    return newItem;
+  }
+  
+  // 3. MÉTODO PARA ASOCIAR ORDEN A CLIENTE (nuevo)
+  async associateOrderToCustomer(guestOrderId, userId) {
+    const customer = await models.Customer.findOne({ where: { userId } });
+    if (!customer) throw boom.notFound('Customer for this user not found');
+
+    const order = await this.findOne(guestOrderId);
+    if (!order) throw boom.notFound('Guest order not found');
+
+    if (order.customerId) {
+      // Opcional: Podrías fusionar carritos aquí en el futuro.
+      console.log(`Order ${guestOrderId} already belongs to customer ${order.customerId}. No action taken.`);
+      return order;
+    }
+
+    return order.update({ customerId: customer.id });
+  }
+
+   // --- 4.- ESTE NUEVO MÉTODO PARA CARRITO ---
+  async findGuestOrderById(orderId) {
+    const order = await models.Order.findByPk(orderId, {
+      include: ['items'], // Solo necesitamos los items
+    });
+
+    if (!order) {
+      throw boom.notFound('Order not found');
+    }
+
+    // Medida de seguridad: Si la orden ya tiene un cliente, no la devolvemos por esta vía.
+    if (order.customerId) {
+      throw boom.forbidden('This is not a guest order.');
+    }
+
+    return order;
+  }
+
   async findByUser(userId) {
     const orders = await models.Order.findAll({
       where: {
@@ -80,14 +136,15 @@ class OrderService {
         'items',
       ],
     });
-    delete order.dataValues.customer.dataValues.user.dataValues.password;
-    /*     const nueva = order.forEach((item) => {
-          item.dataValues.items.forEach((itemsitos) => itemsitos.price / 100);
-        });
-        console.log(nueva);
-     */
+    // --- ¡AÑADIR ESTA VALIDACIÓN! ---
+    // Si la orden existe y tiene un cliente asociado (y ese cliente tiene un usuario)
+    if (order && order.customer && order.customer.user) {
+      delete order.customer.user.dataValues.password;
+    }
+    // La función ahora devuelve la orden sin fallar, incluso si es de un invitado.
     return order;
   }
+
   //super llamado por user id filtrando estado de orden
   async findOrderByUserIdAndState(userId, state) {
     const orders = await this.findByUser(userId);
@@ -243,8 +300,11 @@ class OrderService {
       for (const ownerEmail in ownersData) {
         const owner = ownersData[ownerEmail];
         const businessesHtml = Object.values(owner.businesses).map(business => {
+          // const productListHtml = business.products
+          //   .map(p => `<li>${p.amount} x ${p.name} - (Precio unitario: $${p.price / 100})</li>`)
+          //   .join('');
           const productListHtml = business.products
-            .map(p => `<li>${p.amount} x ${p.name} - (Precio unitario: $${p.price / 100})</li>`)
+            .map(p => `<li>${p.amount} x ${p.name} - (Precio unitario: $${p.price.toFixed(2)})</li>`)
             .join('');
 
           return `
