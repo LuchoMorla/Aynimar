@@ -53,6 +53,17 @@ const OrderSchema = {
     field: 'created_at',
     defaultValue: Sequelize.NOW,
   },
+  paymentMethod: {
+    field: 'payment_method',
+    allowNull: true,
+    type: DataTypes.STRING,
+  },
+  createdAt: {
+    allowNull: false,
+    type: DataTypes.DATE,
+    field: 'created_at',
+    defaultValue: Sequelize.NOW,
+  },
   total: {
     type: DataTypes.VIRTUAL,
     get() {
