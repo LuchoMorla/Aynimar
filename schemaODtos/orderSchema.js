@@ -7,6 +7,9 @@ const productId = Joi.number().integer();
 const amount = Joi.number().integer().min(1);
 const state = Joi.string();
 const stateOrder = Joi.string();
+// AGREGAR ESTAS LÍNEAS - Definir las nuevas variables
+// const state_order = Joi.string();
+const paymentMethod = Joi.string();
 
 const getOrderSchema = Joi.object({
   id: id.required(),
@@ -41,11 +44,14 @@ const addItemGuestSchema = Joi.object({
   amount: amount.required(),
 });
 
+// ACTUALIZAR ESTE SCHEMA - cambiar stateOrder por state_order y agregar payment_method
 const updateOrderSchema = Joi.object({
   customerId: customerId,
   state: state,
-  stateOrder: stateOrder,
+  stateOrder: stateOrder,        // Cambiar de stateOrder a state_order
+  paymentMethod: paymentMethod,  // Agregar este campo nuevo
 });
+
 //ITEMS
 const addItemSchema = Joi.object({
   orderId: orderId.required(),

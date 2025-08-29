@@ -91,7 +91,17 @@ class CustomerService {
     await this.sendMail(mailContent);
 
     delete newCustomer.dataValues.user.dataValues.password;
-    return newCustomer;
+    // --- INICIO DE LA MODIFICACIÓN ---
+    // Usamos el AuthService existente para generar el token y la estructura de respuesta.
+    // La función signToken ya nos devuelve un objeto { user, token }.
+    const authResponse = authService.signToken(user);
+    
+    // Devolvemos una estructura que contiene los datos del cliente y la respuesta de autenticación.
+    return { 
+      customer: newCustomer,
+      auth: authResponse // Esto contendrá { user: ..., token: ... }
+    };
+    // --- FIN DE LA MODIFICACIÓN ---
   }
 
   async createCustomerByRecycler(data) {
