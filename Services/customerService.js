@@ -88,7 +88,14 @@ class CustomerService {
        como por ejemplo el gestor de contraseñas del navegador</strong></p>`, // html body
     }
 
+    // await this.sendMail(mailContent);
+    try {
     await this.sendMail(mailContent);
+    console.log('Welcome email sent successfully');
+  } catch (emailError) {
+    console.error('Failed to send welcome email:', emailError);
+    // No lanzar el error, solo loggearlo
+  }
 
     delete newCustomer.dataValues.user.dataValues.password;
     // --- INICIO DE LA MODIFICACIÓN ---
@@ -128,19 +135,36 @@ class CustomerService {
   }
 
   //Other services to costumers
+  // async sendMail(infoMail) {
+  //   const transporter = nodemailer.createTransport({
+  //     host: "smtp.gmail.com",
+  //     secure: true, // true for 465, false for other ports
+  //     port: 465,
+  //     auth: {
+  //       user: config.smtpMail,
+  //       pass: config.smtpMailKey
+  //     }
+  //   });
+  //   await transporter.sendMail(infoMail);
+  //   return { message: `mail sent to ${infoMail.to}` };
+  // }
   async sendMail(infoMail) {
-    const transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      secure: true, // true for 465, false for other ports
-      port: 465,
-      auth: {
-        user: config.smtpMail,
-        pass: config.smtpMailKey
-      }
-    });
-    await transporter.sendMail(infoMail);
-    return { message: `mail sent to ${infoMail.to}` };
-  }
+  const transporter = nodemailer.createTransporter({
+    host: "smtp.gmail.com",
+    port: 587, // Cambiar de 465 a 587
+    secure: false, // false para 587, true para 465
+    auth: {
+      user: config.smtpMail,
+      pass: config.smtpMailKey
+    },
+    tls: {
+      rejectUnauthorized: false // Para evitar problemas de certificados
+    }
+  });
+  
+  await transporter.sendMail(infoMail);
+  return { message: `mail sent to ${infoMail.to}` };
+}
 
 }
 
