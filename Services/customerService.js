@@ -2,13 +2,14 @@ const boom = require('@hapi/boom');
 const bcrypt = require('bcrypt');
 const { models } = require('../libs/sequelize');
 const { config } = require('./../config/config');
-
+const https = require('https');
 const jwt = require('jsonwebtoken');
 
 const AuthService = require('./authService');
 const UserService = require('./userServices');
 const authService = new AuthService();
 const userService = new UserService();
+
 
 // const nodemailer = require('nodemailer');
 
