@@ -90,12 +90,12 @@ class CustomerService {
 
     // await this.sendMail(mailContent);
     try {
-    await this.sendMail(mailContent);
-    console.log('Welcome email sent successfully');
-  } catch (emailError) {
-    console.error('Failed to send welcome email:', emailError);
-    // No lanzar el error, solo loggearlo
-  }
+      await this.sendMail(mailContent);
+      console.log('Welcome email sent successfully via Brevo');
+    } catch (emailError) {
+      console.error('Failed to send welcome email:', emailError);
+      // No lanzar el error para que no rompa la creación del usuario
+    }
 
     delete newCustomer.dataValues.user.dataValues.password;
     // --- INICIO DE LA MODIFICACIÓN ---
@@ -150,15 +150,12 @@ class CustomerService {
   // }
   async sendMail(infoMail) {
   const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 587, // Cambiar de 465 a 587
-    secure: false, // false para 587, true para 465
+    host: "smtp-relay.brevo.com",  // Cambiar a Brevo
+    port: 587,
+    secure: false,
     auth: {
-      user: config.smtpMail,
-      pass: config.smtpMailKey
-    },
-    tls: {
-      rejectUnauthorized: false // Para evitar problemas de certificados
+      user: config.smtpMail,      // Tu email
+      pass: config.smtpMailKey    // La clave SMTP de Brevo
     }
   });
   
