@@ -10,7 +10,7 @@ const UserService = require('./userServices');
 const authService = new AuthService();
 const userService = new UserService();
 
-const nodemailer = require('nodemailer');
+// const nodemailer = require('nodemailer');
 
 class CustomerService {
 
@@ -148,8 +148,9 @@ class CustomerService {
   //   await transporter.sendMail(infoMail);
   //   return { message: `mail sent to ${infoMail.to}` };
   // }
-   async sendMail(infoMail) {
-    // const apiKey = config.brevoApiKey;
+
+   // Método sendMail usando módulo https nativo
+  async sendMail(infoMail) {
     const apiKey = config.smtpMailKey;
     
     const emailData = {
@@ -164,31 +165,51 @@ class CustomerService {
       htmlContent: infoMail.html
     };
 
-    try {
-      const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    return new Promise((resolve, reject) => {
+      const postData = JSON.stringify(emailData);
+      
+      const options = {
+        hostname: 'api.brevo.com',
+        port: 443,
+        path: '/v3/smtp/email',
         method: 'POST',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
-          'api-key': apiKey
-        },
-        body: JSON.stringify(emailData)
+          'api-key': apiKey,
+          'Content-Length': Buffer.byteLength(postData)
+        }
+      };
+
+      const req = https.request(options, (res) => {
+        let data = '';
+        
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            console.log('Email sent via Brevo API:', JSON.parse(data));
+            resolve({ message: `mail sent to ${infoMail.to}` });
+          } else {
+            console.error('Brevo API error:', res.statusCode, data);
+            reject(new Error(`Brevo API error: ${res.statusCode} - ${data}`));
+          }
+        });
       });
 
-      if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Brevo API error: ${response.status} - ${errorData}`);
-      }
+      req.on('error', (error) => {
+        console.error('Error sending email via Brevo API:', error);
+        reject(error);
+      });
 
-      const result = await response.json();
-      console.log('Email sent via Brevo API:', result);
-      return { message: `mail sent to ${infoMail.to}` };
-      
-    } catch (error) {
-      console.error('Error sending email via Brevo API:', error);
-      throw error;
-    }
+      req.write(postData);
+      req.end();
+    });
   }
+  
+   
 
 }
 
