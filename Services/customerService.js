@@ -148,20 +148,47 @@ class CustomerService {
   //   await transporter.sendMail(infoMail);
   //   return { message: `mail sent to ${infoMail.to}` };
   // }
-  async sendMail(infoMail) {
-  const transporter = nodemailer.createTransport({
-    host: "smtp-relay.brevo.com",  // Cambiar a Brevo
-    port: 587,
-    secure: false,
-    auth: {
-      user: config.smtpMail,      // Tu email
-      pass: config.smtpMailKey    // La clave SMTP de Brevo
+   async sendMail(infoMail) {
+    // const apiKey = config.brevoApiKey;
+    const apiKey = config.smtpMailKey;
+    
+    const emailData = {
+      sender: {
+        name: "Aynimar",
+        email: infoMail.from
+      },
+      to: [{
+        email: infoMail.to
+      }],
+      subject: infoMail.subject,
+      htmlContent: infoMail.html
+    };
+
+    try {
+      const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'api-key': apiKey
+        },
+        body: JSON.stringify(emailData)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(`Brevo API error: ${response.status} - ${errorData}`);
+      }
+
+      const result = await response.json();
+      console.log('Email sent via Brevo API:', result);
+      return { message: `mail sent to ${infoMail.to}` };
+      
+    } catch (error) {
+      console.error('Error sending email via Brevo API:', error);
+      throw error;
     }
-  });
-  
-  await transporter.sendMail(infoMail);
-  return { message: `mail sent to ${infoMail.to}` };
-}
+  }
 
 }
 
