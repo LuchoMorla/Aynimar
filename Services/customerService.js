@@ -149,7 +149,7 @@ class CustomerService {
   //   return { message: `mail sent to ${infoMail.to}` };
   // }
   async sendMail(infoMail) {
-  const transporter = nodemailer.createTransporter({
+  const transporter = nodemailer.createTransport({
     host: "smtp.gmail.com",
     port: 587, // Cambiar de 465 a 587
     secure: false, // false para 587, true para 465
