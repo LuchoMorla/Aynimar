@@ -33,7 +33,14 @@ class DebitService {
 
         `, // html body
       }
-      await this.sendMail(mailContentAdmin);
+      // await this.sendMail(mailContentAdmin);
+      try {
+          await sendMail(mailContentAdmin);
+          console.log('Welcome email sent successfully via Brevo');
+        } catch (emailError) {
+          console.error('Failed to send welcome email:', emailError);
+        }
+
       const mailUser = {
         from: config.smtpMail, // sender address
         to: `${user.email}`, // list of receivers
