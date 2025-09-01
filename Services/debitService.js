@@ -2,7 +2,8 @@ const boom = require('@hapi/boom');
 const { config } = require('./../config/config');
 const { models } = require('../libs/sequelize');
 
-const nodemailer = require('nodemailer');
+// const nodemailer = require('nodemailer');
+const sendMail = require('./../utils/sendMail')
 
 class DebitService {
 
@@ -56,7 +57,13 @@ class DebitService {
         <p>Recuerda que tambien puedes pedir devolucion a nuestro equipo antes de que la entrega sea realizada y crear una disputa en caso de que quieras devolver tú producto, comunicate con nosotros en https://www.aynimar.com/contact</p>
         `, // html body
       }
-      await this.sendMail(mailUser);
+      // await this.sendMail(mailUser);
+      try {
+          await sendMail(mailUser);
+          console.log('Welcome email sent successfully via Brevo');
+        } catch (emailError) {
+          console.error('Failed to send welcome email:', emailError);
+        }
 
       return newDebit;
     /* } else {
@@ -97,20 +104,6 @@ class DebitService {
   }
 
   
-    //Other services to debit cards and receibe payments
-    async sendMail(infoMail) {
-      const transporter = nodemailer.createTransport({
-        host: "smtp.gmail.com",
-        secure: true, // true for 465, false for other ports
-        port: 465,
-        auth: {
-          user: config.smtpMail,
-          pass: config.smtpMailKey
-        }
-      });
-      await transporter.sendMail(infoMail);
-      return { message:  `mail sent to ${infoMail.to}` };
-    }
 
 }
 

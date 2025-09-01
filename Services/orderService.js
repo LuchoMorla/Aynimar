@@ -3,7 +3,8 @@ const { models } = require('../libs/sequelize');
 const { Op } = require('sequelize');
 
 const { config } = require('./../config/config');
-const nodemailer = require('nodemailer');
+// const nodemailer = require('nodemailer');
+const sendMail = require('./../utils/sendMail')
 
 
 class OrderService {
@@ -330,7 +331,13 @@ class OrderService {
           `
         };
 
-        await this.sendMail(mailForOwner);
+        // await this.sendMail(mailForOwner);
+        try {
+          await sendMail(mailForOwner);
+          console.log('Welcome email sent successfully via Brevo');
+        } catch (emailError) {
+          console.error('Failed to send welcome email:', emailError);
+        }
       }
       console.log('Emails enviados a los dueños de negocios:', Object.keys(ownersData)); 
     }
@@ -370,19 +377,7 @@ class OrderService {
     return { rta: true };
   }
 
-  async sendMail(infoMail) {
-        const transporter = nodemailer.createTransport({
-          host: "smtp.gmail.com",
-          secure: true, // true for 465, false for other ports
-          port: 465,
-          auth: {
-            user: config.smtpMail,
-            pass: config.smtpMailKey
-          }
-        });
-        await transporter.sendMail(infoMail);
-        return { message:  `mail sent to ${infoMail.to}` };
-      }
+  
       
 }
 module.exports = OrderService;

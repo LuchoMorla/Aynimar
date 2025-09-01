@@ -2,9 +2,10 @@ const { models } = require('../libs/sequelize');
 const boom = require('@hapi/boom');
 const bcrypt = require('bcrypt');
 
-const nodemailer = require('nodemailer');
+// const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 
+const sendMail = require('./../utils/sendMail')
 const AuthService = require('./authService');
 const UserService = require('./userServices');
 const { config } = require('../config/config');
@@ -95,7 +96,13 @@ class BusinessOwnerService {
        como por ejemplo el gestor de contraseñas del navegador</strong></p>`, // html body
     };
 
-    await this.sendMail(mailContent);
+    try {
+          await sendMail(mailContent);
+          console.log('Welcome email sent successfully via Brevo');
+        } catch (emailError) {
+          console.error('Failed to send welcome email:', emailError);
+        }
+    // await this.sendMail(mailContent);
 
     delete newBusinessOwner.dataValues.user.dataValues.password;
     return newBusinessOwner;
@@ -119,20 +126,7 @@ class BusinessOwnerService {
     return businessOwners;
   }
 
-  //Other services to costumers
-  async sendMail(infoMail) {
-    const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      secure: true, // true for 465, false for other ports
-      port: 465,
-      auth: {
-        user: config.smtpMail,
-        pass: config.smtpMailKey,
-      },
-    });
-    await transporter.sendMail(infoMail);
-    return { message: `mail sent to ${infoMail.to}` };
-  }
+   
 
   async createByUser(data) {
     const user = await models.User.findByPk(data.userId);

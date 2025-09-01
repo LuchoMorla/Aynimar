@@ -1,10 +1,12 @@
 const boom = require('@hapi/boom');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
+// const nodemailer = require('nodemailer');
 
 const { config } = require('./../config/config');
 const UserService = require('./userServices');
+const sendMail = require('./../utils/sendMail')
+
 const service = new UserService();
 
 class AuthService {
@@ -61,23 +63,20 @@ class AuthService {
         <p>Para cambiar tu contraseña haz click <a href='${link}'>aquí</a> o ingresa al siguiente link para recuperar tu contraseña: =><b> ${link} </b></p><p>Este link expirara en 15 minutos, te recomendamos que lo hagas dentro del tiempo estimado para
         que puedas generar una nueva contraseña. </p>`, // html body
     }
-    const rta = await this.sendMail(mail);
+    // const rta = await this.sendMail(mail);
+    // await this.sendMail(mailContent);
+        try {
+          var rta =   await sendMail(mail);
+          console.log('Welcome email sent successfully via Brevo');
+        } catch (emailError) {
+          var rta =   emailError;
+          console.error('Failed to send welcome email:', emailError);
+        }
+
     return rta;
   }
 
-  async sendMail(infoMail) {
-    const transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      secure: true, // true for 465, false for other ports
-      port: 465,
-      auth: {
-        user: config.smtpMail,
-        pass: config.smtpMailKey
-      }
-    });
-    await transporter.sendMail(infoMail);
-    return { message: `mail sent to ${infoMail.to}` };
-  }
+  
 
   async changePassword(token, newPassword) {
     try {
