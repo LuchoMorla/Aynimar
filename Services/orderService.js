@@ -254,7 +254,7 @@ class OrderService {
         }
       // await this.sendMail(mailCustomer);
       try {
-          await sendMail(customerEmail);
+          await sendMail(mailCustomer);
           console.log('Welcome email sent successfully via Brevo');
         } catch (emailError) {
           console.error('Failed to send welcome email:', emailError);
