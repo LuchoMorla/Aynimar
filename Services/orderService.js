@@ -4,7 +4,7 @@ const { Op } = require('sequelize');
 
 const { config } = require('./../config/config');
 // const nodemailer = require('nodemailer');
-const sendMail = require('./../utils/sendMail')
+const sendMail = require('../utils/sendMail')
 
 
 class OrderService {

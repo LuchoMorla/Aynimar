@@ -4,7 +4,7 @@ const { models } = require('../libs/sequelize');
 
 const { config } = require('./../config/config');
 // const https = require('https');
-const sendMail = require('./../utils/sendMail')
+const sendMail = require('../utils/sendMail')
 
 const jwt = require('jsonwebtoken');
 
