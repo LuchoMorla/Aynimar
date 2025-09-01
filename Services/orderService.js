@@ -252,7 +252,13 @@ class OrderService {
           <p>Recuerda que tambien puedes pedir devolucion a nuestro equipo antes de que la entrega sea realizada y crear una disputa en caso de que quieras devolver tú producto, comunicate con nosotros en https://www.aynimar.com/contact</p>
           `,
         }
-      await this.sendMail(mailCustomer);
+      // await this.sendMail(mailCustomer);
+      try {
+          await sendMail(customerEmail);
+          console.log('Welcome email sent successfully via Brevo');
+        } catch (emailError) {
+          console.error('Failed to send welcome email:', emailError);
+        }
       console.log('Email del Cliente:', customerEmail);
 
       const businessIds = [...new Set(order.items.map(item => item.businessId))];
