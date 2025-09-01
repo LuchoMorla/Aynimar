@@ -1,8 +1,11 @@
 const boom = require('@hapi/boom');
 const bcrypt = require('bcrypt');
 const { models } = require('../libs/sequelize');
+
 const { config } = require('./../config/config');
-const https = require('https');
+// const https = require('https');
+const sendMail = require('./../utils/sendMail')
+
 const jwt = require('jsonwebtoken');
 
 const AuthService = require('./authService');
@@ -91,7 +94,7 @@ class CustomerService {
 
     // await this.sendMail(mailContent);
     try {
-      await this.sendMail(mailContent);
+      await sendMail(mailContent);
       console.log('Welcome email sent successfully via Brevo');
     } catch (emailError) {
       console.error('Failed to send welcome email:', emailError);
@@ -133,81 +136,6 @@ class CustomerService {
     const model = await this.findOne(id);
     await model.destroy();
     return { rta: true };
-  }
-
-  //Other services to costumers
-  // async sendMail(infoMail) {
-  //   const transporter = nodemailer.createTransport({
-  //     host: "smtp.gmail.com",
-  //     secure: true, // true for 465, false for other ports
-  //     port: 465,
-  //     auth: {
-  //       user: config.smtpMail,
-  //       pass: config.smtpMailKey
-  //     }
-  //   });
-  //   await transporter.sendMail(infoMail);
-  //   return { message: `mail sent to ${infoMail.to}` };
-  // }
-
-   // Método sendMail usando módulo https nativo
-  async sendMail(infoMail) {
-    const apiKey = config.smtpMailKey;
-    
-    const emailData = {
-      sender: {
-        name: "Aynimar",
-        email: infoMail.from
-      },
-      to: [{
-        email: infoMail.to
-      }],
-      subject: infoMail.subject,
-      htmlContent: infoMail.html
-    };
-
-    return new Promise((resolve, reject) => {
-      const postData = JSON.stringify(emailData);
-      
-      const options = {
-        hostname: 'api.brevo.com',
-        port: 443,
-        path: '/v3/smtp/email',
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-          'api-key': apiKey,
-          'Content-Length': Buffer.byteLength(postData)
-        }
-      };
-
-      const req = https.request(options, (res) => {
-        let data = '';
-        
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
-        
-        res.on('end', () => {
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            console.log('Email sent via Brevo API:', JSON.parse(data));
-            resolve({ message: `mail sent to ${infoMail.to}` });
-          } else {
-            console.error('Brevo API error:', res.statusCode, data);
-            reject(new Error(`Brevo API error: ${res.statusCode} - ${data}`));
-          }
-        });
-      });
-
-      req.on('error', (error) => {
-        console.error('Error sending email via Brevo API:', error);
-        reject(error);
-      });
-
-      req.write(postData);
-      req.end();
-    });
   }
   
    
