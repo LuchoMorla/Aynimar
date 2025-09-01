@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken');
 
 const { config } = require('./../config/config');
 const UserService = require('./userServices');
-const sendMail = require('./../utils/sendMail')
+const sendMail = require('../utils/sendMail')
 
 const service = new UserService();
 
