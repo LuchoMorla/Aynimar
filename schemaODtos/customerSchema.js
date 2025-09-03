@@ -5,13 +5,13 @@ const name = Joi.string();
 const lastName = Joi.string();
 const identityNumber = Joi.string();
 const phone =  Joi.string();
-const phoneTwo = Joi.string();
+const phoneTwo = Joi.string().allow('', null);;
 const countryOfResidence = Joi.string();
 const province = Joi.string();
 const city = Joi.string();
-const postalCode = Joi.string();
+const postalCode = Joi.string().allow('', null);;
 const streetAddress = Joi.string();
-const geolocation = Joi.string();
+const geolocation = Joi.string().allow('', null);;
 const userId = Joi.number().integer();
 const email = Joi.string().email();
 const password =  Joi.string();
@@ -24,13 +24,13 @@ const createCustomerSchema = Joi.object({
   lastName: lastName.required(),
   identityNumber: identityNumber,
   phone: phone,
-  phoneTwo: phoneTwo,
+  phoneTwo: phoneTwo.optional(),
   countryOfResidence: countryOfResidence,
   province: province,
   city: city,
-  postalCode: postalCode,
+  postalCode: postalCode.optional(),
   streetAddress: streetAddress,
-  geolocation: geolocation,
+  geolocation: geolocation.optional(),
   user: Joi.object({
     email: email.required(),
     password: password.required()
