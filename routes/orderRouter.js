@@ -352,8 +352,8 @@ router.post(
 
 router.patch(
   '/add-item/:id',
-  passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  // passport.authenticate('jwt', { session: false }),
+  // checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getItemSchema, 'params'),
   validatorHandler(updateItemSchema, 'body'),
   async (req, res, next) => {
@@ -370,8 +370,8 @@ router.patch(
 
 router.delete(
   '/add-item/:id',
-  passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  // passport.authenticate('jwt', { session: false }),
+  // checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getItemSchema, 'params'),
   async (req, res, next) => {
     try {
