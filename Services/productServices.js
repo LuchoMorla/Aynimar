@@ -44,6 +44,15 @@ class ProductsService {
       };
     }
 
+    // --- NUEVO CÓDIGO PARA FILTRAR POR NOMBRE ---
+    const { name } = query;
+    if (name) {
+      options.where.name = {
+        [Op.iLike]: `%${name}%` // iLike para búsqueda insensible a mayúsculas/minúsculas (en PostgreSQL)
+      };
+    }
+    // ------------------------------------------
+
     const products = await models.Product.findAll(options);
     return products;
   }
