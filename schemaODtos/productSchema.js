@@ -61,6 +61,7 @@ const queryProductSchema = Joi.object({
     then: Joi.required(),
   }),
   show_shop: showShop,
+  name: Joi.string()
 });
 
 module.exports = {
