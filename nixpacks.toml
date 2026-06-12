@@ -3,6 +3,7 @@ nixPkgs = ["nodejs_20"]
 
 [phases.build]
 cmds = ["npm ci --omit=dev"]
+cacheDirectories = []
 
 [start]
 cmd = "node index.js"
