@@ -17,6 +17,7 @@ const { Debit, DebitSchema } = require('./debitModel');
 const { Offer, OfferSchema } = require('./offersModel');
 const { AppSetting, AppSettingSchema } = require('./appSettingModel');
 const { Review, ReviewSchema } = require('./reviewModel');
+const { Coupon, CouponSchema } = require('./couponModel');
 
 
 function setupModels(sequelize) {
@@ -38,6 +39,7 @@ function setupModels(sequelize) {
   Offer.init(OfferSchema, Offer.config(sequelize));
   AppSetting.init(AppSettingSchema, AppSetting.config(sequelize));
   Review.init(ReviewSchema, Review.config(sequelize));
+  Coupon.init(CouponSchema, Coupon.config(sequelize));
 
   User.associate(sequelize.models);
   Customer.associate(sequelize.models);
@@ -55,6 +57,7 @@ function setupModels(sequelize) {
   Debit.associate(sequelize.models);
   PaymentWaste.associate(sequelize.models);
   Review.associate(sequelize.models);
+  Coupon.associate(sequelize.models);
 
 }
 
