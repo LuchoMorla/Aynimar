@@ -92,6 +92,7 @@ function extractVariants(p) {
 // Normalizes Dropi v4 semantic-search product to a uniform shape.
 // Response: { isSuccess, objects: { products: [], total, filters } }
 function normalizeProduct(p) {
+  if (!p || typeof p !== 'object') return null;
   const gallery   = p.gallery ?? p.photos ?? p.images ?? [];
   const mainPhoto = gallery.find?.((g) => g.main) ?? gallery[0] ?? null;
   const rawImg    = mainPhoto?.urlS3 ?? mainPhoto?.url ?? mainPhoto?.src ?? p.image ?? null;
@@ -205,7 +206,7 @@ async function doFetch(page, limit, keyword, categoryId, priceMin, priceMax) {
   }
 
   const { list, total } = extractList(data);
-  const products = list.map(normalizeProduct);
+  const products = list.map(normalizeProduct).filter(Boolean);
   console.log(`[Dropi] catalog — page ${page}, ${products.length}/${total} productos`);
   return { products, total };
 }
@@ -240,7 +241,7 @@ async function doFetchViaWorker(page, limit, keyword, categoryId, priceMin, pric
   }
 
   const { list, total } = extractList(data);
-  const products = list.map(normalizeProduct);
+  const products = list.map(normalizeProduct).filter(Boolean);
   console.log(`[Dropi Worker] catalog — page ${page}, ${products.length}/${total} productos`);
   return { products, total };
 }
@@ -395,7 +396,7 @@ async function searchDropiByImage({ imageBase64, page = 1, limit = 20 }) {
   }
 
   const { list, total } = extractList(data);
-  return { products: list.map(normalizeProduct), total, page };
+  return { products: list.map(normalizeProduct).filter(Boolean), total, page };
 }
 
 module.exports = { fetchDropiCatalog, searchDropiByImage, createOrderInDropi, fetchDropiOrderStatus };
