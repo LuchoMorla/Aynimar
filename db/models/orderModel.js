@@ -70,11 +70,28 @@ const OrderSchema = {
     allowNull: true,
     type: DataTypes.STRING,
   },
-  createdAt: {
-    allowNull: false,
-    type: DataTypes.DATE,
-    field: 'created_at',
-    defaultValue: Sequelize.NOW,
+  // ── Dropi fulfillment tracking ───────────────────────────────────────────────
+  dropiOrderId: {
+    field:     'dropi_order_id',
+    allowNull: true,
+    type:      DataTypes.STRING(100),
+  },
+  // 'DISPATCHED' | 'PENDING_DROPI_FULFILLMENT' | null
+  fulfillmentStatus: {
+    field:     'fulfillment_status',
+    allowNull: true,
+    type:      DataTypes.STRING(50),
+  },
+  fulfillmentError: {
+    field:     'fulfillment_error',
+    allowNull: true,
+    type:      DataTypes.TEXT,
+  },
+  // Dropi delivery status synced from their API
+  deliveryStatus: {
+    field:     'delivery_status',
+    allowNull: true,
+    type:      DataTypes.STRING(100),
   },
   total: {
     type: DataTypes.VIRTUAL,

@@ -272,6 +272,13 @@ async function fetchDropiCatalog({ page = 1, limit = 20, keyword = '', categoryI
 
 /**
  * Creates a fulfillment order in Dropi (uses WooCommerce integration token).
+ *
+ * payload shape:
+ *   referenceId     — Aynimar order reference (e.g. "AYNIMAR-42")
+ *   items           — [{ externalId, quantity, variant?, codAmount? }]
+ *   shippingAddress — { name, phone, email, address, city, province, postalCode }
+ *   codAmount       — optional Cash-on-Delivery total to collect from customer
+ *   warehouse       — optional Dropi warehouse name/id for origin stock
  */
 async function createOrderInDropi(payload) {
   if (!WOO_JWT) {
@@ -282,12 +289,14 @@ async function createOrderInDropi(payload) {
 
   const client = createWooClient();
 
-  const response = await client.post('/orders', {
+  const body = {
     referencia: payload.referenceId,
-    productos:  payload.items.map((item) => ({
-      id_producto: item.externalId,
-      cantidad:    item.quantity,
-    })),
+    productos:  payload.items.map((item) => {
+      const p = { id_producto: item.externalId, cantidad: item.quantity };
+      if (item.variant)   p.variante   = item.variant;
+      if (item.codAmount) p.valor_cobrar = item.codAmount;
+      return p;
+    }),
     cliente: {
       nombre:        payload.shippingAddress.name,
       telefono:      payload.shippingAddress.phone,
@@ -297,10 +306,40 @@ async function createOrderInDropi(payload) {
       provincia:     payload.shippingAddress.province,
       codigo_postal: payload.shippingAddress.postalCode,
     },
-  });
+  };
+
+  // Optional top-level fields
+  if (payload.codAmount) body.valor_a_cobrar = payload.codAmount;
+  if (payload.warehouse) body.bodega         = payload.warehouse;
+
+  const response = await client.post('/orders', body);
 
   const externalOrderId = response.data.id_orden ?? response.data.id ?? null;
   return { externalOrderId };
+}
+
+/**
+ * Fetches the current delivery status of a Dropi order.
+ * Returns the raw status string from Dropi (e.g. 'Generada', 'En transporte', 'Entregado').
+ * Returns null when the order cannot be found or WOO_JWT is not configured.
+ */
+async function fetchDropiOrderStatus(dropiOrderId) {
+  if (!WOO_JWT || !dropiOrderId) return null;
+
+  try {
+    const client = createWooClient();
+    const { data } = await client.get(`/orders/${dropiOrderId}`);
+    return (
+      data.estado        ??
+      data.status        ??
+      data.estado_guia   ??
+      data.delivery_status ??
+      null
+    );
+  } catch (err) {
+    console.warn(`[Dropi] fetchDropiOrderStatus(${dropiOrderId}) failed: ${err.message}`);
+    return null;
+  }
 }
 
 async function searchDropiByImage({ imageBase64, page = 1, limit = 20 }) {
@@ -341,4 +380,4 @@ async function searchDropiByImage({ imageBase64, page = 1, limit = 20 }) {
   return { products: list.map(normalizeProduct), total, page };
 }
 
-module.exports = { fetchDropiCatalog, searchDropiByImage, createOrderInDropi };
+module.exports = { fetchDropiCatalog, searchDropiByImage, createOrderInDropi, fetchDropiOrderStatus };

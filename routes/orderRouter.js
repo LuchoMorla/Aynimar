@@ -353,6 +353,43 @@ router.patch(
   }
 );
 
+// ── POST /orders/:id/retry-fulfillment ───────────────────────────────────────
+// Retries Dropi dispatch for orders stuck in 'error_api_proveedor'.
+// Admin / business_owner only.
+router.post(
+  '/:id/retry-fulfillment',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  validatorHandler(getOrderSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const result = await service.retryFulfillment(id);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ── PATCH /orders/:id/sync-delivery-status ───────────────────────────────────
+// Fetches the latest Dropi delivery status and mirrors it locally.
+router.patch(
+  '/:id/sync-delivery-status',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  validatorHandler(getOrderSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const result = await service.syncDropiDeliveryStatus(id);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.delete(
   '/:id',
   passport.authenticate('jwt', { session: false }),

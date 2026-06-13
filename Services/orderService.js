@@ -3,7 +3,7 @@ const sequelize = require('../libs/sequelize');
 const { models } = sequelize;
 const { Op } = require('sequelize');
 const WalletService = require('./walletService');
-const { createOrderInDropi } = require('../integrations/dropi/dropiAdapter');
+const { createOrderInDropi, fetchDropiOrderStatus } = require('../integrations/dropi/dropiAdapter');
 const { createOrderInEffi }  = require('../integrations/effi/effiAdapter');
 
 const { config } = require('./../config/config');
@@ -236,22 +236,30 @@ class OrderService {
       }
 
       // ── Dropshipping dispatch ────────────────────────────────────────────
-      // Stock is already decremented above — the order is confirmed from our
-      // side. We now fire fulfillment requests to Dropi/Effi for any product
-      // that came from those providers. Failures here must NOT affect the
-      // customer's payment: we catch them, log them, and mark the order with
-      // a recoverable state so an admin can retry manually from the dashboard.
+      // Stock is already decremented — order confirmed on our side.
+      // Fulfillment errors must NOT reverse the customer's payment: we catch
+      // them, log them, and save the error so the merchant can retry from
+      // the dashboard via POST /orders/:id/retry-fulfillment.
       try {
-        await this.dispatchToProviders(order);
+        const dispatchResult = await this.dispatchToProviders(order);
+        // Persist Dropi order ID and mark as dispatched
+        if (dispatchResult?.dropiOrderId) {
+          await order.update({
+            dropiOrderId:      dispatchResult.dropiOrderId,
+            fulfillmentStatus: 'DISPATCHED',
+            fulfillmentError:  null,
+          });
+        }
       } catch (dispatchError) {
         console.error(
           `[OrderService] Provider dispatch failed for order ${id}: ${dispatchError.message}`
         );
-        // Mark the order so the admin dashboard can surface it for retry.
-        // We use a nested try/catch so a DB write failure here doesn't
-        // swallow the original dispatch error from logs.
         try {
-          await order.update({ stateOrder: 'error_api_proveedor' });
+          await order.update({
+            stateOrder:        'error_api_proveedor',
+            fulfillmentStatus: 'PENDING_DROPI_FULFILLMENT',
+            fulfillmentError:  dispatchError.message.slice(0, 1000),
+          });
         } catch (markError) {
           console.error(
             `[OrderService] Could not mark order ${id} as error_api_proveedor: ${markError.message}`
@@ -466,15 +474,18 @@ class OrderService {
     // doesn't silently suppress an Effi success logged after it.
     const errors = [];
 
+    let dropiOrderId = null;
+
     if (byProvider.dropi) {
       try {
-        const { externalOrderId } = await createOrderInDropi({
+        const result = await createOrderInDropi({
           referenceId:     `AYNIMAR-${order.id}`,
           items:           byProvider.dropi,
           shippingAddress,
         });
+        dropiOrderId = result.externalOrderId ?? null;
         console.log(
-          `[Dispatch] Dropi order created for Aynimar #${order.id}: ${externalOrderId}`
+          `[Dispatch] Dropi order created for Aynimar #${order.id}: ${dropiOrderId}`
         );
       } catch (err) {
         errors.push(`dropi: ${err.message}`);
@@ -502,6 +513,81 @@ class OrderService {
     if (errors.length > 0) {
       throw new Error(`Provider dispatch failed — ${errors.join('; ')}`);
     }
+
+    return { dropiOrderId };
+  }
+
+  /**
+   * Retries Dropi fulfillment for an order stuck in 'error_api_proveedor' /
+   * 'PENDING_DROPI_FULFILLMENT'. On success updates dropiOrderId + status;
+   * on failure updates fulfillmentError with the new error message.
+   */
+  async retryFulfillment(id) {
+    const order = await this.findOne(id);
+    if (!order) throw boom.notFound('Order not found');
+
+    if (order.fulfillmentStatus === 'DISPATCHED') {
+      throw boom.conflict(
+        `Order ${id} is already dispatched to Dropi (dropiOrderId: ${order.dropiOrderId})`
+      );
+    }
+
+    try {
+      const dispatchResult = await this.dispatchToProviders(order);
+      if (dispatchResult?.dropiOrderId) {
+        await order.update({
+          dropiOrderId:      dispatchResult.dropiOrderId,
+          fulfillmentStatus: 'DISPATCHED',
+          fulfillmentError:  null,
+          stateOrder:        'en_preparacion',
+        });
+      }
+      return {
+        success:     true,
+        dropiOrderId: dispatchResult?.dropiOrderId ?? null,
+        orderId:     id,
+      };
+    } catch (err) {
+      await order.update({
+        fulfillmentStatus: 'PENDING_DROPI_FULFILLMENT',
+        fulfillmentError:  err.message.slice(0, 1000),
+      });
+      throw boom.badGateway(`Retry failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Fetches the current Dropi delivery status and saves it locally.
+   * Returns { deliveryStatus, dropiOrderId }.
+   */
+  async syncDropiDeliveryStatus(id) {
+    const order = await this.findOne(id);
+    if (!order) throw boom.notFound('Order not found');
+    if (!order.dropiOrderId) {
+      throw boom.badRequest('This order has no Dropi order ID — dispatch it first.');
+    }
+
+    const deliveryStatus = await fetchDropiOrderStatus(order.dropiOrderId);
+
+    if (deliveryStatus) {
+      // Mirror Dropi status into our stateOrder when we can map it
+      const stateMap = {
+        'entregado':    'entregado',
+        'Entregado':    'entregado',
+        'en transito':  'en_transito',
+        'En transito':  'en_transito',
+        'En tránsito':  'en_transito',
+        'enviado':      'enviado',
+        'Enviado':      'enviado',
+      };
+      const mappedState = stateMap[deliveryStatus];
+
+      const update = { deliveryStatus };
+      if (mappedState) update.stateOrder = mappedState;
+      await order.update(update);
+    }
+
+    return { dropiOrderId: order.dropiOrderId, deliveryStatus: deliveryStatus ?? order.deliveryStatus };
   }
 
   /**
