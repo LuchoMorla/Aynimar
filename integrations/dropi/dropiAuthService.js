@@ -23,6 +23,21 @@ async function loginWithCredentials() {
   const email    = process.env.DROPI_USER_EMAIL    || '';
   const password = process.env.DROPI_USER_PASSWORD || '';
   if (!email || !password) throw new Error('[Dropi] DROPI_USER_EMAIL / DROPI_USER_PASSWORD no configurados.');
+
+  // Route through Cloudflare Worker when available — bypasses WAF that blocks Railway IPs.
+  if (process.env.DROPI_WORKER_URL && process.env.DROPI_WORKER_KEY) {
+    const { data } = await axios.post(
+      process.env.DROPI_WORKER_URL,
+      { action: 'login', email, password },
+      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 15000 }
+    );
+    if (!data?.isSuccess) throw new Error(`[Dropi] Worker login fallido: ${data?.message ?? JSON.stringify(data)}`);
+    const token = data.objects?.token ?? data.objects?.access_token ?? data.token ?? data.access_token;
+    if (!token) throw new Error('[Dropi] Worker login exitoso pero no se encontró token en la respuesta.');
+    return token;
+  }
+
+  // Direct call — only works from non-datacenter IPs (local dev).
   const { data } = await axios.post(
     'https://api.dropi.ec/api/login',
     { email, password, white_brand_id: 1, with_cdc: false },
