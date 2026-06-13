@@ -33,23 +33,27 @@ router.get(
   validatorHandler(queryReviewSchema, 'query'),
   async (req, res, next) => {
     try {
-      const { productId, rating, withPhotos, page, limit } = req.query;
-      const offset = (Number(page) - 1) * Number(limit);
+      const productId  = Number(req.query.productId);
+      const rating     = req.query.rating ? Number(req.query.rating) : null;
+      const withPhotos = req.query.withPhotos === 'true';
+      const page       = Math.max(1, Number(req.query.page)  || 1);
+      const limit      = Math.min(50, Math.max(1, Number(req.query.limit) || 10));
+      const offset     = (page - 1) * limit;
 
-      const where = { productId: Number(productId) };
-      if (rating)     where.rating = Number(rating);
+      const where = { productId };
+      if (rating)     where.rating = rating;
       if (withPhotos) where.imagesJson = { [require('sequelize').Op.ne]: null };
 
       const { count, rows } = await models.Review.findAndCountAll({
         where,
         order:  [['created_at', 'DESC']],
-        limit:  Number(limit),
+        limit,
         offset,
       });
 
       // Aggregate stats for the summary block
       const allRatings = await models.Review.findAll({
-        where:      { productId: Number(productId) },
+        where:      { productId },
         attributes: ['rating'],
         raw:        true,
       });
@@ -66,8 +70,8 @@ router.get(
       res.json({
         reviews: rows,
         total:   count,
-        page:    Number(page),
-        pages:   Math.ceil(count / Number(limit)),
+        page,
+        pages:   Math.ceil(count / limit),
         stats: { total, average: average ? parseFloat(average) : null, breakdown },
       });
     } catch (error) {

@@ -21,7 +21,7 @@ module.exports = {
       business_id: {
         allowNull:  true,
         type:       Sequelize.INTEGER,
-        references: { model: 'businesses', key: 'id' },
+        references: { model: 'business', key: 'id' },
         onUpdate:   'CASCADE',
         onDelete:   'SET NULL',
       },
