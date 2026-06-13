@@ -224,14 +224,17 @@ router.post('/products', async (req, res, next) => {
     });
 
     if (!created) {
-      await product.update({
+      const updateFields = {
         price,
-        stock:     stockQty,
-        image:     productData.image,
-        images:    productData.images,
-        showShop:  productData.showShop,
+        stock:      stockQty,
+        image:      productData.image,
+        images:     productData.images,
+        showShop:   productData.showShop,
         lastSyncAt: new Date(),
-      });
+      };
+      // Only overwrite description if Dropi sends a non-empty one — avoids blanking AI copy.
+      if (productData.description) updateFields.description = productData.description;
+      await product.update(updateFields);
     }
 
     res.status(created ? 201 : 200).json(mapProductToWC(created ? product : { ...product.toJSON(), ...productData }));

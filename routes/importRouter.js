@@ -222,8 +222,20 @@ router.post(
         });
 
         if (!created) {
-          const update = { businessId: businessId ?? null, showShop: true, isDeleted: false };
-          if (pvpOverride != null) update.price = pvpOverride;
+          const update = {
+            businessId: businessId ?? null,
+            showShop:   true,
+            isDeleted:  false,
+            lastSyncAt: new Date(),
+          };
+          if (pvpOverride != null)   update.price = pvpOverride;
+          if (image)                 update.image = image;
+          if (resolvedImages)        update.images = resolvedImages;
+          if (req.body.variantsJson) update.variants = req.body.variantsJson;
+          // Only overwrite description if product has none — keeps AI copy on re-import.
+          if (!product.description && (aiCopy || description)) {
+            update.description = aiCopy ?? description;
+          }
           await product.update(update);
         }
 
