@@ -91,10 +91,32 @@ function normalizeProduct(p) {
 
   const variants = extractVariants(p);
 
+  // Technical detail blocks — these are the authoritative AI copy source.
+  // Dropi may store them in several field names depending on product type.
+  const rawDetails = [
+    p.detail          ?? p.details          ?? '',
+    p.characteristics ?? p.caracteristicas  ?? '',
+    p.specifications  ?? p.especificaciones ?? '',
+    p.guarantee       ?? p.garantia         ?? p.warranty ?? '',
+  ].map((s) => (typeof s === 'string' ? s.trim() : '')).filter(Boolean).join('\n\n');
+
+  // Warehouse/bodega breakdown — gives merchants visibility on origin stock.
+  const warehouseRaw = p.warehouses ?? p.bodegas ?? p.locations ?? [];
+  const warehouses = Array.isArray(warehouseRaw)
+    ? warehouseRaw
+        .map((w) => ({
+          name:  w.name ?? w.nombre ?? w.bodega ?? w.warehouse ?? String(w),
+          stock: w.stock ?? w.quantity ?? w.cantidad ?? null,
+        }))
+        .filter((w) => w.name)
+    : [];
+
   return {
     externalId:  String(p.id ?? p.sku ?? ''),
     title:       p.name ?? p.nombre ?? p.title ?? 'Sin nombre',
     description: p.description ?? p.descripcion ?? '',
+    rawDetails,
+    warehouses,
     image:       imageUrl,
     imagesArray,
     variants,

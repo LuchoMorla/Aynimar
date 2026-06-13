@@ -41,6 +41,8 @@ const importProductSchema = Joi.object({
   stock:             Joi.number().integer().allow(null).default(null),
   imagesJson:        Joi.string().allow('', null).default(null),
   variantsJson:      Joi.string().allow('', null).default(null),
+  // Raw technical details from Dropi — used as primary AI copy context
+  rawDetails:        Joi.string().allow('', null).default(''),
 });
 
 const syncStockSchema = Joi.object({
@@ -195,8 +197,10 @@ router.post(
         const resolvedPrice = pvpOverride ?? price ?? 0;
         const catId         = defaultCategoryId ?? 1;
 
-        // Generate AI copy — best-effort, never blocks the import
-        const aiCopy = await generateProductCopy(resolvedName, req.body.description || '');
+        // rawDetails is the primary AI context (technical specs + guarantees from Dropi).
+        // Fall back to the generic HTML description only when rawDetails is absent.
+        const aiContext = (req.body.rawDetails || '').trim() || (req.body.description || '');
+        const aiCopy = await generateProductCopy(resolvedName, aiContext);
 
         // Ensure at least the primary image is saved in the array (fallback for single-image products)
         const resolvedImages = req.body.imagesJson
