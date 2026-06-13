@@ -6,7 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon index.js",
-    "prestart": "npx sequelize-cli db:migrate",
+    "prestart": "npx sequelize-cli db:migrate || echo '[prestart] Migration warning — DB may be unavailable; server starting anyway'",
     "start": "node index.js",
     "lint": "eslint",
     "idocker": "docker-compose --env-file .env up -d aynapi-postgres pgadmin",
