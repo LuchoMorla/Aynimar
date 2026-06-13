@@ -74,6 +74,15 @@ function wooBasicAuth(req, res, next) {
     });
   }
 
+  // Si el secreto que envía Dropi parece un JWT (tres segmentos), lo sincronizamos
+  // a app_settings para que el catálogo pueda usarlo sin intervención manual.
+  if (secret.split('.').length === 3) {
+    const { saveTokenToDB } = require('../integrations/dropi/dropiTokenService');
+    saveTokenToDB(secret).catch((e) =>
+      console.warn('[WC Mirror] No se pudo sincronizar token Dropi:', e.message)
+    );
+  }
+
   next();
 }
 
