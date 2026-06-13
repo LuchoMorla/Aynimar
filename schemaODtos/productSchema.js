@@ -5,7 +5,6 @@ integer
 const id = Joi.string().uuid(); */
 const id = Joi.number().integer();
 const name = Joi.string().min(3).max(50);
-// const name = Joi.string().alphanum().min(3).max(15);
 const price = Joi.number().min(0);
 const description = Joi.string().min(10);
 const image = Joi.string().uri();
@@ -14,6 +13,12 @@ const businnesId = Joi.number().integer();
 const isDeleted = Joi.boolean();
 const stock = Joi.number().integer().allow(null);
 const showShop = Joi.boolean();
+
+// Dropshipping sync fields — all optional, set by importService
+const externalId     = Joi.string().allow(null);
+const sourceProvider = Joi.string().valid('dropi', 'effi').allow(null);
+const lastSyncAt     = Joi.date().allow(null);
+const images         = Joi.string().allow(null); // JSON-stringified array
 
 //recibiremos un limit y un offset
 const limit = Joi.number().integer();
@@ -36,15 +41,19 @@ const createProductSchema = Joi.object({
 });
 
 const updateProductSchema = Joi.object({
-  name: name,
-  price: price,
-  image: image,
-  description: description,
-  categoryId: categoryId,
-  businessId: businnesId,
-  isDeleted: isDeleted,
-  stock: stock,
-  showShop: showShop,
+  name:           name,
+  price:          price,
+  image:          image,
+  description:    Joi.string().min(1).allow('', null), // relaxed for manual edits
+  categoryId:     categoryId,
+  businessId:     Joi.number().integer().allow(null),  // null = desvincular de negocio
+  isDeleted:      isDeleted,
+  stock:          stock,
+  showShop:       showShop,
+  externalId,
+  sourceProvider,
+  lastSyncAt,
+  images,
 });
 
 const getProductSchema = Joi.object({

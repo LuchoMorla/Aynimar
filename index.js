@@ -66,6 +66,12 @@ app.get('/nueva-ruta', checkApiKey, (req, res) => {
 
 routerApi(app);
 
+// Create app_settings table if it doesn't exist (safe — does not alter existing tables)
+const { AppSetting } = require('./db/models/appSettingModel');
+AppSetting.sync({ force: false }).catch((err) =>
+  console.error('[AppSetting] Error creando tabla app_settings:', err.message)
+);
+
 //Vamos a adicionar los middlewares de correccion de errores, hay que tener mucha delicadeza con el orden de definicion de los errores, el momento en que se los ejecuta, como una cadena
 app.use(logErrors);
 app.use(ormErrorHandler);

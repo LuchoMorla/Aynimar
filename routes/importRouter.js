@@ -4,11 +4,13 @@ const express  = require('express');
 const passport = require('passport');
 const Joi      = require('joi');
 
+const { Op }               = require('sequelize');
 const { checkRoles }       = require('../middlewares/authHandler');
 const validatorHandler     = require('../middlewares/validatorHandler');
 const { importFromEffi, importSingleProduct, syncProductStock, syncAllStock } = require('../integrations/importService');
 const { fetchProductsFromEffi } = require('../integrations/effi/effiAdapter');
-const { fetchDropiCatalog }     = require('../integrations/dropi/dropiAdapter');
+const { fetchDropiCatalog, searchDropiByImage } = require('../integrations/dropi/dropiAdapter');
+const { generateProductCopy } = require('../integrations/aiCopyService');
 const { models }           = require('../libs/sequelize');
 
 const router = express.Router();
@@ -23,12 +25,22 @@ const effiQuerySchema = Joi.object({
 });
 
 const importProductSchema = Joi.object({
-  provider:          Joi.string().valid('effi').required(),
+  provider:          Joi.string().valid('effi', 'dropi').required(),
   externalId:        Joi.string().required(),
   pvpOverride:       Joi.number().positive().allow(null).default(null),
   defaultCategoryId: Joi.number().integer().min(1).default(1),
   businessId:        Joi.number().integer().allow(null).default(null),
   categoryMap:       Joi.object().default({}),
+  // Dropi live-catalog upsert fields (sent when product not yet in local DB)
+  title:             Joi.string().allow('', null).default(null),
+  name:              Joi.string().allow('', null).default(null),
+  image:             Joi.string().allow('', null).default(null),
+  description:       Joi.string().allow('', null).default(''),
+  price:             Joi.number().min(0).allow(null).default(0),
+  retailPrice:       Joi.number().min(0).allow(null).default(null),
+  stock:             Joi.number().integer().allow(null).default(null),
+  imagesJson:        Joi.string().allow('', null).default(null),
+  variantsJson:      Joi.string().allow('', null).default(null),
 });
 
 const syncStockSchema = Joi.object({
@@ -45,7 +57,7 @@ const syncAllSchema = Joi.object({
 router.get(
   '/catalog',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'business-owner'),
+  checkRoles('admin', 'business_owner'),
   async (req, res, next) => {
     try {
       const provider = String(req.query.provider ?? 'dropi');
@@ -54,21 +66,30 @@ router.get(
       const keyword  = req.query.keyword ? String(req.query.keyword).trim() : '';
 
       if (provider === 'dropi') {
-        const { products, total } = await fetchDropiCatalog({ page, limit, keyword });
+        const categoryId = req.query.categoryId ? Number(req.query.categoryId) : null;
+        const priceMin   = req.query.priceMin   !== undefined ? Number(req.query.priceMin)   : null;
+        const priceMax   = req.query.priceMax   !== undefined ? Number(req.query.priceMax)   : null;
 
-        const externalIds = products.map((p) => p.externalId).filter(Boolean);
-        const existing    = await models.Product.findAll({
-          where: { externalId: externalIds, sourceProvider: 'dropi' },
-          attributes: ['externalId'],
-        });
-        const existingSet = new Set(existing.map((p) => p.externalId));
+        const { products: dropiProducts, total } = await fetchDropiCatalog({ page, limit, keyword, categoryId, priceMin, priceMax });
 
-        const annotated = products.map((p) => ({
+        // Annotate which products are already imported (have a businessId in our DB)
+        const externalIds = dropiProducts.map((p) => p.externalId).filter(Boolean);
+        const existing    = externalIds.length
+          ? await models.Product.findAll({
+              where:      { externalId: externalIds, sourceProvider: 'dropi' },
+              attributes: ['externalId', 'businessId'],
+            })
+          : [];
+        const importedSet = new Set(
+          existing.filter((r) => r.businessId != null).map((r) => r.externalId)
+        );
+
+        const products = dropiProducts.map((p) => ({
           ...p,
-          alreadyImported: existingSet.has(p.externalId),
+          alreadyImported: importedSet.has(p.externalId),
         }));
 
-        return res.json({ products: annotated, total, page });
+        return res.json({ products, total, page });
       }
 
       if (provider === 'effi') {
@@ -105,6 +126,128 @@ router.get(
   }
 );
 
+// ── POST /api/v1/import/dropi-token ──────────────────────────────────────────
+// Persists a fresh Dropi session token in PostgreSQL — no redeploy needed.
+// Accessible by admin and business_owner (Dropi blocks server-side login via Cloudflare).
+
+router.post(
+  '/dropi-token',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  async (req, res, next) => {
+    try {
+      const { token } = req.body;
+      if (!token || typeof token !== 'string' || token.split('.').length !== 3) {
+        return res.status(400).json({ message: 'Body debe contener { token: "<JWT válido>" }' });
+      }
+      const { saveTokenToDB }   = require('../integrations/dropi/dropiTokenService');
+      const { invalidateToken } = require('../integrations/dropi/dropiAuthService');
+      await saveTokenToDB(token);
+      invalidateToken();
+      console.log('[Dropi] Token actualizado vía endpoint admin.');
+      res.json({ message: 'Token de Dropi guardado en BD. El catálogo usará este token en la próxima petición.' });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ── POST /api/v1/import/image-search ─────────────────────────────────────────
+// Receives { imageBase64, page, limit } — proxies to Dropi image-similarity search.
+
+router.post(
+  '/image-search',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  async (req, res, next) => {
+    try {
+      const { imageBase64, page = 1, limit = 20 } = req.body;
+      if (!imageBase64 || typeof imageBase64 !== 'string') {
+        return res.status(400).json({ message: 'imageBase64 (string) requerido en el body.' });
+      }
+      const result = await searchDropiByImage({ imageBase64, page: Number(page), limit: Number(limit) });
+      return res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ── POST /api/v1/import/product (dropi) ──────────────────────────────────────
+// Upserts a Dropi product into the local DB and assigns it to a business.
+// If the product already exists (synced via WooCommerce), just updates it.
+// If it only exists in the live Dropi catalog, creates it from the supplied data.
+
+router.post(
+  '/product',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  validatorHandler(importProductSchema, 'body'),
+  async (req, res, next) => {
+    try {
+      const {
+        provider, externalId, pvpOverride, businessId, defaultCategoryId,
+        title, name: nameField, image, description, price, stock,
+      } = req.body;
+
+      if (provider === 'dropi') {
+        const resolvedName  = title ?? nameField ?? externalId;
+        const resolvedPrice = pvpOverride ?? price ?? 0;
+        const catId         = defaultCategoryId ?? 1;
+
+        // Generate AI copy — best-effort, never blocks the import
+        const aiCopy = await generateProductCopy(resolvedName, req.body.description || '');
+
+        // Ensure at least the primary image is saved in the array (fallback for single-image products)
+        const resolvedImages = req.body.imagesJson
+          || (image ? JSON.stringify([image]) : null);
+
+        const [product, created] = await models.Product.findOrCreate({
+          where: { externalId, sourceProvider: 'dropi' },
+          defaults: {
+            name:           resolvedName,
+            image:          image   ?? '',
+            description:    aiCopy  ?? description ?? '',
+            images:         resolvedImages,
+            variants:       req.body.variantsJson ?? null,
+            price:          resolvedPrice,
+            stock:          stock   ?? null,
+            categoryId:     catId,
+            businessId:     businessId ?? null,
+            showShop:       true,
+            isDeleted:      false,
+            lastSyncAt:     new Date(),
+            sourceProvider: 'dropi',
+          },
+        });
+
+        if (!created) {
+          const update = { businessId: businessId ?? null, showShop: true, isDeleted: false };
+          if (pvpOverride != null) update.price = pvpOverride;
+          await product.update(update);
+        }
+
+        return res.status(200).json({
+          action:     created ? 'created' : 'assigned',
+          externalId: product.externalId,
+          provider:   'dropi',
+          productId:  product.id,
+          name:       product.name,
+        });
+      }
+
+      // Effi and other providers handled by importSingleProduct
+      const { categoryMap } = req.body;
+      const result = await importSingleProduct({
+        provider, externalId, pvpOverride, defaultCategoryId, businessId, categoryMap,
+      });
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 // ── All other import routes require admin ─────────────────────────────────────
 
 router.use(
@@ -134,25 +277,6 @@ router.post(
   }
 );
 
-// ── POST /api/v1/import/product ───────────────────────────────────────────────
-// Single-product import from Effi by externalId, with optional PVP override.
-
-router.post(
-  '/product',
-  validatorHandler(importProductSchema, 'body'),
-  async (req, res, next) => {
-    try {
-      const { provider, externalId, pvpOverride, defaultCategoryId, businessId, categoryMap } = req.body;
-      const result = await importSingleProduct({
-        provider, externalId, pvpOverride,
-        defaultCategoryId, businessId, categoryMap,
-      });
-      res.status(200).json(result);
-    } catch (error) {
-      next(error);
-    }
-  }
-);
 
 // ── PATCH /api/v1/import/sync-stock ──────────────────────────────────────────
 
@@ -186,6 +310,6 @@ router.post(
   }
 );
 
-// catalog route is defined above (before admin middleware) to allow business-owner access
+// catalog and dropi-token routes are defined above (before admin middleware) to allow business_owner access
 
 module.exports = router;

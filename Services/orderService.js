@@ -1,6 +1,10 @@
 const boom = require('@hapi/boom');
-const { models } = require('../libs/sequelize');
+const sequelize = require('../libs/sequelize');
+const { models } = sequelize;
 const { Op } = require('sequelize');
+const WalletService = require('./walletService');
+const { createOrderInDropi } = require('../integrations/dropi/dropiAdapter');
+const { createOrderInEffi }  = require('../integrations/effi/effiAdapter');
 
 const { config } = require('./../config/config');
 // const nodemailer = require('nodemailer');
@@ -230,6 +234,30 @@ class OrderService {
           stock: product.stock - orderItems[i].amount,
         });
       }
+
+      // ── Dropshipping dispatch ────────────────────────────────────────────
+      // Stock is already decremented above — the order is confirmed from our
+      // side. We now fire fulfillment requests to Dropi/Effi for any product
+      // that came from those providers. Failures here must NOT affect the
+      // customer's payment: we catch them, log them, and mark the order with
+      // a recoverable state so an admin can retry manually from the dashboard.
+      try {
+        await this.dispatchToProviders(order);
+      } catch (dispatchError) {
+        console.error(
+          `[OrderService] Provider dispatch failed for order ${id}: ${dispatchError.message}`
+        );
+        // Mark the order so the admin dashboard can surface it for retry.
+        // We use a nested try/catch so a DB write failure here doesn't
+        // swallow the original dispatch error from logs.
+        try {
+          await order.update({ stateOrder: 'error_api_proveedor' });
+        } catch (markError) {
+          console.error(
+            `[OrderService] Could not mark order ${id} as error_api_proveedor: ${markError.message}`
+          );
+        }
+      }
     }
 
     if (changes.state === 'pendiente_envio') {
@@ -383,7 +411,240 @@ class OrderService {
     return { rta: true };
   }
 
-  
-      
+  /**
+   * Dispatches fulfillment orders to external dropshipping providers.
+   *
+   * Iterates over the order's items. Any item whose Product has a
+   * `sourceProvider` of 'dropi' or 'effi' is grouped and sent to the
+   * corresponding adapter. Items without a `sourceProvider` (own stock) are
+   * silently skipped — they fulfil through the normal warehouse workflow.
+   *
+   * This method THROWS if any provider call fails, so the caller in update()
+   * can decide how to handle it (mark order, log, etc.) without hiding errors.
+   *
+   * @param {Order} order  Sequelize Order instance with `items` and `customer` preloaded
+   */
+  async dispatchToProviders(order) {
+    // ── 1. Group dropship items by provider ──────────────────────────────────
+    const byProvider = {};
+
+    for (const item of order.items) {
+      const { sourceProvider, externalId } = item;
+      if (!sourceProvider || !externalId) continue;      // own-stock product
+
+      if (sourceProvider !== 'dropi' && sourceProvider !== 'effi') {
+        console.warn(
+          `[Dispatch] Unknown sourceProvider "${sourceProvider}" on product ${item.id} — skipped`
+        );
+        continue;
+      }
+
+      if (!byProvider[sourceProvider]) byProvider[sourceProvider] = [];
+      byProvider[sourceProvider].push({
+        externalId,
+        quantity: item.OrderProduct.amount,
+      });
+    }
+
+    if (Object.keys(byProvider).length === 0) return; // nothing to dispatch
+
+    // ── 2. Build a normalized shipping address from the Customer record ──────
+    const c = order.customer;
+    const shippingAddress = {
+      name:              `${c.name} ${c.lastName}`.trim(),
+      phone:             c.phone    ?? '',
+      email:             c.user?.email ?? '',
+      address:           c.streetAddress ?? '',
+      city:              c.city     ?? '',
+      province:          c.province ?? '',
+      postalCode:        c.postalCode ?? '',
+      countryOfResidence: c.countryOfResidence ?? '',
+    };
+
+    // ── 3. Fire each provider and collect errors ─────────────────────────────
+    // We iterate sequentially rather than Promise.all so that a Dropi failure
+    // doesn't silently suppress an Effi success logged after it.
+    const errors = [];
+
+    if (byProvider.dropi) {
+      try {
+        const { externalOrderId } = await createOrderInDropi({
+          referenceId:     `AYNIMAR-${order.id}`,
+          items:           byProvider.dropi,
+          shippingAddress,
+        });
+        console.log(
+          `[Dispatch] Dropi order created for Aynimar #${order.id}: ${externalOrderId}`
+        );
+      } catch (err) {
+        errors.push(`dropi: ${err.message}`);
+        console.error(`[Dispatch] Dropi error for order ${order.id}:`, err.message);
+      }
+    }
+
+    if (byProvider.effi) {
+      try {
+        const { externalOrderId } = await createOrderInEffi({
+          referenceId:     `AYNIMAR-${order.id}`,
+          items:           byProvider.effi,
+          shippingAddress,
+        });
+        console.log(
+          `[Dispatch] Effi order created for Aynimar #${order.id}: ${externalOrderId}`
+        );
+      } catch (err) {
+        errors.push(`effi: ${err.message}`);
+        console.error(`[Dispatch] Effi error for order ${order.id}:`, err.message);
+      }
+    }
+
+    // ── 4. Surface aggregated errors so update() can mark the order ──────────
+    if (errors.length > 0) {
+      throw new Error(`Provider dispatch failed — ${errors.join('; ')}`);
+    }
+  }
+
+  /**
+   * Atomic checkout: validates the cart, recalculates totals from DB prices,
+   * redeems green credits, and transitions the order out of 'carrito' state.
+   *
+   * Everything runs inside a single Sequelize transaction. Any failure
+   * (insufficient stock, insufficient credits, DB error) triggers a full
+   * rollback — no credits are lost and the order stays in 'carrito'.
+   *
+   * Credit exchange rate: 1 credit = 1 unit of currency (e.g. $1 USD).
+   * `creditsToApply` is capped at Math.floor(subtotal) so a user can never
+   * overpay with credits (partial-credit + external payment is supported).
+   *
+   * @param {number} orderId
+   * @param {number} userId           The authenticated user's id (from JWT sub)
+   * @param {number} creditsToApply   Non-negative integer — credits the user wants to use
+   * @returns {Promise<CheckoutSummary>}
+   */
+  async checkout(orderId, userId, creditsToApply = 0) {
+    const walletService = new WalletService();
+
+    return sequelize.transaction(async (t) => {
+
+      // ── 1. Load order with a row-level lock ────────────────────────────────
+      // The lock prevents a second concurrent checkout on the same cart from
+      // reading a stale state while this transaction is in progress.
+      const order = await models.Order.findByPk(orderId, {
+        include: [
+          { association: 'customer', include: ['user'] },
+          { association: 'items' },
+        ],
+        lock: t.LOCK.UPDATE,
+        transaction: t,
+      });
+
+      if (!order) throw boom.notFound('Order not found');
+
+      // ── 2. Guard: only the cart owner can check out ────────────────────────
+      if (!order.customer) {
+        throw boom.badRequest('This order has no customer. Associate it first.');
+      }
+      if (order.customer.userId !== userId) {
+        throw boom.forbidden('You are not allowed to check out this order');
+      }
+
+      // ── 3. Guard: only carts can be checked out ────────────────────────────
+      if (order.state !== 'carrito') {
+        throw boom.conflict(
+          `Order is already in state "${order.state}" and cannot be checked out again`
+        );
+      }
+
+      // ── 4. Guard: cart must have at least one item ─────────────────────────
+      if (!order.items || order.items.length === 0) {
+        throw boom.badRequest('Cannot check out an empty cart');
+      }
+
+      // ── 5. Re-fetch products with authoritative DB prices + row lock ────────
+      // We never trust the price cached on the cart item — we read from
+      // the products table inside this transaction so the price cannot change
+      // between our read and the moment we commit.
+      const productIds = order.items.map((item) => item.id);
+      const products = await models.Product.findAll({
+        where: { id: productIds, isDeleted: false },
+        lock: t.LOCK.UPDATE,
+        transaction: t,
+      });
+
+      if (products.length !== productIds.length) {
+        const foundIds = new Set(products.map((p) => p.id));
+        const missing = productIds.filter((id) => !foundIds.has(id));
+        throw boom.badRequest(
+          `The following products are no longer available: ${missing.join(', ')}`
+        );
+      }
+
+      const productMap = new Map(products.map((p) => [p.id, p]));
+
+      // ── 6. Validate stock and calculate subtotal ───────────────────────────
+      let subtotal = 0;
+
+      for (const item of order.items) {
+        const product = productMap.get(item.id);
+        const quantity = item.OrderProduct.amount;
+
+        // Stock can be null for unlimited/dropship products — skip the check.
+        if (product.stock !== null && product.stock < quantity) {
+          throw boom.conflict(
+            `Insufficient stock for "${product.name}". ` +
+            `Available: ${product.stock}, requested: ${quantity}`
+          );
+        }
+
+        subtotal += product.price * quantity;
+      }
+
+      // Round to 2 decimal places to avoid float drift (e.g. 10.999999...)
+      subtotal = parseFloat(subtotal.toFixed(2));
+
+      // ── 7. Calculate credit discount ───────────────────────────────────────
+      // Cap credits at floor(subtotal): credits are integers, so we cannot
+      // apply 5 credits against a $4.99 item (that would be a 1¢ gain).
+      const maxCredits = Math.floor(subtotal);
+      const creditsUsed = Math.min(creditsToApply, maxCredits);
+      const amountToPay = parseFloat((subtotal - creditsUsed).toFixed(2));
+
+      // ── 8. Redeem credits — inside the same transaction ────────────────────
+      // If the wallet has insufficient balance, redeemCredits throws a
+      // 402 paymentRequired and the entire transaction rolls back automatically.
+      if (creditsUsed > 0) {
+        await walletService.redeemCredits(userId, creditsUsed, { transaction: t });
+      }
+
+      // ── 9. Transition order state ──────────────────────────────────────────
+      // fully covered by credits → no external payment needed, hand off to business
+      // partially covered      → awaiting external payment method
+      const newStateOrder = amountToPay === 0
+        ? 'comprado_pendiente_negocio'
+        : 'comprado_pendiente_pago';
+
+      const paymentMethod = creditsUsed > 0 && amountToPay === 0
+        ? 'green_credits'
+        : creditsUsed > 0
+          ? 'credits_partial'
+          : null;
+
+      await order.update(
+        { state: 'comprada', stateOrder: newStateOrder, paymentMethod },
+        { transaction: t }
+      );
+
+      // ── 10. Return checkout summary ────────────────────────────────────────
+      return {
+        orderId,
+        subtotal,
+        creditsApplied: creditsUsed,
+        amountToPay,
+        stateOrder: newStateOrder,
+        paymentMethod,
+        itemCount: order.items.length,
+      };
+    });
+  }
 }
 module.exports = OrderService;

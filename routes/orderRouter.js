@@ -12,8 +12,8 @@ const {
   getOrderSchema,
   getOrderByUserIdAndOrderId,
   createOrderSchema,
-  addItemGuestSchema,     // <-- Importar
-  associateOrderSchema,   // <-- Importar
+  addItemGuestSchema,
+  associateOrderSchema,
   getOrderByState,
   updateOrderSchema,
   updateItemSchema,
@@ -21,6 +21,7 @@ const {
   getItemSchema,
   getOrdersByBusinessId,
   getVerifyProductIsInOrderActive,
+  checkoutSchema,
 } = require('../schemaODtos/orderSchema');
 
 const router = express.Router();
@@ -28,7 +29,36 @@ const service = new OrderService();
 const customerService = new CustomerService();
 const recyclerService = new RecyclerService();
 
-// --- NUEVAS RUTAS PÚBLICAS (colócalas antes de las rutas protegidas) ---
+// --- RUTAS PÚBLICAS (sin autenticación) ---
+
+// GET /api/v1/orders/track/:orderId
+// Public order tracking — returns only tracking-safe fields (no PII beyond first name).
+// Placed before /:id to avoid Express treating "track" as an id param.
+router.get('/track/:orderId', async (req, res, next) => {
+  try {
+    const orderId = Number(req.params.orderId);
+    if (isNaN(orderId)) {
+      return res.status(400).json({ message: 'ID de orden inválido.' });
+    }
+
+    const order = await service.findOne(orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: 'Orden no encontrada.' });
+    }
+
+    res.json({
+      id:             order.id,
+      stateOrder:     order.stateOrder,
+      trackingNumber: order.trackingNumber ?? null,
+      carrierName:    order.carrierName    ?? null,
+      createdAt:      order.createdAt,
+      customerName:   order.customer?.name ?? null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // Ruta para que un invitado cree su carrito inicial
 router.post(
@@ -105,6 +135,27 @@ router.delete(
       // ¡Aquí está la magia! Llamamos al mismo método de servicio.
       const deleteItem = await service.deleteItem(id); 
       res.status(200).json(deleteItem);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ── POST /checkout ────────────────────────────────────────────────────────────
+// Checks out an existing cart: validates ownership, recalculates totals from
+// DB prices, redeems green credits, and advances the order state atomically.
+// Any failure (bad stock, bad balance, DB error) rolls back completely.
+router.post(
+  '/checkout',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  validatorHandler(checkoutSchema, 'body'),
+  async (req, res, next) => {
+    try {
+      const userId = req.user.sub;
+      const { orderId, creditsToApply } = req.body;
+      const summary = await service.checkout(orderId, userId, creditsToApply);
+      res.status(200).json(summary);
     } catch (error) {
       next(error);
     }

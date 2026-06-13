@@ -1,5 +1,6 @@
 const express = require('express');
 const passport = require('passport');
+const { Op } = require('sequelize');
 
 const { checkRoles } = require('../middlewares/authHandler');
 
@@ -9,9 +10,54 @@ const {
   createBusinessSchema,
   updateBusinessSchema,
 } = require('../schemaODtos/businessSchema');
+const { models } = require('../libs/sequelize');
 
 const router = express.Router();
 const service = new BusinessService();
+
+// ── GET /api/v1/business/:id/products ────────────────────────────────────────
+// Returns paginated products assigned to a business, with search + filter support.
+
+router.get(
+  '/:id/products',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const { search, category, status, stock, page = 1, limit = 24 } = req.query;
+
+      const where = { businessId: Number(id), isDeleted: false };
+      if (search)            where.name       = { [Op.iLike]: `%${search}%` };
+      if (category)          where.categoryId = Number(category);
+      if (status === 'active')   where.showShop = true;
+      if (status === 'inactive') where.showShop = false;
+      if (stock === 'available') where.stock    = { [Op.gt]: 0 };
+      if (stock === 'out')       where.stock    = { [Op.or]: [{ [Op.lte]: 0 }, { [Op.is]: null }] };
+
+      const pageNum  = Number(page);
+      const limitNum = Math.min(Number(limit), 100);
+      const offset   = (pageNum - 1) * limitNum;
+
+      const { count, rows } = await models.Product.findAndCountAll({
+        where,
+        include: ['category'],
+        limit:   limitNum,
+        offset,
+        order:   [['id', 'DESC']],
+      });
+
+      res.json({
+        products: rows,
+        total:    count,
+        page:     pageNum,
+        pages:    Math.ceil(count / limitNum),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 router.get(
   '/',

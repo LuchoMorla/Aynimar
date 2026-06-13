@@ -59,6 +59,26 @@ router.post(
   }
 );
 
+// ── PATCH /api/v1/products/:id/price — inline price edit ─────────────────────
+router.patch(
+  '/:id/price',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  async (req, res, next) => {
+    try {
+      const id    = Number(req.params.id);
+      const price = Number(req.body.price);
+      if (!id || isNaN(price) || price < 0) {
+        return res.status(400).json({ message: 'price debe ser un número >= 0.' });
+      }
+      const result = await service.update(id, { price });
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.patch(
   '/:id',
   passport.authenticate('jwt', { session: false }),

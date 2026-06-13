@@ -74,6 +74,13 @@ const updateItemSchema = Joi.object({
 });
 //se le podrían agregar cosas como estados(entregada, se pago, no se pago, etc.), dirección, etc.
 
+const checkoutSchema = Joi.object({
+  orderId: orderId.required(),
+  // Integer credits the user wants to redeem (0 = no credits, omit = same).
+  // The service caps this at floor(subtotal) automatically.
+  creditsToApply: Joi.number().integer().min(0).default(0),
+});
+
 module.exports = {
   getOrderSchema,
   getOrderByUserIdAndOrderId,
@@ -86,5 +93,6 @@ module.exports = {
   updateItemSchema,
   getItemSchema,
   getOrdersByBusinessId,
-  getVerifyProductIsInOrderActive
+  getVerifyProductIsInOrderActive,
+  checkoutSchema,
 };

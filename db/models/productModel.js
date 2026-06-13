@@ -72,6 +72,34 @@ const ProductSchema = {
     onUpdate: 'CASCADE',
     onDelete: 'SET NULL',
   },
+
+  // ── Dropshipping sync fields (Phase 2) ────────────────────────────
+  externalId: {
+    field: 'external_id',
+    allowNull: true,
+    type: DataTypes.STRING,
+  },
+  sourceProvider: {
+    field: 'source_provider',
+    allowNull: true,
+    type: DataTypes.STRING,
+  },
+  lastSyncAt: {
+    field: 'last_sync_at',
+    allowNull: true,
+    type: DataTypes.DATE,
+  },
+  // JSON array of image URLs — first element mirrors the `image` field.
+  // Stored as TEXT to avoid needing a separate JSONB column on older PG versions.
+  images: {
+    allowNull: true,
+    type: DataTypes.TEXT,
+  },
+  // JSON array of variant groups: [{option, values:[{label,image,stock}]}]
+  variants: {
+    allowNull: true,
+    type: DataTypes.TEXT,
+  },
 };
 
 class Product extends Model {

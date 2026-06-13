@@ -43,9 +43,21 @@ const OrderSchema = {
       'controversia_escalada',
       'controversia_resuelta',
       'por_devolver',
-      'devuelto'
+      'devuelto',
+      'error_api_proveedor',
+      'en_transito'
     ),
     defaultValue: 'comprado_pendiente_pago',
+  },
+  trackingNumber: {
+    field:        'tracking_number',
+    allowNull:    true,
+    type:         DataTypes.STRING(255),
+  },
+  carrierName: {
+    field:        'carrier_name',
+    allowNull:    true,
+    type:         DataTypes.STRING(100),
   },
   createdAt: {
     allowNull: false,

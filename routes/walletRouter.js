@@ -29,6 +29,21 @@ router.get(
 );
 
 router.get(
+  '/my-wallet',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  async (req, res, next) => {
+    try {
+      const userId = req.user.sub;
+      const wallet = await service.findByUser(userId);
+      res.json({ credit: wallet?.credit ?? 0 });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
   '/:id',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'recycler', 'customer', 'business_owner'),

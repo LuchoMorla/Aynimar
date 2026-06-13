@@ -40,15 +40,20 @@ class User extends Model {
   static associate(models) {
     this.hasOne(models.Customer, {
       as: 'customer',
-      foreignKey: 'userId'
+      foreignKey: 'userId',
     });
     this.hasOne(models.Recycler, {
       as: 'recycler',
-      foreignKey: 'userId'
+      foreignKey: 'userId',
     });
     this.hasOne(models.BusinessOwner, {
       as: 'business_owner',
-      foreignKey: 'userId'
+      foreignKey: 'userId',
+    });
+    // Wallet now belongs directly to User so any role can hold green credits.
+    this.hasOne(models.Wallet, {
+      as: 'wallet',
+      foreignKey: 'userId',
     });
   }
 

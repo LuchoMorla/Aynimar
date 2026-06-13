@@ -115,15 +115,13 @@ const RecyclerSchema = {
 
 class Recycler extends Model {
   static associate(models) {
-    this.belongsTo(models.User, { as: 'user' }),
-      this.hasMany(models.Payment, {
-        as: 'payments',
-        foreignKey: 'recyclerId',
-      }),
-      this.hasOne(models.Wallet, {
-        as: 'wallet',
-        foreignKey: 'recyclerId',
-      });
+    this.belongsTo(models.User, { as: 'user' });
+    this.hasMany(models.Payment, {
+      as: 'payments',
+      foreignKey: 'recyclerId',
+    });
+    // Wallet is now associated via User. The recycler_id FK is kept for
+    // backward compat but the canonical wallet lives on models.User.
   }
 
   static config(sequelize) {
