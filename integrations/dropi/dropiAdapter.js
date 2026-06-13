@@ -6,11 +6,9 @@ const { getToken, invalidateToken } = require('./dropiAuthService');
 const WOO_JWT        = process.env.WOO_CONSUMER_SECRET || '';
 const DROPI_API_BASE = process.env.DROPI_API_URL       || 'https://api.dropi.ec';
 
-const hasCredentials =
-  !!(process.env.DROPI_SESSION_TOKEN ||
-     (process.env.DROPI_USER_EMAIL && process.env.DROPI_USER_PASSWORD));
-
-const IS_MOCK = !hasCredentials || process.env.DROPI_MOCK === 'true';
+// IS_MOCK sólo se activa con la flag explícita DROPI_MOCK=true.
+// Sin env-vars de Dropi, getToken() consulta la BD (app_settings) antes de rendirse.
+const IS_MOCK = process.env.DROPI_MOCK === 'true';
 
 async function makeCatalogClient() {
   const token = await getToken();
@@ -259,13 +257,19 @@ async function doFetchViaWorker(page, limit, keyword, categoryId, priceMin, pric
  */
 async function fetchDropiCatalog({ page = 1, limit = 20, keyword = '', categoryId = null, priceMin = null, priceMax = null } = {}) {
   if (IS_MOCK) {
-    console.warn('[Dropi] Sin credenciales — catálogo deshabilitado. Configura DROPI_USER_EMAIL+PASSWORD o DROPI_SESSION_TOKEN en Railway.');
+    console.warn('[Dropi] DROPI_MOCK=true — catálogo deshabilitado por flag explícita.');
     return { products: [], total: 0 };
   }
 
   try {
     return await doFetch(page, limit, keyword, categoryId, priceMin, priceMax);
   } catch (err) {
+    // Sin token en BD ni en env-vars: respuesta vacía limpia, no 500.
+    if (err.message?.includes('No hay token válido')) {
+      console.warn('[Dropi] Sin token activo. Renueva vía POST /api/v1/import/dropi-token.');
+      return { products: [], total: 0 };
+    }
+
     const httpStatus  = err.response?.status;
     const dropiStatus = err.dropiStatus;
     const isAuthError = httpStatus === 401 || httpStatus === 403 ||
