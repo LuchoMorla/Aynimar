@@ -1,7 +1,6 @@
 'use strict';
 
-const axios = require('axios');
-const { getTokenFromDB, saveTokenToDB } = require('./dropiTokenService');
+const { getTokenFromDB } = require('./dropiTokenService');
 
 let _cachedToken    = process.env.DROPI_SESSION_TOKEN || '';
 let _tokenExpiresAt = _cachedToken ? parseExp(_cachedToken) : 0;
@@ -19,37 +18,9 @@ function isExpired(token) {
   return !exp || Date.now() >= exp - 5 * 60 * 1000;
 }
 
-async function loginWithCredentials() {
-  const email    = process.env.DROPI_USER_EMAIL    || '';
-  const password = process.env.DROPI_USER_PASSWORD || '';
-  if (!email || !password) throw new Error('[Dropi] DROPI_USER_EMAIL / DROPI_USER_PASSWORD no configurados.');
-  const { data } = await axios.post(
-    'https://api.dropi.ec/api/login',
-    { email, password, white_brand_id: 1, with_cdc: false },
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept':       'application/json',
-        'Origin':       'https://app.dropi.ec',
-        'Referer':      'https://app.dropi.ec/auth/login',
-        'User-Agent':   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
-      timeout: 15000,
-    }
-  );
-  if (!data?.isSuccess) throw new Error(`[Dropi] Login fallido: ${data?.message ?? JSON.stringify(data)}`);
-  const token = data.objects?.token ?? data.objects?.access_token ?? data.token ?? data.access_token;
-  if (!token) throw new Error('[Dropi] Login exitoso pero no se encontró token en la respuesta.');
-  return token;
-}
-
 /**
  * Returns a valid Dropi session token.
- * Priority order:
- *   1. In-memory cache (fast path — no DB round-trip on most requests)
- *   2. PostgreSQL app_settings (persists across process restarts / redeployments)
- *   3. Auto-login via DROPI_USER_EMAIL + DROPI_USER_PASSWORD (blocked by Dropi from datacenters, but tried anyway)
- *   4. DROPI_SESSION_TOKEN env var (static fallback — may be expired)
+ * Priority: 1. memory cache  2. PostgreSQL app_settings  3. DROPI_SESSION_TOKEN env var
  */
 async function getToken() {
   // 1. In-memory cache
@@ -69,34 +40,7 @@ async function getToken() {
     console.warn('[Dropi] No se pudo leer token de BD:', dbErr.message);
   }
 
-  // 3. Autologin
-  const email    = process.env.DROPI_USER_EMAIL    || '';
-  const password = process.env.DROPI_USER_PASSWORD || '';
-  if (email && password) {
-    try {
-      console.log('[Dropi] Intentando autologin...');
-      const fresh = await loginWithCredentials();
-      _cachedToken    = fresh;
-      _tokenExpiresAt = parseExp(fresh);
-      try { await saveTokenToDB(fresh); } catch (_) {}
-      console.log(`[Dropi] Autologin exitoso. Válido hasta: ${new Date(_tokenExpiresAt).toISOString()}`);
-      return _cachedToken;
-    } catch (err) {
-      console.warn(`[Dropi] Autologin falló: ${err.message}`);
-    }
-  }
-
-  // 4. Llave de integración WooCommerce — JWT emitido por Dropi al conectar la tienda.
-  //    Se sincroniza automáticamente a app_settings cada vez que Dropi llama al espejo WC.
-  //    También puede usarse directamente si está configurado en Railway.
-  const wooKey = process.env.WOO_CONSUMER_SECRET || '';
-  if (wooKey && wooKey.split('.').length === 3) {
-    console.log('[Dropi] Usando WOO_CONSUMER_SECRET como token de integración nativa.');
-    _cachedToken = wooKey;
-    return _cachedToken;
-  }
-
-  // 5. Env var estática de respaldo
+  // 3. Env var estática de respaldo
   const staticToken = process.env.DROPI_SESSION_TOKEN || '';
   if (staticToken) {
     console.warn('[Dropi] Usando DROPI_SESSION_TOKEN de entorno (puede estar expirado).');
@@ -104,9 +48,7 @@ async function getToken() {
     return _cachedToken;
   }
 
-  throw new Error(
-    '[Dropi] No hay token válido. Configura WOO_CONSUMER_SECRET en Railway o usa POST /api/v1/import/dropi-token.'
-  );
+  throw new Error('[Dropi] Sin token de sesión. Usa POST /api/v1/import/dropi-token para configurar uno.');
 }
 
 function invalidateToken() {

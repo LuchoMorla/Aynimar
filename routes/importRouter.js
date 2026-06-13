@@ -68,30 +68,49 @@ router.get(
       const keyword  = req.query.keyword ? String(req.query.keyword).trim() : '';
 
       if (provider === 'dropi') {
-        const categoryId = req.query.categoryId ? Number(req.query.categoryId) : null;
-        const priceMin   = req.query.priceMin   !== undefined ? Number(req.query.priceMin)   : null;
-        const priceMax   = req.query.priceMax   !== undefined ? Number(req.query.priceMax)   : null;
+        const priceMin = req.query.priceMin !== undefined ? Number(req.query.priceMin) : null;
+        const priceMax = req.query.priceMax !== undefined ? Number(req.query.priceMax) : null;
 
-        const { products: dropiProducts, total } = await fetchDropiCatalog({ page, limit, keyword, categoryId, priceMin, priceMax });
+        const where = { sourceProvider: 'dropi', isDeleted: false };
+        if (keyword) {
+          where[Op.or] = [
+            { name:       { [Op.iLike]: `%${keyword}%` } },
+            { externalId: { [Op.iLike]: `%${keyword}%` } },
+          ];
+        }
+        if (priceMin != null && !isNaN(priceMin)) where.price = { ...(where.price ?? {}), [Op.gte]: priceMin };
+        if (priceMax != null && !isNaN(priceMax)) where.price = { ...(where.price ?? {}), [Op.lte]: priceMax };
 
-        // Annotate which products are already imported (have a businessId in our DB)
-        const externalIds = dropiProducts.map((p) => p.externalId).filter(Boolean);
-        const existing    = externalIds.length
-          ? await models.Product.findAll({
-              where:      { externalId: externalIds, sourceProvider: 'dropi' },
-              attributes: ['externalId', 'businessId'],
-            })
-          : [];
-        const importedSet = new Set(
-          existing.filter((r) => r.businessId != null).map((r) => r.externalId)
-        );
+        const offset = (page - 1) * limit;
+        const { count, rows } = await models.Product.findAndCountAll({
+          where,
+          limit,
+          offset,
+          order:    [['id', 'DESC']],
+          subQuery: false,
+        });
 
-        const products = dropiProducts.map((p) => ({
-          ...p,
-          alreadyImported: importedSet.has(p.externalId),
-        }));
+        const products = rows.map((p) => {
+          let imagesArray = []; try { imagesArray = JSON.parse(p.images ?? '[]'); } catch {}
+          let variants    = []; try { variants    = JSON.parse(p.variants ?? '[]'); } catch {}
+          return {
+            externalId:      p.externalId,
+            title:           p.name,
+            description:     p.description ?? '',
+            rawDetails:      '',
+            warehouses:      [],
+            image:           imagesArray[0] ?? p.image ?? null,
+            imagesArray,
+            variants,
+            price:           p.price ?? 0,
+            retailPrice:     null,
+            stock:           p.stock ?? null,
+            sku:             p.externalId,
+            alreadyImported: p.businessId != null,
+          };
+        });
 
-        return res.json({ products, total, page });
+        return res.json({ products, total: count, page });
       }
 
       if (provider === 'effi') {

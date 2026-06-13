@@ -132,6 +132,28 @@ router.patch(
   }
 );
 
+router.patch(
+  '/:id/woo-credentials',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  async (req, res, next) => {
+    try {
+      const businessId = parseInt(req.params.id, 10);
+      const { wooConsumerKey, wooConsumerSecret } = req.body;
+      if (!wooConsumerKey || !wooConsumerSecret) {
+        return res.status(400).json({ message: 'wooConsumerKey y wooConsumerSecret son requeridos.' });
+      }
+      await models.Business.update(
+        { wooConsumerKey, wooConsumerSecret },
+        { where: { id: businessId } }
+      );
+      res.json({ message: 'Credenciales WooCommerce actualizadas.' });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.delete(
   '/:id',
   passport.authenticate('jwt', { session: false }),

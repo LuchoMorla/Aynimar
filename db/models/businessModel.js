@@ -39,6 +39,16 @@ const BusinessSchema = {
     onUpdate: 'CASCADE',
     onDelete: 'SET NULL',
   },
+  wooConsumerKey: {
+    field:     'woo_consumer_key',
+    type:      DataTypes.STRING(255),
+    allowNull: true,
+  },
+  wooConsumerSecret: {
+    field:     'woo_consumer_secret',
+    type:      DataTypes.TEXT,
+    allowNull: true,
+  },
 }
 
 

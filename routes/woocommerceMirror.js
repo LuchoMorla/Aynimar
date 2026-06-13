@@ -30,9 +30,9 @@ const STORE_URL = process.env.NEXT_PUBLIC_FRONTEND_URL ?? 'https://www.aynimar.c
 
 // ── Basic Auth guard ──────────────────────────────────────────────────────────
 // Dropi sends:  Authorization: Basic base64(consumerKey:consumerSecret)
-// We validate against WOO_CONSUMER_KEY and WOO_CONSUMER_SECRET env vars.
+// We look up the matching Business row in the DB (multi-tenant: one row per store).
 
-function wooBasicAuth(req, res, next) {
+async function wooBasicAuth(req, res, next) {
   const authHeader = req.headers['authorization'] ?? '';
 
   if (!authHeader.startsWith('Basic ')) {
@@ -49,7 +49,7 @@ function wooBasicAuth(req, res, next) {
     const decoded  = Buffer.from(authHeader.slice(6), 'base64').toString('utf-8');
     const colonIdx = decoded.indexOf(':');
     key    = decoded.slice(0, colonIdx);
-    secret = decoded.slice(colonIdx + 1); // secret may contain ':' (e.g. a JWT)
+    secret = decoded.slice(colonIdx + 1);
   } catch {
     return res.status(401).json({
       code:    'woocommerce_rest_authentication_error',
@@ -58,32 +58,24 @@ function wooBasicAuth(req, res, next) {
     });
   }
 
-  const expectedKey    = process.env.WOO_CONSUMER_KEY    ?? '';
-  const expectedSecret = process.env.WOO_CONSUMER_SECRET ?? '';
-
-  if (!expectedKey || !expectedSecret) {
-    console.error('[WC Mirror] WOO_CONSUMER_KEY / WOO_CONSUMER_SECRET not set in environment.');
-    return res.status(503).json({ message: 'WC emulator not configured on this server.' });
-  }
-
-  if (key !== expectedKey || secret !== expectedSecret) {
-    return res.status(401).json({
-      code:    'woocommerce_rest_authentication_error',
-      message: 'Invalid consumer key or secret.',
-      data:    { status: 401 },
+  try {
+    const biz = await models.Business.findOne({
+      where:      { wooConsumerKey: key, wooConsumerSecret: secret },
+      attributes: ['id'],
     });
+    if (!biz) {
+      return res.status(401).json({
+        code:    'woocommerce_rest_authentication_error',
+        message: 'Invalid consumer key or secret.',
+        data:    { status: 401 },
+      });
+    }
+    req.wooBusinessId = biz.id;
+    next();
+  } catch (err) {
+    console.error('[WC Mirror] Auth DB error:', err.message);
+    return res.status(500).json({ message: 'Error interno de autenticación.' });
   }
-
-  // Si el secreto que envía Dropi parece un JWT (tres segmentos), lo sincronizamos
-  // a app_settings para que el catálogo pueda usarlo sin intervención manual.
-  if (secret.split('.').length === 3) {
-    const { saveTokenToDB } = require('../integrations/dropi/dropiTokenService');
-    saveTokenToDB(secret).catch((e) =>
-      console.warn('[WC Mirror] No se pudo sincronizar token Dropi:', e.message)
-    );
-  }
-
-  next();
 }
 
 router.use(wooBasicAuth);
@@ -220,6 +212,7 @@ router.post('/products', async (req, res, next) => {
       images:         JSON.stringify(images),
       stock:          stockQty,
       categoryId:     wc.categories?.[0]?.id ?? 1,
+      businessId:     req.wooBusinessId,
       showShop:       wc.status === 'publish',
       isDeleted:      false,
       externalId,
@@ -234,6 +227,7 @@ router.post('/products', async (req, res, next) => {
 
     if (!created) {
       const updateFields = {
+        businessId: req.wooBusinessId,
         price,
         stock:      stockQty,
         image:      productData.image,
