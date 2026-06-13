@@ -54,23 +54,39 @@ function toFullImageUrl(raw) {
  * Normalized output: [{ option: 'Color', values: [{ label, image, stock }] }]
  */
 function extractVariants(p) {
-  const collections = p.collections ?? p.variants ?? p.product_variants ?? p.attributes ?? [];
-  if (!Array.isArray(collections) || collections.length === 0) return [];
+  // Dropi may store variants under different keys; pick the first that is a real array.
+  const candidates = [p.collections, p.variants, p.product_variants, p.attributes];
+  const collections = candidates.find(Array.isArray) ?? [];
+  if (collections.length === 0) return [];
 
   return collections
     .map((col) => {
+      if (!col || typeof col !== 'object') return null;
       const option = col.name ?? col.attribute ?? col.option ?? 'Variante';
-      const rawItems = col.items ?? col.options ?? col.values ?? [];
+
+      // Guard: items/options/values might be null, {}, a string, etc. — only use real arrays.
+      const rawItems = [col.items, col.options, col.values].find(Array.isArray) ?? [];
+
       const values = rawItems
-        .map((item) => ({
-          label: item.name ?? item.value ?? item.label ?? String(item),
-          image: toFullImageUrl(item.urlS3 ?? item.url ?? item.image ?? item.photo ?? null),
-          stock: item.stock != null ? parseInt(item.stock, 10) : null,
-        }))
-        .filter((v) => v.label);
+        .filter(Boolean) // skip null/undefined/0 entries inside the items list
+        .map((item) => {
+          if (item === null || item === undefined) return null;
+          const label = typeof item === 'object'
+            ? (item.name ?? item.value ?? item.label ?? String(item))
+            : String(item);
+          const image = typeof item === 'object'
+            ? toFullImageUrl(item.urlS3 ?? item.url ?? item.image ?? item.photo ?? null)
+            : null;
+          const stock = typeof item === 'object' && item.stock != null
+            ? parseInt(item.stock, 10)
+            : null;
+          return { label, image, stock };
+        })
+        .filter((v) => v?.label);
+
       return { option, values };
     })
-    .filter((g) => g.values.length > 0);
+    .filter((g) => g && g.values.length > 0);
 }
 
 // Normalizes Dropi v4 semantic-search product to a uniform shape.
@@ -92,24 +108,26 @@ function normalizeProduct(p) {
   const variants = extractVariants(p);
 
   // Technical detail blocks — these are the authoritative AI copy source.
-  // Dropi may store them in several field names depending on product type.
   const rawDetails = [
-    p.detail          ?? p.details          ?? '',
-    p.characteristics ?? p.caracteristicas  ?? '',
-    p.specifications  ?? p.especificaciones ?? '',
-    p.guarantee       ?? p.garantia         ?? p.warranty ?? '',
-  ].map((s) => (typeof s === 'string' ? s.trim() : '')).filter(Boolean).join('\n\n');
+    p.detail, p.details, p.characteristics, p.caracteristicas,
+    p.specifications, p.especificaciones, p.guarantee, p.garantia, p.warranty,
+  ]
+    .map((s) => (typeof s === 'string' ? s.trim() : ''))
+    .filter(Boolean)
+    .join('\n\n');
 
-  // Warehouse/bodega breakdown — gives merchants visibility on origin stock.
-  const warehouseRaw = p.warehouses ?? p.bodegas ?? p.locations ?? [];
-  const warehouses = Array.isArray(warehouseRaw)
-    ? warehouseRaw
-        .map((w) => ({
-          name:  w.name ?? w.nombre ?? w.bodega ?? w.warehouse ?? String(w),
-          stock: w.stock ?? w.quantity ?? w.cantidad ?? null,
-        }))
-        .filter((w) => w.name)
-    : [];
+  // Warehouse/bodega breakdown
+  const warehouseRaw = [p.warehouses, p.bodegas, p.locations].find(Array.isArray) ?? [];
+  const warehouses = warehouseRaw
+    .filter(Boolean)
+    .map((w) => {
+      if (!w || typeof w !== 'object') return { name: String(w), stock: null };
+      return {
+        name:  w.name ?? w.nombre ?? w.bodega ?? w.warehouse ?? '',
+        stock: w.stock ?? w.quantity ?? w.cantidad ?? null,
+      };
+    })
+    .filter((w) => w.name);
 
   return {
     externalId:  String(p.id ?? p.sku ?? ''),

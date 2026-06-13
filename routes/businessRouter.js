@@ -24,27 +24,41 @@ router.get(
   checkRoles('admin', 'business_owner'),
   async (req, res, next) => {
     try {
-      const { id } = req.params;
-      const { search, category, status, stock, page = 1, limit = 24 } = req.query;
+      const businessId = parseInt(req.params.id, 10);
+      if (!businessId || isNaN(businessId)) {
+        return res.status(400).json({ message: 'ID de negocio inválido.' });
+      }
 
-      const where = { businessId: Number(id), isDeleted: false };
-      if (search)            where.name       = { [Op.iLike]: `%${search}%` };
-      if (category)          where.categoryId = Number(category);
+      const { search, category, status, stock, page = 1, limit = 20 } = req.query;
+
+      // Strict isolation: ONLY this business's products, never a global dump.
+      const where = { businessId, isDeleted: false };
+
+      if (search) {
+        // Search by name OR SKU (externalId) so merchants can find Dropi imports by code.
+        where[Op.or] = [
+          { name:       { [Op.iLike]: `%${search}%` } },
+          { externalId: { [Op.iLike]: `%${search}%` } },
+        ];
+      }
+      if (category)            where.categoryId = parseInt(category, 10);
       if (status === 'active')   where.showShop = true;
       if (status === 'inactive') where.showShop = false;
-      if (stock === 'available') where.stock    = { [Op.gt]: 0 };
-      if (stock === 'out')       where.stock    = { [Op.or]: [{ [Op.lte]: 0 }, { [Op.is]: null }] };
+      // Correct Sequelize null-check syntax inside Op.or
+      if (stock === 'available') where.stock = { [Op.gt]: 0 };
+      if (stock === 'out')       where.stock = { [Op.or]: [{ [Op.lte]: 0 }, null] };
 
-      const pageNum  = Number(page);
-      const limitNum = Math.min(Number(limit), 100);
+      const pageNum  = Math.max(1, parseInt(page,  10) || 1);
+      const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
       const offset   = (pageNum - 1) * limitNum;
 
       const { count, rows } = await models.Product.findAndCountAll({
         where,
-        include: ['category'],
+        include: [{ association: 'category', required: false }],
         limit:   limitNum,
         offset,
         order:   [['id', 'DESC']],
+        subQuery: false,
       });
 
       res.json({
