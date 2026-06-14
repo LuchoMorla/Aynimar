@@ -568,31 +568,45 @@ async function searchDropiByImage({ imageBase64, page = 1, limit = 20 }) {
   form.append('with_collection',  'true');
   if (whiteBrandId) form.append('white_brand_id', String(whiteBrandId));
 
-  const { data } = await axios.post(
-    `${DROPI_API_BASE}/api/products/v4/index`,
-    form,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Origin:        'https://app.dropi.ec',
-        Referer:       'https://app.dropi.ec/dashboard/products',
-        'User-Agent':  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        ...form.getHeaders(), // sets Content-Type: multipart/form-data; boundary=...
-      },
-      timeout:          35000,
-      maxContentLength: 20 * 1024 * 1024,
+  try {
+    const { data } = await axios.post(
+      `${DROPI_API_BASE}/api/products/v4/index`,
+      form,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Origin:        'https://app.dropi.ec',
+          Referer:       'https://app.dropi.ec/dashboard/products',
+          'User-Agent':  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          ...form.getHeaders(), // sets Content-Type: multipart/form-data; boundary=...
+        },
+        timeout:          35000,
+        maxContentLength: 20 * 1024 * 1024,
+      }
+    );
+
+    if (data?.isSuccess === false) {
+      const err       = new Error(data.message ?? 'Dropi image-search falló (isSuccess=false)');
+      err.dropiStatus = data.status ?? 0;
+      throw err;
     }
-  );
 
-  if (data?.isSuccess === false) {
-    const err      = new Error(data.message ?? 'Dropi image-search error');
-    err.dropiStatus = data.status ?? 0;
-    throw err;
+    const { list, total } = extractList(data);
+    console.log(`[Dropi Image Search] ${list.length}/${total} resultados para búsqueda visual.`);
+    return { products: list.map(normalizeProduct).filter(Boolean), total, page };
+  } catch (axiosErr) {
+    // If the axios call failed with an HTTP response, enrich the error with Dropi's body.
+    if (axiosErr.response?.data && !axiosErr.dropiStatus) {
+      const dropiBody = axiosErr.response.data;
+      const enriched  = new Error(dropiBody.message ?? dropiBody.error ?? axiosErr.message);
+      enriched.dropiStatus = dropiBody.status ?? axiosErr.response.status;
+      enriched.response    = axiosErr.response;
+      console.error('[Dropi Image Search] Error HTTP:', enriched.dropiStatus, enriched.message);
+      throw enriched;
+    }
+    console.error('[Dropi Image Search] Error:', axiosErr.message);
+    throw axiosErr;
   }
-
-  const { list, total } = extractList(data);
-  console.log(`[Dropi Image Search] ${list.length}/${total} resultados para búsqueda visual.`);
-  return { products: list.map(normalizeProduct).filter(Boolean), total, page };
 }
 
 module.exports = { fetchDropiCatalog, fetchDropiProductById, searchDropiByImage, createOrderInDropi, fetchDropiOrderStatus };

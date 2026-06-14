@@ -225,21 +225,29 @@ router.get(
 // ── POST /api/v1/import/image-search ─────────────────────────────────────────
 // Receives { imageBase64, page, limit } — routes to Dropi's native image-similarity
 // search engine directly, no external services.
+// NOTE: errors are handled inline (not via next(error)) to guarantee that the CORS
+// headers set by app.use(cors()) survive in the error response.
 
 router.post(
   '/image-search',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'business_owner'),
-  async (req, res, next) => {
+  async (req, res) => {
     try {
-      const { imageBase64, page = 1, limit = 24 } = req.body;
+      const { imageBase64, page = 1, limit = 24 } = req.body ?? {};
       if (!imageBase64 || typeof imageBase64 !== 'string') {
         return res.status(400).json({ message: 'imageBase64 (string) requerido en el body.' });
       }
       const result = await searchByImage(imageBase64, { page: Number(page), limit: Number(limit) });
       return res.json(result);
-    } catch (error) {
-      next(error);
+    } catch (err) {
+      const httpStatus = err.dropiStatus ?? err.response?.status ?? null;
+      const message    = err.message ?? 'Error en la búsqueda por imagen.';
+      console.error('[/image-search] Error:', message, '| dropiStatus:', httpStatus);
+      if (httpStatus === 401 || httpStatus === 403) {
+        return res.status(503).json({ message: 'Token de Dropi expirado o inválido.', code: 'DROPI_TOKEN_EXPIRED' });
+      }
+      return res.status(500).json({ message });
     }
   }
 );
