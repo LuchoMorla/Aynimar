@@ -9,8 +9,9 @@ const { checkRoles }       = require('../middlewares/authHandler');
 const validatorHandler     = require('../middlewares/validatorHandler');
 const { importFromEffi, importSingleProduct, syncProductStock, syncAllStock } = require('../integrations/importService');
 const { fetchProductsFromEffi } = require('../integrations/effi/effiAdapter');
-const { fetchDropiCatalog, fetchDropiProductById, searchDropiByImage } = require('../integrations/dropi/dropiAdapter');
-const { generateProductCopy } = require('../integrations/aiCopyService');
+const { fetchDropiProductById }             = require('../integrations/dropi/dropiAdapter');
+const { searchByText, searchByAI, searchByImage } = require('../integrations/dropi/dropiSearchService');
+const { generateProductCopy }               = require('../integrations/aiCopyService');
 const { models }           = require('../libs/sequelize');
 
 const router = express.Router();
@@ -68,16 +69,22 @@ router.get(
       const keyword  = req.query.keyword ? String(req.query.keyword).trim() : '';
 
       if (provider === 'dropi') {
-        const priceMin = req.query.priceMin !== undefined ? Number(req.query.priceMin) : null;
-        const priceMax = req.query.priceMax !== undefined ? Number(req.query.priceMax) : null;
+        const priceMin    = req.query.priceMin    !== undefined ? Number(req.query.priceMin)    : null;
+        const priceMax    = req.query.priceMax    !== undefined ? Number(req.query.priceMax)    : null;
+        const categoryId  = req.query.categoryId  !== undefined ? Number(req.query.categoryId)  : null;
+        const searchMode  = req.query.mode ?? 'text'; // 'text' | 'ai'
 
-        const where = { sourceProvider: 'dropi', isDeleted: false };
+        // ── With keyword → query the LIVE Dropi catalog ─────────────────────
         if (keyword) {
-          where[Op.or] = [
-            { name:       { [Op.iLike]: `%${keyword}%` } },
-            { externalId: { [Op.iLike]: `%${keyword}%` } },
-          ];
+          const opts = { page, limit, categoryId, priceMin, priceMax };
+          const result = searchMode === 'ai'
+            ? await searchByAI(keyword, opts)
+            : await searchByText(keyword, opts);
+          return res.json(result);
         }
+
+        // ── No keyword → browse already-imported products from local DB ──────
+        const where = { sourceProvider: 'dropi', isDeleted: false };
         if (priceMin != null && !isNaN(priceMin)) where.price = { ...(where.price ?? {}), [Op.gte]: priceMin };
         if (priceMax != null && !isNaN(priceMax)) where.price = { ...(where.price ?? {}), [Op.lte]: priceMax };
 
@@ -206,7 +213,8 @@ router.get(
 );
 
 // ── POST /api/v1/import/image-search ─────────────────────────────────────────
-// Receives { imageBase64, page, limit } — proxies to Dropi image-similarity search.
+// Receives { imageBase64, page, limit } — routes to Dropi's native image-similarity
+// search engine directly, no external services.
 
 router.post(
   '/image-search',
@@ -214,11 +222,11 @@ router.post(
   checkRoles('admin', 'business_owner'),
   async (req, res, next) => {
     try {
-      const { imageBase64, page = 1, limit = 20 } = req.body;
+      const { imageBase64, page = 1, limit = 24 } = req.body;
       if (!imageBase64 || typeof imageBase64 !== 'string') {
         return res.status(400).json({ message: 'imageBase64 (string) requerido en el body.' });
       }
-      const result = await searchDropiByImage({ imageBase64, page: Number(page), limit: Number(limit) });
+      const result = await searchByImage(imageBase64, { page: Number(page), limit: Number(limit) });
       return res.json(result);
     } catch (error) {
       next(error);

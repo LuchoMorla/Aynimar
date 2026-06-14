@@ -131,4 +131,43 @@ Responde SOLO con el Markdown, sin texto adicional.`;
   }
 }
 
-module.exports = { generateProductCopy, optimizeProductCopy };
+/**
+ * Extracts 2–3 commercial search keywords from a natural-language user intent.
+ * Used exclusively by dropiSearchService.searchByAI.
+ *
+ * Same Anthropic key + axios pattern as the rest of this file.
+ * Returns the intent string unchanged when ANTHROPIC_API_KEY is absent or the call fails.
+ */
+async function extractSearchKeywords(userIntent) {
+  if (!process.env.ANTHROPIC_API_KEY) return userIntent;
+
+  try {
+    const { data } = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model:      'claude-haiku-4-5-20251001',
+        max_tokens: 60,
+        system:     'Eres un asistente de búsqueda para un catálogo de dropshipping latinoamericano. ' +
+                    'Extrae exactamente 2 a 3 palabras clave comerciales cortas para buscar el producto descrito. ' +
+                    'Responde SOLO con las palabras separadas por espacios, sin puntuación ni explicaciones.',
+        messages:   [{ role: 'user', content: `Intención de búsqueda: "${userIntent}"` }],
+      },
+      {
+        headers: {
+          'x-api-key':         process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'content-type':      'application/json',
+        },
+        timeout: 10000,
+      },
+    );
+    const keywords = data?.content?.[0]?.text?.trim() ?? userIntent;
+    console.log(`[AI Keywords] "${userIntent}" → "${keywords}"`);
+    return keywords;
+  } catch (err) {
+    console.warn(`[AI Keywords] falló — usando intent original: ${err.message}`);
+    return userIntent;
+  }
+}
+
+module.exports = { generateProductCopy, optimizeProductCopy, extractSearchKeywords };
