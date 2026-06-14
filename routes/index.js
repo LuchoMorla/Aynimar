@@ -24,6 +24,7 @@ const importRouter       = require('./importRouter');
 const reviewsRouter      = require('./reviewsRouter');
 const couponRouter       = require('./couponRouter');
 const woocommerceMirror  = require('./woocommerceMirror');
+const aiRouter           = require('./aiRouter');
 
 function routerApi(app) {
     app.use('/products', productosRouting);
@@ -54,6 +55,7 @@ function routerApi(app) {
     routerV1.use('/import',    importRouter);
     routerV1.use('/reviews',   reviewsRouter);
     routerV1.use('/coupons',   couponRouter);
+    routerV1.use('/ai',        aiRouter);
 
     // WooCommerce emulation layer — mounted at root level (not under /api/v1)
     // so Dropi can reach it at the standard WC path: /wp-json/wc/v3/

@@ -9,7 +9,7 @@ const { checkRoles }       = require('../middlewares/authHandler');
 const validatorHandler     = require('../middlewares/validatorHandler');
 const { importFromEffi, importSingleProduct, syncProductStock, syncAllStock } = require('../integrations/importService');
 const { fetchProductsFromEffi } = require('../integrations/effi/effiAdapter');
-const { fetchDropiCatalog, searchDropiByImage } = require('../integrations/dropi/dropiAdapter');
+const { fetchDropiCatalog, fetchDropiProductById, searchDropiByImage } = require('../integrations/dropi/dropiAdapter');
 const { generateProductCopy } = require('../integrations/aiCopyService');
 const { models }           = require('../libs/sequelize');
 
@@ -169,6 +169,28 @@ router.post(
       res.json({ message: 'Token de Dropi guardado en BD. El catálogo usará este token en la próxima petición.' });
     } catch (error) {
       next(error);
+    }
+  }
+);
+
+// ── GET /api/v1/import/dropi-preview/:productId ───────────────────────────────
+// Fetches a single Dropi product by ID and returns it normalized for preview.
+// Does NOT save to DB — the frontend calls POST /product to confirm the import.
+
+router.get(
+  '/dropi-preview/:productId',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  async (req, res, next) => {
+    try {
+      const { productId } = req.params;
+      if (!productId || !/^\d+$/.test(productId)) {
+        return res.status(400).json({ message: 'productId debe ser un número entero.' });
+      }
+      const product = await fetchDropiProductById(productId);
+      return res.json(product);
+    } catch (err) {
+      next(err);
     }
   }
 );

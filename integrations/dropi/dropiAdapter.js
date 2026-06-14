@@ -365,6 +365,77 @@ async function fetchDropiOrderStatus(dropiOrderId) {
   }
 }
 
+/**
+ * Fetches a single Dropi product by its numeric ID.
+ * Strategy: try GET /api/products/{id} first; fallback to keyword search filtered by ID.
+ * Routes through the Cloudflare Worker when DROPI_WORKER_URL is configured
+ * (Railway IPs are blocked by Dropi's WAF for direct calls).
+ */
+async function fetchDropiProductById(productId) {
+  const id = String(productId).trim();
+
+  if (process.env.DROPI_WORKER_URL && process.env.DROPI_WORKER_KEY) {
+    return _fetchByIdViaWorker(id);
+  }
+
+  // Direct call — works from non-datacenter IPs (local dev)
+  const client = await makeCatalogClient();
+
+  try {
+    const { data } = await client.get(`/api/products/${id}`);
+    const raw = data?.objects ?? data;
+    const product = Array.isArray(raw) ? raw[0] : raw;
+    if (product && (product.id || product.name)) {
+      const normalized = normalizeProduct(product);
+      if (normalized) return normalized;
+    }
+  } catch (err) {
+    if (err.response?.status !== 404) {
+      console.warn(`[Dropi] GET /api/products/${id} failed (${err.response?.status ?? err.message}) — falling back to keyword search`);
+    }
+  }
+
+  // Fallback: keyword search, match by exact ID
+  const body = buildCatalogPayload(1, 10, id, null, null, null);
+  const { data } = await client.post('/api/products/v4/index', body);
+  const { list } = extractList(data);
+  const match = list.find((p) => String(p.id) === id || String(p.sku) === id) ?? list[0];
+  if (!match) throw new Error(`Producto ${id} no encontrado en Dropi.`);
+  return normalizeProduct(match);
+}
+
+async function _fetchByIdViaWorker(id) {
+  const rawToken = await getToken();
+  const token = rawToken.startsWith('Bearer ') ? rawToken.slice(7) : rawToken;
+
+  // Try GET first via Worker
+  try {
+    const { data } = await axios.post(
+      process.env.DROPI_WORKER_URL,
+      { dropiToken: token, path: `/api/products/${id}`, method: 'GET', payload: {} },
+      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 20000 },
+    );
+    const raw = data?.objects ?? data;
+    const product = Array.isArray(raw) ? raw[0] : raw;
+    if (product && (product.id || product.name)) {
+      const normalized = normalizeProduct(product);
+      if (normalized) return normalized;
+    }
+  } catch { /* fall through to keyword search */ }
+
+  // Worker keyword-search fallback
+  const payload = buildCatalogPayload(1, 10, id, null, null, null);
+  const { data } = await axios.post(
+    process.env.DROPI_WORKER_URL,
+    { dropiToken: token, path: '/api/products/v4/index', method: 'POST', payload },
+    { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 20000 },
+  );
+  const { list } = extractList(data);
+  const match = list.find((p) => String(p.id) === id || String(p.sku) === id) ?? list[0];
+  if (!match) throw new Error(`Producto ${id} no encontrado en Dropi.`);
+  return normalizeProduct(match);
+}
+
 async function searchDropiByImage({ imageBase64, page = 1, limit = 20 }) {
   if (!process.env.DROPI_WORKER_URL || !process.env.DROPI_WORKER_KEY) {
     throw new Error('DROPI_WORKER_URL/KEY no configurados.');
@@ -403,4 +474,4 @@ async function searchDropiByImage({ imageBase64, page = 1, limit = 20 }) {
   return { products: list.map(normalizeProduct).filter(Boolean), total, page };
 }
 
-module.exports = { fetchDropiCatalog, searchDropiByImage, createOrderInDropi, fetchDropiOrderStatus };
+module.exports = { fetchDropiCatalog, fetchDropiProductById, searchDropiByImage, createOrderInDropi, fetchDropiOrderStatus };
