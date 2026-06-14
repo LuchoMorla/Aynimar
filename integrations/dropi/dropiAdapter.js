@@ -91,7 +91,19 @@ function extractVariants(p) {
 // Response: { isSuccess, objects: { products: [], total, filters } }
 function normalizeProduct(p) {
   if (!p || typeof p !== 'object') return null;
-  const gallery   = p.gallery ?? p.photos ?? p.images ?? [];
+
+  // Dropi uses different gallery field names depending on the endpoint:
+  //   catalog v4  → p.gallery  (array of { urlS3, url, main })
+  //   product/:id → p.photos, p.product_photos, p.multimedia, p.pictures
+  const gallery =
+    p.gallery ??
+    p.photos ??
+    p.product_photos ??
+    p.multimedia ??
+    p.pictures ??
+    p.images ??
+    [];
+
   const mainPhoto = gallery.find?.((g) => g.main) ?? gallery[0] ?? null;
   const rawImg    = mainPhoto?.urlS3 ?? mainPhoto?.url ?? mainPhoto?.src ?? p.image ?? null;
   const imageUrl  = toFullImageUrl(rawImg);
@@ -107,9 +119,24 @@ function normalizeProduct(p) {
   const variants = extractVariants(p);
 
   // Technical detail blocks — these are the authoritative AI copy source.
+  // Dropi product/:id uses different keys than the catalog endpoint.
   const rawDetails = [
-    p.detail, p.details, p.characteristics, p.caracteristicas,
-    p.specifications, p.especificaciones, p.guarantee, p.garantia, p.warranty,
+    p.detail,
+    p.details,
+    p.product_detail,
+    p.long_description,
+    p.characteristics,
+    p.caracteristicas,
+    p.caracteristicas_tecnicas,
+    p.specifications,
+    p.especificaciones,
+    p.features,
+    p.features_list,
+    p.ficha_tecnica,
+    p.technical_sheet,
+    p.guarantee,
+    p.garantia,
+    p.warranty,
   ]
     .map((s) => (typeof s === 'string' ? s.trim() : ''))
     .filter(Boolean)
@@ -380,6 +407,10 @@ async function _doFetchById(id) {
     const raw     = data?.objects ?? data;
     const product = Array.isArray(raw) ? raw[0] : raw;
     if (product && (product.id || product.name)) {
+      // DEBUG — log raw keys so we can verify gallery/detail field names from Dropi
+      console.log(`[Dropi DEBUG] raw keys for product ${id}:`, Object.keys(product).join(', '));
+      console.log(`[Dropi DEBUG] gallery candidate fields — gallery:${JSON.stringify(product.gallery)?.slice(0,120)} | photos:${JSON.stringify(product.photos)?.slice(0,120)} | product_photos:${JSON.stringify(product.product_photos)?.slice(0,80)}`);
+      console.log(`[Dropi DEBUG] detail candidate fields — detail:${String(product.detail ?? '').slice(0,120)} | details:${String(product.details ?? '').slice(0,120)} | long_description:${String(product.long_description ?? '').slice(0,120)} | characteristics:${String(product.characteristics ?? '').slice(0,120)}`);
       const normalized = normalizeProduct(product);
       if (normalized) return normalized;
     }
@@ -397,6 +428,10 @@ async function _doFetchById(id) {
   const { list } = extractList(data);
   const match = list.find((p) => String(p.id) === id || String(p.sku) === id) ?? list[0];
   if (!match) throw new Error(`Producto ${id} no encontrado en Dropi.`);
+  // DEBUG — same diagnostic for the keyword-search fallback path
+  console.log(`[Dropi DEBUG] keyword-fallback raw keys for product ${id}:`, Object.keys(match).join(', '));
+  console.log(`[Dropi DEBUG] gallery — gallery:${JSON.stringify(match.gallery)?.slice(0,120)} | photos:${JSON.stringify(match.photos)?.slice(0,120)}`);
+  console.log(`[Dropi DEBUG] detail — detail:${String(match.detail ?? '').slice(0,120)} | long_description:${String(match.long_description ?? '').slice(0,120)}`);
   return normalizeProduct(match);
 }
 
@@ -459,6 +494,10 @@ async function _fetchByIdViaWorker(id) {
     const raw = data?.objects ?? data;
     const product = Array.isArray(raw) ? raw[0] : raw;
     if (product && (product.id || product.name)) {
+      // DEBUG — log raw keys so we can see exact field names from Dropi product/:id
+      console.log(`[Dropi DEBUG Worker] raw keys for product ${id}:`, Object.keys(product).join(', '));
+      console.log(`[Dropi DEBUG Worker] gallery — gallery:${JSON.stringify(product.gallery)?.slice(0,120)} | photos:${JSON.stringify(product.photos)?.slice(0,120)} | product_photos:${JSON.stringify(product.product_photos)?.slice(0,80)}`);
+      console.log(`[Dropi DEBUG Worker] detail — detail:${String(product.detail ?? '').slice(0,120)} | long_description:${String(product.long_description ?? '').slice(0,120)} | characteristics:${String(product.characteristics ?? '').slice(0,120)}`);
       const normalized = normalizeProduct(product);
       if (normalized) return normalized;
     }
@@ -474,6 +513,9 @@ async function _fetchByIdViaWorker(id) {
   const { list } = extractList(data);
   const match = list.find((p) => String(p.id) === id || String(p.sku) === id) ?? list[0];
   if (!match) throw new Error(`Producto ${id} no encontrado en Dropi.`);
+  // DEBUG — keyword-search fallback via Worker
+  console.log(`[Dropi DEBUG Worker] keyword-fallback raw keys for product ${id}:`, Object.keys(match).join(', '));
+  console.log(`[Dropi DEBUG Worker] gallery — gallery:${JSON.stringify(match.gallery)?.slice(0,120)} | photos:${JSON.stringify(match.photos)?.slice(0,120)}`);
   return normalizeProduct(match);
 }
 
