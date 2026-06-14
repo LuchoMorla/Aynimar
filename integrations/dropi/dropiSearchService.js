@@ -1,7 +1,7 @@
 'use strict';
 
-const { fetchDropiCatalog } = require('./dropiAdapter');
-const { extractSearchKeywords } = require('../aiCopyService');
+const { fetchDropiCatalog, searchDropiByImage } = require('./dropiAdapter');
+const { extractSearchKeywords }                 = require('../aiCopyService');
 
 /**
  * SEARCH TYPE 1 — Clásica (texto / keywords)
@@ -19,10 +19,11 @@ async function searchByText(keyword, {
   priceMin      = null,
   priceMax      = null,
   userVerified  = false,
+  userPremium   = false,
 } = {}) {
   const kw = (keyword ?? '').trim();
   if (!kw) return { products: [], total: 0, page };
-  return fetchDropiCatalog({ page, limit, keyword: kw, categoryId, priceMin, priceMax, userVerified });
+  return fetchDropiCatalog({ page, limit, keyword: kw, categoryId, priceMin, priceMax, userVerified, userPremium });
 }
 
 /**
@@ -45,11 +46,21 @@ async function searchByAI(userIntent, options = {}) {
   return { ...result, extractedKeywords: keywords };
 }
 
-// Image search disabled — multipart/Buffer approach caused OOM on Railway.
-// Returns empty payload with disabled flag so the route can signal the client cleanly.
-// eslint-disable-next-line no-unused-vars
-async function searchByImage(imageBase64, opts = {}) {
-  return { products: [], total: 0, page: 1, disabled: true };
+/**
+ * SEARCH TYPE 3 — Búsqueda inversa por imagen (nativa Dropi)
+ *
+ * Envía el base64 de la imagen directamente al motor de búsqueda
+ * visual de Dropi (POST /api/products/v4/index con search_type:"image").
+ * Usa el mismo cliente HTTP con token + 2FA que ya maneja dropiAdapter.
+ * Sin procesamiento de IA, sin servicios externos.
+ *
+ * @param {string} imageBase64  — imagen en base64, con o sin prefijo data-URL
+ * @returns {{ products, total, page }}
+ */
+async function searchByImage(imageBase64, { page = 1, limit = 24 } = {}) {
+  // Strip data-URL prefix if the frontend sends "data:image/jpeg;base64,..."
+  const clean = imageBase64.replace(/^data:image\/[a-z+]+;base64,/i, '');
+  return searchDropiByImage({ imageBase64: clean, page, limit });
 }
 
 module.exports = { searchByText, searchByAI, searchByImage };

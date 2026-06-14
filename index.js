@@ -1,3 +1,9 @@
+// Catch unhandled promise rejections before they crash the process in Node 15+
+// (Sequelize pool events, DB reconnects, and background tasks can emit these)
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection] NOT crashing:', reason?.message ?? reason);
+});
+
 const expressModule = require('express');
 const routerApi = require('./routes');
 const cors = require('cors');

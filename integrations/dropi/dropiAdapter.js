@@ -1,6 +1,7 @@
 'use strict';
 
-const axios = require('axios');
+const axios    = require('axios');
+const FormData = require('form-data');
 const { getToken, invalidateToken, autoRefreshToken } = require('./dropiAuthService');
 
 const WOO_JWT        = process.env.WOO_CONSUMER_SECRET || '';
@@ -188,7 +189,7 @@ function extractList(raw) {
   return { list: [], total: 0 };
 }
 
-function buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax, userVerified = false) {
+function buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax, userVerified = false, userPremium = false) {
   // white_brand_id scopes results to the Ecuador dropshipping brand configured in Railway.
   // Without it, Dropi's semantic engine searches the global index and returns unrelated products.
   const whiteBrandId = Number(process.env.DROPI_WHITE_BRAND_ID) || null;
@@ -198,6 +199,7 @@ function buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMa
     startData:        (page - 1) * limit,
     privated_product: false,
     userVerified:     Boolean(userVerified),
+    premium:          Boolean(userPremium),
     favorite:         false,
     country:          'ECUADOR',
     get_stock:        true,
@@ -214,15 +216,15 @@ function buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMa
   return payload;
 }
 
-async function doFetch(page, limit, keyword, categoryId, priceMin, priceMax, userVerified = false) {
+async function doFetch(page, limit, keyword, categoryId, priceMin, priceMax, userVerified = false, userPremium = false) {
   // Route through Cloudflare Worker when configured (bypasses Dropi WAF that blocks Railway IPs)
   if (process.env.DROPI_WORKER_URL && process.env.DROPI_WORKER_KEY) {
-    return doFetchViaWorker(page, limit, keyword, categoryId, priceMin, priceMax, userVerified);
+    return doFetchViaWorker(page, limit, keyword, categoryId, priceMin, priceMax, userVerified, userPremium);
   }
 
   // Direct call — only works from non-datacenter IPs (local dev)
   const client = await makeCatalogClient();
-  const body   = buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax, userVerified);
+  const body   = buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax, userVerified, userPremium);
 
   const { data } = await client.post('/api/products/v4/index', body);
 
@@ -242,10 +244,10 @@ async function doFetch(page, limit, keyword, categoryId, priceMin, priceMax, use
   return { products, total };
 }
 
-async function doFetchViaWorker(page, limit, keyword, categoryId, priceMin, priceMax, userVerified = false) {
+async function doFetchViaWorker(page, limit, keyword, categoryId, priceMin, priceMax, userVerified = false, userPremium = false) {
   const rawToken = await getToken();
   const token = rawToken.startsWith('Bearer ') ? rawToken.slice(7) : rawToken;
-  const payload = buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax, userVerified);
+  const payload = buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax, userVerified, userPremium);
 
   const { data } = await axios.post(
     process.env.DROPI_WORKER_URL,
@@ -288,14 +290,14 @@ async function doFetchViaWorker(page, limit, keyword, categoryId, priceMin, pric
  *
  * On 401/403: invalidates cache → retries once with a fresh token.
  */
-async function fetchDropiCatalog({ page = 1, limit = 20, keyword = '', categoryId = null, priceMin = null, priceMax = null, userVerified = false } = {}) {
+async function fetchDropiCatalog({ page = 1, limit = 20, keyword = '', categoryId = null, priceMin = null, priceMax = null, userVerified = false, userPremium = false } = {}) {
   if (IS_MOCK) {
     console.warn('[Dropi] DROPI_MOCK=true — catálogo deshabilitado por flag explícita.');
     return { products: [], total: 0 };
   }
 
   try {
-    return await doFetch(page, limit, keyword, categoryId, priceMin, priceMax, userVerified);
+    return await doFetch(page, limit, keyword, categoryId, priceMin, priceMax, userVerified, userPremium);
   } catch (err) {
     // Sin token en BD ni en env-vars: respuesta vacía limpia, no 500.
     if (err.message?.includes('No hay token válido')) {
@@ -312,7 +314,7 @@ async function fetchDropiCatalog({ page = 1, limit = 20, keyword = '', categoryI
       console.warn('[Dropi] Token rechazado (403/401) — invalidando caché y reintentando...');
       invalidateToken();
       try {
-        return await doFetch(page, limit, keyword, categoryId, priceMin, priceMax, userVerified);
+        return await doFetch(page, limit, keyword, categoryId, priceMin, priceMax, userVerified, userPremium);
       } catch (retryErr) {
         const s2 = retryErr.response?.status ?? retryErr.dropiStatus;
         if (s2 === 401 || s2 === 403) {
@@ -525,12 +527,87 @@ async function _fetchByIdViaWorker(id) {
   return normalizeProduct(match);
 }
 
-// Image search via multipart/form-data caused OOM on Railway (large Buffer allocation
-// exhausted container RAM → process restart → in-memory token cache wiped → cascade 504s).
-// The feature is stubbed out until a Worker-proxied approach is designed.
-// eslint-disable-next-line no-unused-vars
-async function searchDropiByImage() {
-  return { products: [], total: 0, page: 1, disabled: true };
+/**
+ * Searches Dropi by visual similarity.
+ *
+ * Dropi's WAF blocks JSON logins from Railway IPs, but the product-search endpoints
+ * accept requests from any IP as long as the Bearer token is valid.
+ * We therefore send the image DIRECTLY to Dropi as multipart/form-data (binary),
+ * which is how their own browser client operates.
+ *
+ * The Worker path (large JSON base64 string) was rejected because:
+ *   a) Some Cloudflare WAF rules flag large JSON payloads with base64 blobs.
+ *   b) Dropi's image-search backend expects `Content-Type: multipart/form-data`,
+ *      not `application/json`.
+ *
+ * @param {string} imageBase64  — pure base64, NO data-URL prefix
+ */
+async function searchDropiByImage({ imageBase64, page = 1, limit = 20 }) {
+  const rawToken = await getToken();
+  const token    = rawToken.startsWith('Bearer ') ? rawToken.slice(7) : rawToken;
+  const whiteBrandId = Number(process.env.DROPI_WHITE_BRAND_ID) || null;
+
+  // Detect image format from magic bytes (JPEG: 0xFF 0xD8 / PNG: 0x89 0x50)
+  const buffer    = Buffer.from(imageBase64, 'base64');
+  const isJpeg    = buffer[0] === 0xff && buffer[1] === 0xd8;
+  const mediaType = isJpeg ? 'image/jpeg' : 'image/png';
+  const filename  = isJpeg ? 'search.jpg'  : 'search.png';
+
+  // Build multipart/form-data — mirrors the browser client exactly
+  const form = new FormData();
+  form.append('image',            buffer, { filename, contentType: mediaType });
+  form.append('pageSize',         String(limit));
+  form.append('startData',        String((page - 1) * limit));
+  form.append('privated_product', 'false');
+  form.append('userVerified',     'false');
+  form.append('favorite',         'false');
+  form.append('country',          'ECUADOR');
+  form.append('get_stock',        'true');
+  form.append('keywords',         '');
+  form.append('no_count',         'false');
+  form.append('search_type',      'image');
+  form.append('with_collection',  'true');
+  if (whiteBrandId) form.append('white_brand_id', String(whiteBrandId));
+
+  try {
+    const { data } = await axios.post(
+      `${DROPI_API_BASE}/api/products/v4/index`,
+      form,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Origin:        'https://app.dropi.ec',
+          Referer:       'https://app.dropi.ec/dashboard/products',
+          'User-Agent':  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          ...form.getHeaders(), // sets Content-Type: multipart/form-data; boundary=...
+        },
+        timeout:          35000,
+        maxContentLength: 20 * 1024 * 1024,
+      }
+    );
+
+    if (data?.isSuccess === false) {
+      const err       = new Error(data.message ?? 'Dropi image-search falló (isSuccess=false)');
+      err.dropiStatus = data.status ?? 0;
+      throw err;
+    }
+
+    const { list, total } = extractList(data);
+    console.log(`[Dropi Image Search] ${list.length}/${total} resultados para búsqueda visual.`);
+    return { products: list.map(normalizeProduct).filter(Boolean), total, page };
+  } catch (axiosErr) {
+    // If the axios call failed with an HTTP response, enrich the error with Dropi's body.
+    if (axiosErr.response?.data && !axiosErr.dropiStatus) {
+      const dropiBody = axiosErr.response.data;
+      const enriched  = new Error(dropiBody.message ?? dropiBody.error ?? axiosErr.message);
+      enriched.dropiStatus = dropiBody.status ?? axiosErr.response.status;
+      enriched.response    = axiosErr.response;
+      console.error('[Dropi Image Search] Error HTTP:', enriched.dropiStatus, enriched.message);
+      throw enriched;
+    }
+    console.error('[Dropi Image Search] Error:', axiosErr.message);
+    throw axiosErr;
+  }
 }
 
 module.exports = { fetchDropiCatalog, fetchDropiProductById, searchDropiByImage, createOrderInDropi, fetchDropiOrderStatus };

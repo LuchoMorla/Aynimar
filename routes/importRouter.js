@@ -10,7 +10,7 @@ const validatorHandler     = require('../middlewares/validatorHandler');
 const { importFromEffi, importSingleProduct, syncProductStock, syncAllStock } = require('../integrations/importService');
 const { fetchProductsFromEffi } = require('../integrations/effi/effiAdapter');
 const { fetchDropiProductById }             = require('../integrations/dropi/dropiAdapter');
-const { searchByText, searchByAI } = require('../integrations/dropi/dropiSearchService');
+const { searchByText, searchByAI, searchByImage } = require('../integrations/dropi/dropiSearchService');
 const { generateProductCopy }               = require('../integrations/aiCopyService');
 const { models }           = require('../libs/sequelize');
 
@@ -73,12 +73,13 @@ router.get(
         const priceMax    = req.query.priceMax    !== undefined ? Number(req.query.priceMax)    : null;
         const categoryId  = req.query.categoryId  !== undefined ? Number(req.query.categoryId)  : null;
         const userVerified = req.query.userVerified === 'true';
+        const userPremium  = req.query.userPremium  === 'true';
         const minStock     = req.query.minStock    !== undefined ? Number(req.query.minStock)    : null;
         const searchMode  = req.query.mode ?? 'text'; // 'text' | 'ai'
 
         // ── With keyword → query the LIVE Dropi catalog ─────────────────────
         if (keyword) {
-          const opts = { page, limit, categoryId, priceMin, priceMax, userVerified };
+          const opts = { page, limit, categoryId, priceMin, priceMax, userVerified, userPremium };
           let result = searchMode === 'ai'
             ? await searchByAI(keyword, opts)
             : await searchByText(keyword, opts);
@@ -222,20 +223,33 @@ router.get(
   }
 );
 
-// ── POST /api/v1/import/image-search — DESHABILITADO ────────────────────────
-// La búsqueda por imagen via multipart/Buffer causaba OOM en Railway (contenedor
-// reinicia → token en memoria se pierde → cascade 504). Retorna 501 de inmediato
-// sin consumir CPU, red ni memoria. Reactivar cuando se migre a Worker proxy.
+// ── POST /api/v1/import/image-search ─────────────────────────────────────────
+// Receives { imageBase64, page, limit } — routes to Dropi's native image-similarity
+// search engine directly, no external services.
+// NOTE: errors are handled inline (not via next(error)) to guarantee that the CORS
+// headers set by app.use(cors()) survive in the error response.
 
 router.post(
   '/image-search',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'business_owner'),
-  (req, res) => {
-    res.status(501).json({
-      message: 'Búsqueda por imagen temporalmente deshabilitada. Usa búsqueda clásica o Asistente IA.',
-      code:    'IMAGE_SEARCH_DISABLED',
-    });
+  async (req, res) => {
+    try {
+      const { imageBase64, page = 1, limit = 24 } = req.body ?? {};
+      if (!imageBase64 || typeof imageBase64 !== 'string') {
+        return res.status(400).json({ message: 'imageBase64 (string) requerido en el body.' });
+      }
+      const result = await searchByImage(imageBase64, { page: Number(page), limit: Number(limit) });
+      return res.json(result);
+    } catch (err) {
+      const httpStatus = err.dropiStatus ?? err.response?.status ?? null;
+      const message    = err.message ?? 'Error en la búsqueda por imagen.';
+      console.error('[/image-search] Error:', message, '| dropiStatus:', httpStatus);
+      if (httpStatus === 401 || httpStatus === 403) {
+        return res.status(503).json({ message: 'Token de Dropi expirado o inválido.', code: 'DROPI_TOKEN_EXPIRED' });
+      }
+      return res.status(500).json({ message });
+    }
   }
 );
 
