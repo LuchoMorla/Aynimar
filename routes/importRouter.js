@@ -72,14 +72,24 @@ router.get(
         const priceMin    = req.query.priceMin    !== undefined ? Number(req.query.priceMin)    : null;
         const priceMax    = req.query.priceMax    !== undefined ? Number(req.query.priceMax)    : null;
         const categoryId  = req.query.categoryId  !== undefined ? Number(req.query.categoryId)  : null;
+        const userVerified = req.query.userVerified === 'true';
+        const minStock     = req.query.minStock    !== undefined ? Number(req.query.minStock)    : null;
         const searchMode  = req.query.mode ?? 'text'; // 'text' | 'ai'
 
         // ── With keyword → query the LIVE Dropi catalog ─────────────────────
         if (keyword) {
-          const opts = { page, limit, categoryId, priceMin, priceMax };
-          const result = searchMode === 'ai'
+          const opts = { page, limit, categoryId, priceMin, priceMax, userVerified };
+          let result = searchMode === 'ai'
             ? await searchByAI(keyword, opts)
             : await searchByText(keyword, opts);
+
+          // Client-side stock filter applied after Dropi returns results
+          if (minStock != null && !isNaN(minStock) && minStock > 0) {
+            result = {
+              ...result,
+              products: result.products.filter((p) => p.stock == null || p.stock >= minStock),
+            };
+          }
           return res.json(result);
         }
 

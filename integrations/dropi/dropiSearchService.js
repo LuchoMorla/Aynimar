@@ -13,15 +13,16 @@ const { extractSearchKeywords }                 = require('../aiCopyService');
  * @returns {{ products, total, page }}
  */
 async function searchByText(keyword, {
-  page       = 1,
-  limit      = 24,
-  categoryId = null,
-  priceMin   = null,
-  priceMax   = null,
+  page          = 1,
+  limit         = 24,
+  categoryId    = null,
+  priceMin      = null,
+  priceMax      = null,
+  userVerified  = false,
 } = {}) {
   const kw = (keyword ?? '').trim();
   if (!kw) return { products: [], total: 0, page };
-  return fetchDropiCatalog({ page, limit, keyword: kw, categoryId, priceMin, priceMax });
+  return fetchDropiCatalog({ page, limit, keyword: kw, categoryId, priceMin, priceMax, userVerified });
 }
 
 /**

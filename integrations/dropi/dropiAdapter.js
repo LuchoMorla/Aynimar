@@ -189,7 +189,7 @@ function extractList(raw) {
   return { list: [], total: 0 };
 }
 
-function buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax) {
+function buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax, userVerified = false) {
   // white_brand_id scopes results to the Ecuador dropshipping brand configured in Railway.
   // Without it, Dropi's semantic engine searches the global index and returns unrelated products.
   const whiteBrandId = Number(process.env.DROPI_WHITE_BRAND_ID) || null;
@@ -198,7 +198,7 @@ function buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMa
     pageSize:         limit,
     startData:        (page - 1) * limit,
     privated_product: false,
-    userVerified:     false,
+    userVerified:     Boolean(userVerified),
     favorite:         false,
     country:          'ECUADOR',
     get_stock:        true,
@@ -215,15 +215,15 @@ function buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMa
   return payload;
 }
 
-async function doFetch(page, limit, keyword, categoryId, priceMin, priceMax) {
+async function doFetch(page, limit, keyword, categoryId, priceMin, priceMax, userVerified = false) {
   // Route through Cloudflare Worker when configured (bypasses Dropi WAF that blocks Railway IPs)
   if (process.env.DROPI_WORKER_URL && process.env.DROPI_WORKER_KEY) {
-    return doFetchViaWorker(page, limit, keyword, categoryId, priceMin, priceMax);
+    return doFetchViaWorker(page, limit, keyword, categoryId, priceMin, priceMax, userVerified);
   }
 
   // Direct call — only works from non-datacenter IPs (local dev)
   const client = await makeCatalogClient();
-  const body   = buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax);
+  const body   = buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax, userVerified);
 
   const { data } = await client.post('/api/products/v4/index', body);
 
@@ -243,10 +243,10 @@ async function doFetch(page, limit, keyword, categoryId, priceMin, priceMax) {
   return { products, total };
 }
 
-async function doFetchViaWorker(page, limit, keyword, categoryId, priceMin, priceMax) {
+async function doFetchViaWorker(page, limit, keyword, categoryId, priceMin, priceMax, userVerified = false) {
   const rawToken = await getToken();
   const token = rawToken.startsWith('Bearer ') ? rawToken.slice(7) : rawToken;
-  const payload = buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax);
+  const payload = buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax, userVerified);
 
   const { data } = await axios.post(
     process.env.DROPI_WORKER_URL,
@@ -289,14 +289,14 @@ async function doFetchViaWorker(page, limit, keyword, categoryId, priceMin, pric
  *
  * On 401/403: invalidates cache → retries once with a fresh token.
  */
-async function fetchDropiCatalog({ page = 1, limit = 20, keyword = '', categoryId = null, priceMin = null, priceMax = null } = {}) {
+async function fetchDropiCatalog({ page = 1, limit = 20, keyword = '', categoryId = null, priceMin = null, priceMax = null, userVerified = false } = {}) {
   if (IS_MOCK) {
     console.warn('[Dropi] DROPI_MOCK=true — catálogo deshabilitado por flag explícita.');
     return { products: [], total: 0 };
   }
 
   try {
-    return await doFetch(page, limit, keyword, categoryId, priceMin, priceMax);
+    return await doFetch(page, limit, keyword, categoryId, priceMin, priceMax, userVerified);
   } catch (err) {
     // Sin token en BD ni en env-vars: respuesta vacía limpia, no 500.
     if (err.message?.includes('No hay token válido')) {
@@ -313,7 +313,7 @@ async function fetchDropiCatalog({ page = 1, limit = 20, keyword = '', categoryI
       console.warn('[Dropi] Token rechazado (403/401) — invalidando caché y reintentando...');
       invalidateToken();
       try {
-        return await doFetch(page, limit, keyword, categoryId, priceMin, priceMax);
+        return await doFetch(page, limit, keyword, categoryId, priceMin, priceMax, userVerified);
       } catch (retryErr) {
         const s2 = retryErr.response?.status ?? retryErr.dropiStatus;
         if (s2 === 401 || s2 === 403) {
