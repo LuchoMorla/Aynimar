@@ -80,10 +80,12 @@ app.use(ormErrorHandler);
 app.use(boomErrorHandler);
 app.use(errorHandler);
 
-app.listen(puerto, () => {
-  console.log('Mi port is ' + puerto);
-  console.log(`listening at http://localhost:${puerto}`);
-  console.log(new Date());
-  /*     lo que es lo mismo que:
-        console.log("lestening at http://localhost:" + puerto) */
+const server = app.listen(puerto, '0.0.0.0', () => {
+  console.log(`[OK] Server listening on 0.0.0.0:${puerto}`);
+  console.log(`[OK] Start time: ${new Date().toISOString()}`);
+});
+
+server.on('error', (err) => {
+  console.error('[FATAL] Server failed to bind:', err.message);
+  process.exit(1);
 });
