@@ -296,13 +296,18 @@ async function fetchDropiCatalog({ page = 1, limit = 20, keyword = '', categoryI
     return { products: [], total: 0 };
   }
 
+  // All paths return a value — no throw ever escapes this function.
   try {
     return await doFetch(page, limit, keyword, categoryId, priceMin, priceMax, userVerified, userPremium);
   } catch (err) {
-    // Sin token en BD ni en env-vars: respuesta vacía limpia, no 500.
-    if (err.message?.includes('No hay token válido')) {
+    // Token ausente → respuesta vacía, no error.
+    if (
+      err.message?.includes('Sin token') ||
+      err.message?.includes('No hay token') ||
+      err.message?.includes('token de sesión')
+    ) {
       console.warn('[Dropi] Sin token activo. Renueva vía POST /api/v1/import/dropi-token.');
-      return { products: [], total: 0 };
+      return { products: [], total: 0, dropiError: 'NO_TOKEN' };
     }
 
     const httpStatus  = err.response?.status;
@@ -316,15 +321,17 @@ async function fetchDropiCatalog({ page = 1, limit = 20, keyword = '', categoryI
       try {
         return await doFetch(page, limit, keyword, categoryId, priceMin, priceMax, userVerified, userPremium);
       } catch (retryErr) {
+        // Retry también falló — atrapar todo, nunca relanzar.
         const s2 = retryErr.response?.status ?? retryErr.dropiStatus;
-        if (s2 === 401 || s2 === 403) {
-          throw new Error('Dropi denegó el acceso. Renueva DROPI_SESSION_TOKEN o verifica DROPI_USER_EMAIL+PASSWORD en Railway.');
-        }
-        throw retryErr;
+        const code = (s2 === 401 || s2 === 403) ? 'AUTH_DENIED' : 'RETRY_FAILED';
+        console.error(`[Dropi] Reintento fallido (${code}):`, retryErr.message);
+        return { products: [], total: 0, dropiError: code, message: retryErr.message };
       }
     }
 
-    throw err;
+    // Cualquier otro error (timeout, red, 5xx Dropi) — nunca relanzar.
+    console.error('[Dropi] fetchDropiCatalog error:', err.message);
+    return { products: [], total: 0, dropiError: 'FETCH_FAILED', message: err.message };
   }
 }
 

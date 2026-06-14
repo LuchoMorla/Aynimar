@@ -61,7 +61,8 @@ router.get(
   '/catalog',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'business_owner'),
-  async (req, res, next) => {
+  // NOTE: errors handled inline (not via next) to guarantee CORS headers survive.
+  async (req, res) => {
     try {
       const provider = String(req.query.provider ?? 'dropi');
       const page     = Number(req.query.page)    || 1;
@@ -83,6 +84,18 @@ router.get(
           let result = searchMode === 'ai'
             ? await searchByAI(keyword, opts)
             : await searchByText(keyword, opts);
+
+          // fetchDropiCatalog nunca lanza — pero si regresa dropiError, informar al cliente.
+          if (result.dropiError) {
+            const code = result.dropiError;
+            if (code === 'NO_TOKEN') {
+              return res.status(503).json({ error: 'Token de Dropi no configurado.', code });
+            }
+            if (code === 'AUTH_DENIED') {
+              return res.status(503).json({ error: 'Token de Dropi expirado o inválido.', code });
+            }
+            return res.status(500).json({ error: 'Error de comunicación con Dropi.', code, detail: result.message });
+          }
 
           // Client-side stock filter applied after Dropi returns results
           if (minStock != null && !isNaN(minStock) && minStock > 0) {
@@ -160,7 +173,8 @@ router.get(
 
       return res.status(400).json({ message: `Provider "${provider}" no soportado. Usa "dropi" o "effi".` });
     } catch (error) {
-      next(error);
+      console.error('[/catalog] Error inesperado:', error.message);
+      return res.status(500).json({ error: 'Error interno del servidor.', detail: error.message });
     }
   }
 );

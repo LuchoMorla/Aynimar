@@ -4,6 +4,12 @@ process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection] NOT crashing:', reason?.message ?? reason);
 });
 
+// Catch synchronous throws + EventEmitter 'error' events not handled by listeners
+// (pg pool emits 'error' events that without this handler crash the process)
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException] NOT crashing:', err?.message ?? err);
+});
+
 const expressModule = require('express');
 const routerApi = require('./routes');
 const cors = require('cors');
