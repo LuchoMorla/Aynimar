@@ -1,6 +1,7 @@
 'use strict';
 
-const axios = require('axios');
+const axios    = require('axios');
+const FormData = require('form-data');
 const { getToken, invalidateToken, autoRefreshToken } = require('./dropiAuthService');
 
 const WOO_JWT        = process.env.WOO_CONSUMER_SECRET || '';
@@ -189,6 +190,10 @@ function extractList(raw) {
 }
 
 function buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax) {
+  // white_brand_id scopes results to the Ecuador dropshipping brand configured in Railway.
+  // Without it, Dropi's semantic engine searches the global index and returns unrelated products.
+  const whiteBrandId = Number(process.env.DROPI_WHITE_BRAND_ID) || null;
+
   const payload = {
     pageSize:         limit,
     startData:        (page - 1) * limit,
@@ -202,9 +207,11 @@ function buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMa
     search_type:      'semantic',
     with_collection:  true,
   };
-  if (categoryId)              payload.categories_id = [Number(categoryId)];
-  if (priceMin != null)        payload.price_min     = Number(priceMin);
-  if (priceMax != null)        payload.price_max     = Number(priceMax);
+
+  if (whiteBrandId)            payload.white_brand_id = whiteBrandId;
+  if (categoryId)              payload.categories_id  = [Number(categoryId)];
+  if (priceMin != null)        payload.price_min      = Number(priceMin);
+  if (priceMax != null)        payload.price_max      = Number(priceMax);
   return payload;
 }
 
@@ -519,41 +526,72 @@ async function _fetchByIdViaWorker(id) {
   return normalizeProduct(match);
 }
 
+/**
+ * Searches Dropi by visual similarity.
+ *
+ * Dropi's WAF blocks JSON logins from Railway IPs, but the product-search endpoints
+ * accept requests from any IP as long as the Bearer token is valid.
+ * We therefore send the image DIRECTLY to Dropi as multipart/form-data (binary),
+ * which is how their own browser client operates.
+ *
+ * The Worker path (large JSON base64 string) was rejected because:
+ *   a) Some Cloudflare WAF rules flag large JSON payloads with base64 blobs.
+ *   b) Dropi's image-search backend expects `Content-Type: multipart/form-data`,
+ *      not `application/json`.
+ *
+ * @param {string} imageBase64  — pure base64, NO data-URL prefix
+ */
 async function searchDropiByImage({ imageBase64, page = 1, limit = 20 }) {
-  if (!process.env.DROPI_WORKER_URL || !process.env.DROPI_WORKER_KEY) {
-    throw new Error('DROPI_WORKER_URL/KEY no configurados.');
-  }
   const rawToken = await getToken();
-  const token = rawToken.startsWith('Bearer ') ? rawToken.slice(7) : rawToken;
+  const token    = rawToken.startsWith('Bearer ') ? rawToken.slice(7) : rawToken;
+  const whiteBrandId = Number(process.env.DROPI_WHITE_BRAND_ID) || null;
 
-  const payload = {
-    pageSize:         limit,
-    startData:        (page - 1) * limit,
-    privated_product: false,
-    userVerified:     false,
-    favorite:         false,
-    country:          'ECUADOR',
-    get_stock:        true,
-    keywords:         '',
-    no_count:         false,
-    search_type:      'image',
-    with_collection:  true,
-    image_base64:     imageBase64,
-  };
+  // Detect image format from magic bytes (JPEG: 0xFF 0xD8 / PNG: 0x89 0x50)
+  const buffer    = Buffer.from(imageBase64, 'base64');
+  const isJpeg    = buffer[0] === 0xff && buffer[1] === 0xd8;
+  const mediaType = isJpeg ? 'image/jpeg' : 'image/png';
+  const filename  = isJpeg ? 'search.jpg'  : 'search.png';
+
+  // Build multipart/form-data — mirrors the browser client exactly
+  const form = new FormData();
+  form.append('image',            buffer, { filename, contentType: mediaType });
+  form.append('pageSize',         String(limit));
+  form.append('startData',        String((page - 1) * limit));
+  form.append('privated_product', 'false');
+  form.append('userVerified',     'false');
+  form.append('favorite',         'false');
+  form.append('country',          'ECUADOR');
+  form.append('get_stock',        'true');
+  form.append('keywords',         '');
+  form.append('no_count',         'false');
+  form.append('search_type',      'image');
+  form.append('with_collection',  'true');
+  if (whiteBrandId) form.append('white_brand_id', String(whiteBrandId));
 
   const { data } = await axios.post(
-    process.env.DROPI_WORKER_URL,
-    { dropiToken: token, path: '/api/products/v4/index', method: 'POST', payload },
-    { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 30000 }
+    `${DROPI_API_BASE}/api/products/v4/index`,
+    form,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Origin:        'https://app.dropi.ec',
+        Referer:       'https://app.dropi.ec/dashboard/products',
+        'User-Agent':  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ...form.getHeaders(), // sets Content-Type: multipart/form-data; boundary=...
+      },
+      timeout:          35000,
+      maxContentLength: 20 * 1024 * 1024,
+    }
   );
 
   if (data?.isSuccess === false) {
-    const err = new Error(data.message ?? 'Dropi image-search error');
+    const err      = new Error(data.message ?? 'Dropi image-search error');
     err.dropiStatus = data.status ?? 0;
     throw err;
   }
 
   const { list, total } = extractList(data);
+  console.log(`[Dropi Image Search] ${list.length}/${total} resultados para búsqueda visual.`);
   return { products: list.map(normalizeProduct).filter(Boolean), total, page };
 }
 
