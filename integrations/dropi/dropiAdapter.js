@@ -1,7 +1,7 @@
 'use strict';
 
 const axios = require('axios');
-const { getToken, invalidateToken } = require('./dropiAuthService');
+const { getToken, invalidateToken, autoRefreshToken } = require('./dropiAuthService');
 
 const WOO_JWT        = process.env.WOO_CONSUMER_SECRET || '';
 const DROPI_API_BASE = process.env.DROPI_API_URL       || 'https://api.dropi.ec';
@@ -366,10 +366,49 @@ async function fetchDropiOrderStatus(dropiOrderId) {
 }
 
 /**
- * Fetches a single Dropi product by its numeric ID.
- * Strategy: try GET /api/products/{id} first; fallback to keyword search filtered by ID.
- * Routes through the Cloudflare Worker when DROPI_WORKER_URL is configured
- * (Railway IPs are blocked by Dropi's WAF for direct calls).
+ * Core fetch-by-ID logic (no retry). Used by fetchDropiProductById.
+ * Strategy 1: GET /api/products/{id} (fast, may return 404 for some products)
+ * Strategy 2: POST /api/products/v4/index keyword search, match by exact id/sku
+ * Propagates 401/403 so the caller can attempt auto-refresh before retrying.
+ */
+async function _doFetchById(id) {
+  const client = await makeCatalogClient();
+
+  // Strategy 1: direct endpoint
+  try {
+    const { data } = await client.get(`/api/products/${id}`);
+    const raw     = data?.objects ?? data;
+    const product = Array.isArray(raw) ? raw[0] : raw;
+    if (product && (product.id || product.name)) {
+      const normalized = normalizeProduct(product);
+      if (normalized) return normalized;
+    }
+  } catch (err) {
+    const status = err.response?.status;
+    if (status === 401 || status === 403) throw err; // propagate auth errors — caller retries
+    if (status !== 404) {
+      console.warn(`[Dropi] GET /api/products/${id} failed (${status ?? err.message}) — falling back to keyword search`);
+    }
+  }
+
+  // Strategy 2: keyword search fallback
+  const body = buildCatalogPayload(1, 10, id, null, null, null);
+  const { data } = await client.post('/api/products/v4/index', body); // throws on 401 — propagated
+  const { list } = extractList(data);
+  const match = list.find((p) => String(p.id) === id || String(p.sku) === id) ?? list[0];
+  if (!match) throw new Error(`Producto ${id} no encontrado en Dropi.`);
+  return normalizeProduct(match);
+}
+
+/**
+ * Fetches a single Dropi product by its numeric ID with automatic token refresh.
+ *
+ * Flow:
+ *   1. [Dropi Auth] Intentando conectar con token existente...
+ *   2. On 401 → [Dropi Auth] Error 401 detectado. Renovando token en Dropi Ecuador...
+ *   3. autoRefreshToken() → login with DROPI_EMAIL+PASSWORD → save to DB
+ *   4. [Dropi Auth] Token renovado con éxito. Reintentando búsqueda de ID: {id}
+ *   5. Returns product or throws DROPI_TOKEN_EXPIRED if refresh also fails.
  */
 async function fetchDropiProductById(productId) {
   const id = String(productId).trim();
@@ -378,30 +417,32 @@ async function fetchDropiProductById(productId) {
     return _fetchByIdViaWorker(id);
   }
 
-  // Direct call — works from non-datacenter IPs (local dev)
-  const client = await makeCatalogClient();
+  console.log(`[Dropi Auth] Intentando conectar con token existente para producto ${id}...`);
 
   try {
-    const { data } = await client.get(`/api/products/${id}`);
-    const raw = data?.objects ?? data;
-    const product = Array.isArray(raw) ? raw[0] : raw;
-    if (product && (product.id || product.name)) {
-      const normalized = normalizeProduct(product);
-      if (normalized) return normalized;
-    }
+    return await _doFetchById(id);
   } catch (err) {
-    if (err.response?.status !== 404) {
-      console.warn(`[Dropi] GET /api/products/${id} failed (${err.response?.status ?? err.message}) — falling back to keyword search`);
+    const status = err.response?.status;
+    if (status !== 401 && status !== 403) throw err; // non-auth error — propagate as-is
+
+    console.log('[Dropi Auth] Error 401 detectado. Renovando token en Dropi Ecuador...');
+    invalidateToken();
+
+    try {
+      await autoRefreshToken();
+      console.log(`[Dropi Auth] Token renovado con éxito. Reintentando búsqueda de ID: ${id}`);
+      return await _doFetchById(id);
+    } catch (refreshErr) {
+      console.warn('[Dropi Auth] Auto-renovación fallida:', refreshErr.message);
+      const message = refreshErr.message.includes('credenciales') || refreshErr.message.includes('Sin credenciales')
+        ? 'Token de Dropi expirado y no hay credenciales configuradas. ' +
+          'Configura DROPI_EMAIL + DROPI_PASSWORD en Railway, o actualiza el token manualmente desde el importador.'
+        : 'Token de Dropi expirado. Actualiza el token manualmente desde el importador.';
+      const e = new Error(message);
+      e.code = 'DROPI_TOKEN_EXPIRED';
+      throw e;
     }
   }
-
-  // Fallback: keyword search, match by exact ID
-  const body = buildCatalogPayload(1, 10, id, null, null, null);
-  const { data } = await client.post('/api/products/v4/index', body);
-  const { list } = extractList(data);
-  const match = list.find((p) => String(p.id) === id || String(p.sku) === id) ?? list[0];
-  if (!match) throw new Error(`Producto ${id} no encontrado en Dropi.`);
-  return normalizeProduct(match);
 }
 
 async function _fetchByIdViaWorker(id) {

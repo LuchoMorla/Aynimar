@@ -190,6 +190,16 @@ router.get(
       const product = await fetchDropiProductById(productId);
       return res.json(product);
     } catch (err) {
+      if (
+        err.code === 'DROPI_TOKEN_EXPIRED' ||
+        err.message?.includes('Sin token') ||
+        err.message?.includes('token de sesión')
+      ) {
+        return res.status(503).json({
+          message: 'Token de Dropi expirado o no configurado.',
+          code: 'DROPI_TOKEN_EXPIRED',
+        });
+      }
       next(err);
     }
   }

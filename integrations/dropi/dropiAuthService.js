@@ -1,6 +1,7 @@
 'use strict';
 
-const { getTokenFromDB } = require('./dropiTokenService');
+const axios = require('axios');
+const { getTokenFromDB, saveTokenToDB } = require('./dropiTokenService');
 
 let _cachedToken    = process.env.DROPI_SESSION_TOKEN || '';
 let _tokenExpiresAt = _cachedToken ? parseExp(_cachedToken) : 0;
@@ -30,20 +31,20 @@ async function getToken() {
   try {
     const dbToken = await getTokenFromDB();
     if (dbToken && !isExpired(dbToken)) {
-      console.log('[Dropi] Token cargado desde BD.');
+      console.log('[Dropi Auth] Token cargado desde BD.');
       _cachedToken    = dbToken;
       _tokenExpiresAt = parseExp(dbToken);
       return _cachedToken;
     }
-    if (dbToken) console.log('[Dropi] Token en BD expirado — buscando alternativa...');
+    if (dbToken) console.log('[Dropi Auth] Token en BD expirado — buscando alternativa...');
   } catch (dbErr) {
-    console.warn('[Dropi] No se pudo leer token de BD:', dbErr.message);
+    console.warn('[Dropi Auth] No se pudo leer token de BD:', dbErr.message);
   }
 
   // 3. Env var estática de respaldo
   const staticToken = process.env.DROPI_SESSION_TOKEN || '';
   if (staticToken) {
-    console.warn('[Dropi] Usando DROPI_SESSION_TOKEN de entorno (puede estar expirado).');
+    console.warn('[Dropi Auth] Usando DROPI_SESSION_TOKEN de entorno (puede estar expirado).');
     _cachedToken = staticToken;
     return _cachedToken;
   }
@@ -56,4 +57,67 @@ function invalidateToken() {
   _tokenExpiresAt = 0;
 }
 
-module.exports = { getToken, invalidateToken };
+/**
+ * Attempts to re-authenticate with Dropi using stored credentials.
+ * Reads DROPI_EMAIL + DROPI_PASSWORD + DROPI_WHITE_BRAND_ID from env vars.
+ * Routes through the Cloudflare Worker if DROPI_WORKER_URL is set (needed from Railway).
+ * On success: saves fresh token to DB and updates in-memory cache.
+ */
+async function autoRefreshToken() {
+  const email   = process.env.DROPI_EMAIL;
+  const password = process.env.DROPI_PASSWORD;
+  const brandId = Number(process.env.DROPI_WHITE_BRAND_ID) || 8;
+
+  if (!email || !password) {
+    throw new Error(
+      'Sin credenciales para auto-login. ' +
+      'Configura DROPI_EMAIL y DROPI_PASSWORD en Railway, o actualiza el token manualmente.'
+    );
+  }
+
+  const loginPayload = { email, password, white_brand_id: brandId };
+  let newToken;
+
+  if (process.env.DROPI_WORKER_URL && process.env.DROPI_WORKER_KEY) {
+    // Route through Worker to bypass Cloudflare WAF blocking Railway IPs
+    const { data } = await axios.post(
+      process.env.DROPI_WORKER_URL,
+      {
+        dropiToken: '',
+        path:       '/api/users/login',
+        method:     'POST',
+        payload:    loginPayload,
+      },
+      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 20000 }
+    );
+    newToken = data?.token ?? data?.access_token ?? data?.data?.token ?? null;
+  } else {
+    // Direct call — may be blocked by Cloudflare from Railway datacenter IPs
+    const { data } = await axios.post(
+      `${process.env.DROPI_API_URL || 'https://api.dropi.ec'}/api/users/login`,
+      loginPayload,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Origin':       'https://app.dropi.ec',
+          'Referer':      'https://app.dropi.ec/login',
+          'User-Agent':   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+        timeout: 15000,
+      }
+    );
+    newToken = data?.token ?? data?.access_token ?? data?.data?.token ?? null;
+  }
+
+  if (!newToken) {
+    throw new Error('Login a Dropi respondió OK pero no retornó token. Verifica las credenciales.');
+  }
+
+  await saveTokenToDB(newToken);
+  _cachedToken    = newToken;
+  _tokenExpiresAt = parseExp(newToken);
+  console.log('[Dropi Auth] Token renovado y guardado en BD exitosamente.');
+  return _cachedToken;
+}
+
+module.exports = { getToken, invalidateToken, autoRefreshToken };
