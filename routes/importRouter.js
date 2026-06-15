@@ -205,6 +205,49 @@ router.post(
   }
 );
 
+// ── GET /api/v1/import/prepare?productId=xxx ─────────────────────────────────
+// Pre-import staging: fetch full Dropi product details for admin review/edit.
+// Returns rawDetails + imagesArray explicitly so the admin can edit or send to AI
+// before committing to the local DB via POST /product.
+// Errors handled inline — CORS headers guaranteed.
+
+router.get(
+  '/prepare',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  async (req, res) => {
+    const { productId } = req.query;
+    if (!productId || !/^\d+$/.test(String(productId))) {
+      return res.status(400).json({ message: 'Query param productId (entero) requerido.' });
+    }
+    try {
+      const p = await fetchDropiProductById(productId);
+      return res.json({
+        status:  'ready_for_review',
+        product: {
+          externalId:  p.externalId,
+          title:       p.title,
+          description: p.description,
+          rawDetails:  p.rawDetails,   // texto técnico crudo → fuente primaria de IA
+          image:       p.image,
+          imagesArray: p.imagesArray,
+          variants:    p.variants,
+          price:       p.price,
+          retailPrice: p.retailPrice,
+          stock:       p.stock,
+          sku:         p.sku,
+        },
+      });
+    } catch (err) {
+      if (err.code === 'DROPI_TOKEN_EXPIRED' || err.message?.includes('Sin token') || err.message?.includes('token de sesión')) {
+        return res.status(503).json({ message: 'Token de Dropi expirado o no configurado.', code: 'DROPI_TOKEN_EXPIRED' });
+      }
+      console.error('[/prepare] Error:', err.message);
+      return res.status(500).json({ message: err.message ?? 'Error al obtener producto de Dropi.' });
+    }
+  }
+);
+
 // ── GET /api/v1/import/dropi-preview/:productId ───────────────────────────────
 // Fetches a single Dropi product by ID and returns it normalized for preview.
 // Does NOT save to DB — the frontend calls POST /product to confirm the import.
