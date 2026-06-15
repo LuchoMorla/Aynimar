@@ -311,6 +311,32 @@ router.post(
   }
 );
 
+// ── PATCH /api/v1/import/product/:productId/publish ──────────────────────────
+// Sets showShop:true on a draft product, making it visible in the store.
+
+router.patch(
+  '/product/:productId/publish',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  async (req, res) => {
+    const { productId } = req.params;
+    if (!productId || !/^\d+$/.test(productId)) {
+      return res.status(400).json({ message: 'productId debe ser un número entero.' });
+    }
+    const [updated] = await models.Product.update(
+      { showShop: true },
+      { where: { id: Number(productId) } },
+    ).catch((err) => {
+      console.error('[/publish] DB error:', err.message);
+      return [0];
+    });
+    if (!updated) {
+      return res.status(404).json({ message: `Producto ${productId} no encontrado.` });
+    }
+    return res.json({ productId: Number(productId), showShop: true });
+  }
+);
+
 // ── POST /api/v1/import/product (dropi) ──────────────────────────────────────
 // Upserts a Dropi product into the local DB and assigns it to a business.
 // If the product already exists (synced via WooCommerce), just updates it.
