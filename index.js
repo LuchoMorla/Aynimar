@@ -11,6 +11,8 @@ process.on('uncaughtException', (err) => {
 });
 
 const expressModule = require('express');
+// Bootstrap BullMQ cart-recovery worker — starts listening for delayed jobs
+require('./workers/cartRecoveryWorker');
 const routerApi = require('./routes');
 const cors = require('cors');
 const { checkApiKey } = require('./middlewares/authHandler');

@@ -42,6 +42,7 @@ const addItemGuestSchema = Joi.object({
   orderId: orderId.required(),
   productId: productId.required(),
   amount: amount.required(),
+  guestEmail: Joi.string().email().optional(),
 });
 
 // ACTUALIZAR ESTE SCHEMA - cambiar stateOrder por state_order y agregar payment_method

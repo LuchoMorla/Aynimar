@@ -8,7 +8,10 @@ const { createOrderInEffi }  = require('../integrations/effi/effiAdapter');
 
 const { config } = require('./../config/config');
 // const nodemailer = require('nodemailer');
-const sendMail = require('../utils/sendMail')
+const sendMail = require('../utils/sendMail');
+const { cartRecoveryQueue } = require('../libs/cartRecoveryQueue');
+
+const CART_RECOVERY_DELAY_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 
 class OrderService {
@@ -28,25 +31,26 @@ class OrderService {
   }
 
    // 1. MÉTODO PARA CREAR ORDEN DE INVITADO (nuevo)
-  async createGuestOrder() {
+  async createGuestOrder(guestEmail) {
     const newGuestOrder = await models.Order.create({});
 
-    // ─── ABANDONED CART EMAIL HOOK ────────────────────────────────────────────
-    // Conectar aquí el servicio de recuperación de carrito abandonado.
-    // Disparar X horas después de la creación si la orden sigue en estado NULL
-    // (sin customerId y sin transición a 'pendiente_envio' o 'comprada').
-    //
-    // Proveedor sugerido: Resend (resend.com) o SendGrid
-    // Implementación recomendada:
-    //   1. Encolar un job diferido con Bull/BullMQ:
-    //      cartRecoveryQueue.add({ orderId: newGuestOrder.id }, { delay: 2 * 60 * 60 * 1000 }); // 2h
-    //   2. El worker valida que la orden siga abandonada antes de enviar.
-    //   3. Si el usuario completó la compra, el worker cancela el job silenciosamente.
-    //
-    // Ejemplo de payload de email:
-    //   { to: customer.email, subject: '¿Olvidaste algo? Tu carrito te espera 🦦',
-    //     templateId: 'abandoned-cart-v1', orderId: newGuestOrder.id }
-    // ─────────────────────────────────────────────────────────────────────────
+    // Enqueue the abandoned-cart recovery job with a 2-hour delay.
+    // The worker will verify the order is still in 'carrito' state before sending.
+    try {
+      await cartRecoveryQueue.add(
+        'recover-cart',
+        { orderId: newGuestOrder.id, guestEmail: guestEmail || null },
+        {
+          delay: CART_RECOVERY_DELAY_MS,
+          jobId: `cart-${newGuestOrder.id}`,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 60000 },
+        }
+      );
+    } catch (queueErr) {
+      // Non-fatal: email recovery failing must not block order creation
+      console.error('[CartRecovery] Failed to enqueue job:', queueErr.message);
+    }
 
     return newGuestOrder;
   }
@@ -63,13 +67,29 @@ class OrderService {
     }
     const newItem = await models.OrderProduct.create(data);
 
-    // ─── ABANDONED CART EMAIL HOOK (item añadido) ─────────────────────────────
-    // Una vez el primer ítem se agrega, el carrito es recuperable.
-    // Si se implementa el job diferido arriba, aquí se puede re-encolar
-    // con un delay renovado para reiniciar el contador de inactividad:
-    //   cartRecoveryQueue.add({ orderId: data.orderId }, { delay: 2 * 60 * 60 * 1000, jobId: `cart-${data.orderId}` });
-    // El jobId idempotente garantiza que no se dupliquen jobs por el mismo carrito.
-    // ─────────────────────────────────────────────────────────────────────────
+    // Reset the 2-hour countdown each time an item is added (idempotent via jobId).
+    // If guestEmail is now available, update it in the new job payload.
+    try {
+      const jobId = `cart-${data.orderId}`;
+      const existing = await cartRecoveryQueue.getJob(jobId);
+      if (existing) await existing.remove();
+
+      await cartRecoveryQueue.add(
+        'recover-cart',
+        {
+          orderId: data.orderId,
+          guestEmail: data.guestEmail || (existing?.data?.guestEmail) || null,
+        },
+        {
+          delay: CART_RECOVERY_DELAY_MS,
+          jobId,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 60000 },
+        }
+      );
+    } catch (queueErr) {
+      console.error('[CartRecovery] Failed to re-enqueue job:', queueErr.message);
+    }
 
     return newItem;
   }

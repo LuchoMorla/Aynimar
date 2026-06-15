@@ -65,7 +65,8 @@ router.post(
   '/guest-order',
   async (req, res, next) => {
     try {
-      const newOrder = await service.createGuestOrder();
+      const guestEmail = req.body?.guestEmail || null;
+      const newOrder = await service.createGuestOrder(guestEmail);
       res.status(201).json(newOrder);
     } catch (error) {
       next(error);

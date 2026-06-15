@@ -22,6 +22,10 @@ const config = {
   accessToken: process.env.ACCESS_TOKEN,
   refreshToken: process.env.REFRESH_TOKEN,
   proposalEmailRmail: process.env.PROPOSAL_EMAIL_RMAIL,
+  resendApiKey: process.env.RESEND_API_KEY,
+  redisUrl: process.env.REDIS_URL,
+  redisHost: process.env.REDIS_HOST,
+  redisPort: process.env.REDIS_PORT,
 };
 
 module.exports = { config };
