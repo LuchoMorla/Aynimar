@@ -100,6 +100,11 @@ const ProductSchema = {
     allowNull: true,
     type: DataTypes.TEXT,
   },
+  dropiProductId: {
+    field: 'dropi_product_id',
+    allowNull: true,
+    type: DataTypes.STRING,
+  },
 };
 
 class Product extends Model {

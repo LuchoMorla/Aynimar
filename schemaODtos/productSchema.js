@@ -15,10 +15,11 @@ const stock = Joi.number().integer().allow(null);
 const showShop = Joi.boolean();
 
 // Dropshipping sync fields — all optional, set by importService
-const externalId     = Joi.string().allow(null);
+const externalId     = Joi.string().allow(null, '');
 const sourceProvider = Joi.string().valid('dropi', 'effi').allow(null);
 const lastSyncAt     = Joi.date().allow(null);
-const images         = Joi.string().allow(null); // JSON-stringified array
+const images         = Joi.string().allow(null, ''); // JSON-stringified array of image URLs
+const dropiProductId = Joi.string().allow(null, ''); // Dropi product ID for internal organization
 
 //recibiremos un limit y un offset
 const limit = Joi.number().integer();
@@ -29,15 +30,17 @@ const price_min = Joi.number().integer();
 const price_max = Joi.number().integer();
 
 const createProductSchema = Joi.object({
-  name: name.required(),
-  price: price.required(),
-  description: description.required(),
-  image: image.required(),
-  categoryId: categoryId.required(),
-  businessId: businnesId,
-  isDeleted: isDeleted,
-  stock: stock,
-  showShop: showShop,
+  name:          name.required(),
+  price:         price.required(),
+  description:   description.required(),
+  image:         image.required(),
+  categoryId:    categoryId.required(),
+  businessId:    businnesId,
+  isDeleted:     isDeleted,
+  stock:         stock,
+  showShop:      showShop,
+  images,
+  dropiProductId,
 });
 
 const updateProductSchema = Joi.object({
@@ -54,6 +57,7 @@ const updateProductSchema = Joi.object({
   sourceProvider,
   lastSyncAt,
   images,
+  dropiProductId,
 });
 
 const getProductSchema = Joi.object({
