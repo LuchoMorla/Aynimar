@@ -7,6 +7,40 @@ const { optimizeProductCopy } = require('../integrations/aiCopyService');
 
 const router = express.Router();
 
+// ── Ollama URL resolver ───────────────────────────────────────────────────────
+// Reads from OLLAMA_URL first, then fallback aliases, then any key that
+// contains "OLLAMA" in its name. Trims whitespace and trailing slashes so
+// values pasted into Railway's UI don't produce double-slash URLs.
+const OLLAMA_URL_ALIASES = ['OLLAMA_URL', 'OLLAMA_HOST', 'NEXT_PUBLIC_OLLAMA_URL'];
+
+function resolveOllamaUrl() {
+  for (const key of OLLAMA_URL_ALIASES) {
+    const raw = process.env[key];
+    if (raw && raw.trim()) {
+      return raw.trim().replace(/\/+$/, '');
+    }
+  }
+  // Last-resort scan: any env key containing "OLLAMA" that looks like a URL
+  const fallbackKey = Object.keys(process.env).find(
+    (k) =>
+      k.toUpperCase().includes('OLLAMA') &&
+      !k.toUpperCase().includes('KEY') &&
+      !k.toUpperCase().includes('MODEL') &&
+      process.env[k]?.trim().startsWith('http')
+  );
+  if (fallbackKey) {
+    return process.env[fallbackKey].trim().replace(/\/+$/, '');
+  }
+  return null;
+}
+
+// Log available OLLAMA vars once at module load — visible in Railway boot logs
+const _ollamaVarsAtBoot = Object.keys(process.env)
+  .filter((k) => k.toUpperCase().includes('OLLAMA'))
+  .map((k) => `${k}=${(process.env[k] || '').trim().slice(0, 40) || '(vacío)'}`)
+  .join(' | ');
+console.log('[NutrIA] Variables OLLAMA al arrancar:', _ollamaVarsAtBoot || '(ninguna detectada)');
+
 const NUTRIA_SYSTEM_PROMPT =
   'Eres NutrIA, la nutria asistente oficial de Aynimar, una plataforma de ' +
   'e-commerce circular en Quito, Ecuador. Tu objetivo es ayudar amigablemente ' +
@@ -28,16 +62,23 @@ router.post('/nutria/chat', async (req, res, next) => {
       return res.status(400).json({ message: 'Se requiere el campo "message".' });
     }
 
-    ollamaUrl = process.env.OLLAMA_URL;
-    const model   = process.env.OLLAMA_MODEL          || 'gemma2';
-    const authKey = process.env.OLLAMA_AYNI_NUTRIA_KEY || '';
+    ollamaUrl = resolveOllamaUrl();
+    const model   = (process.env.OLLAMA_MODEL           || 'gemma2').trim();
+    const authKey = (process.env.OLLAMA_AYNI_NUTRIA_KEY || '').trim();
 
     if (!ollamaUrl) {
-      console.error('[NutrIA] OLLAMA_URL no configurada en las variables de entorno.');
+      const detected = Object.keys(process.env)
+        .filter((k) => k.toUpperCase().includes('OLLAMA'))
+        .join(', ');
+      console.error(
+        `[NutrIA] Sin URL de Ollama. Variables detectadas en Railway: [${detected || 'ninguna'}]`
+      );
       return res.status(503).json({ message: 'NutrIA está en mantenimiento. Vuelve pronto 🦦.' });
     }
 
-    console.log(`[NutrIA] → ${ollamaUrl}/api/chat  model=${model}  key=${authKey ? '✓' : '✗'}`);
+    console.log(
+      `[NutrIA] Iniciando proxy → url="${ollamaUrl}/api/chat"  model="${model}"  key=${authKey ? '✓' : '✗'}`
+    );
 
     const safeHistory = Array.isArray(history)
       ? history.filter(
@@ -90,9 +131,21 @@ router.post('/nutria/chat', async (req, res, next) => {
       });
     }
 
-    const data  = await ollamaRes.json();
-    const reply = data.message?.content ?? '';
-    console.log(`[NutrIA] ✓ reply (${reply.length} chars)`);
+    const data = await ollamaRes.json();
+
+    // Extract reply from any of the three common formats:
+    //   Ollama /api/chat      → { message: { content } }
+    //   OpenAI-compatible     → { choices: [{ message: { content } }] }
+    //   Ollama /api/generate  → { response }
+    const reply =
+      data.message?.content ??
+      data.choices?.[0]?.message?.content ??
+      data.response ??
+      '';
+
+    console.log(`[NutrIA] ✓ reply (${reply.length} chars) via format=${
+      data.message ? 'ollama-chat' : data.choices ? 'openai' : data.response !== undefined ? 'ollama-generate' : 'unknown'
+    }`);
 
     return res.json({ reply });
   } catch (err) {
