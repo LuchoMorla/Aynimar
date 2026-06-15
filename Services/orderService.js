@@ -30,6 +30,24 @@ class OrderService {
    // 1. MÉTODO PARA CREAR ORDEN DE INVITADO (nuevo)
   async createGuestOrder() {
     const newGuestOrder = await models.Order.create({});
+
+    // ─── ABANDONED CART EMAIL HOOK ────────────────────────────────────────────
+    // Conectar aquí el servicio de recuperación de carrito abandonado.
+    // Disparar X horas después de la creación si la orden sigue en estado NULL
+    // (sin customerId y sin transición a 'pendiente_envio' o 'comprada').
+    //
+    // Proveedor sugerido: Resend (resend.com) o SendGrid
+    // Implementación recomendada:
+    //   1. Encolar un job diferido con Bull/BullMQ:
+    //      cartRecoveryQueue.add({ orderId: newGuestOrder.id }, { delay: 2 * 60 * 60 * 1000 }); // 2h
+    //   2. El worker valida que la orden siga abandonada antes de enviar.
+    //   3. Si el usuario completó la compra, el worker cancela el job silenciosamente.
+    //
+    // Ejemplo de payload de email:
+    //   { to: customer.email, subject: '¿Olvidaste algo? Tu carrito te espera 🦦',
+    //     templateId: 'abandoned-cart-v1', orderId: newGuestOrder.id }
+    // ─────────────────────────────────────────────────────────────────────────
+
     return newGuestOrder;
   }
 
@@ -44,6 +62,15 @@ class OrderService {
       throw boom.forbidden('This order is already associated with a customer. Use the standard endpoint.');
     }
     const newItem = await models.OrderProduct.create(data);
+
+    // ─── ABANDONED CART EMAIL HOOK (item añadido) ─────────────────────────────
+    // Una vez el primer ítem se agrega, el carrito es recuperable.
+    // Si se implementa el job diferido arriba, aquí se puede re-encolar
+    // con un delay renovado para reiniciar el contador de inactividad:
+    //   cartRecoveryQueue.add({ orderId: data.orderId }, { delay: 2 * 60 * 60 * 1000, jobId: `cart-${data.orderId}` });
+    // El jobId idempotente garantiza que no se dupliquen jobs por el mismo carrito.
+    // ─────────────────────────────────────────────────────────────────────────
+
     return newItem;
   }
   
