@@ -28,8 +28,8 @@ const app = expressModule();
 const puerto = process.env.PORT || 8080;
 
 // body parsers — must be registered before cors and routes
-app.use(expressModule.json({ limit: '25mb' }));
-app.use(expressModule.urlencoded({ extended: true, limit: '25mb' }));
+app.use(expressModule.json({ limit: '50mb' }));
+app.use(expressModule.urlencoded({ extended: true, limit: '50mb' }));
 
 // implementamos el middleware nativo de express para exportar archivos en formato json
 // implementando CORS para los dominios
