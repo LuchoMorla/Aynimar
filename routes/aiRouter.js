@@ -20,6 +20,7 @@ const NUTRIA_SYSTEM_PROMPT =
 // Public endpoint — proxy hacia Ollama. Recibe { message, history? } y
 // devuelve { reply }. No requiere autenticación (widget público).
 router.post('/nutria/chat', async (req, res, next) => {
+  let ollamaUrl;
   try {
     const { message, history } = req.body;
 
@@ -27,10 +28,16 @@ router.post('/nutria/chat', async (req, res, next) => {
       return res.status(400).json({ message: 'Se requiere el campo "message".' });
     }
 
-    const ollamaUrl = process.env.OLLAMA_URL;
+    ollamaUrl = process.env.OLLAMA_URL;
+    const model   = process.env.OLLAMA_MODEL          || 'gemma2';
+    const authKey = process.env.OLLAMA_AYNI_NUTRIA_KEY || '';
+
     if (!ollamaUrl) {
-      return res.status(503).json({ message: 'Servicio de IA no disponible.' });
+      console.error('[NutrIA] OLLAMA_URL no configurada en las variables de entorno.');
+      return res.status(503).json({ message: 'NutrIA está en mantenimiento. Vuelve pronto 🦦.' });
     }
+
+    console.log(`[NutrIA] → ${ollamaUrl}/api/chat  model=${model}  key=${authKey ? '✓' : '✗'}`);
 
     const safeHistory = Array.isArray(history)
       ? history.filter(
@@ -42,38 +49,58 @@ router.post('/nutria/chat', async (req, res, next) => {
         )
       : [];
 
-    const messages = [
+    const ollamaMessages = [
       { role: 'system', content: NUTRIA_SYSTEM_PROMPT },
       ...safeHistory,
       { role: 'user', content: message.trim() },
     ];
 
-    const headers = { 'Content-Type': 'application/json' };
-    if (process.env.OLLAMA_AYNI_NUTRIA_KEY) {
-      headers['Authorization'] = `Bearer ${process.env.OLLAMA_AYNI_NUTRIA_KEY}`;
+    // Build headers — cover Ngrok free-tier (skips browser warning page),
+    // plus both Authorization and custom header for custom tunnel proxies.
+    const headers = {
+      'Content-Type': 'application/json',
+      'ngrok-skip-browser-warning': 'true',
+    };
+    if (authKey) {
+      headers['Authorization'] = `Bearer ${authKey}`;
+      headers['X-Ayni-Key']    = authKey;
     }
 
-    const ollamaRes = await fetch(`${ollamaUrl}/api/chat`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: process.env.OLLAMA_MODEL || 'gemma2',
-        messages,
-        stream: false,
-      }),
-    });
+    // Abort after 30 s to avoid Railway request timeouts
+    const controller = new AbortController();
+    const timeoutId  = setTimeout(() => controller.abort(), 30000);
+
+    let ollamaRes;
+    try {
+      ollamaRes = await fetch(`${ollamaUrl}/api/chat`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model, messages: ollamaMessages, stream: false }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!ollamaRes.ok) {
-      const errText = await ollamaRes.text();
-      console.error(`[NutrIA] Ollama error ${ollamaRes.status}:`, errText);
-      return res.status(502).json({ message: 'Error al contactar el modelo de IA.' });
+      const errText = await ollamaRes.text().catch(() => '');
+      console.error(`[NutrIA] Ollama HTTP ${ollamaRes.status}:`, errText.slice(0, 300));
+      return res.status(502).json({
+        message: `Error del modelo (${ollamaRes.status}). Inténtalo de nuevo.`,
+      });
     }
 
-    const data = await ollamaRes.json();
+    const data  = await ollamaRes.json();
     const reply = data.message?.content ?? '';
+    console.log(`[NutrIA] ✓ reply (${reply.length} chars)`);
 
     return res.json({ reply });
   } catch (err) {
+    if (err.name === 'AbortError') {
+      console.error(`[NutrIA] Timeout alcanzado para ${ollamaUrl}`);
+      return res.status(504).json({ message: 'NutrIA tardó demasiado en responder. Inténtalo de nuevo.' });
+    }
+    console.error(`[NutrIA] Error inesperado: ${err.message}  (code: ${err.code ?? 'n/a'})`);
     next(err);
   }
 });
