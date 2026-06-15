@@ -44,6 +44,7 @@ const importProductSchema = Joi.object({
   variantsJson:      Joi.string().allow('', null).default(null),
   // Raw technical details from Dropi — used as primary AI copy context
   rawDetails:        Joi.string().allow('', null).default(''),
+  showShop:          Joi.boolean().default(false),
 });
 
 const syncStockSchema = Joi.object({
@@ -331,6 +332,7 @@ router.post(
         const resolvedName  = title ?? nameField ?? externalId;
         const resolvedPrice = pvpOverride ?? price ?? 0;
         const catId         = defaultCategoryId ?? 1;
+        const showShop      = req.body.showShop ?? false;
 
         // rawDetails is the primary AI context (technical specs + guarantees from Dropi).
         // Fall back to the generic HTML description only when rawDetails is absent.
@@ -353,7 +355,7 @@ router.post(
             stock:          stock   ?? null,
             categoryId:     catId,
             businessId:     businessId ?? null,
-            showShop:       true,
+            showShop:       showShop,
             isDeleted:      false,
             lastSyncAt:     new Date(),
             sourceProvider: 'dropi',
