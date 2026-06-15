@@ -26,6 +26,9 @@ const config = {
   redisUrl: process.env.REDIS_URL,
   redisHost: process.env.REDIS_HOST,
   redisPort: process.env.REDIS_PORT,
+  ollamaUrl: process.env.OLLAMA_URL,
+  ollamaModel: process.env.OLLAMA_MODEL,
+  ollamaAyniNutriaKey: process.env.OLLAMA_AYNI_NUTRIA_KEY,
 };
 
 module.exports = { config };
