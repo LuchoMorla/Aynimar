@@ -8,38 +8,64 @@ const { optimizeProductCopy } = require('../integrations/aiCopyService');
 const router = express.Router();
 
 // ── Ollama URL resolver ───────────────────────────────────────────────────────
-// Reads from OLLAMA_URL first, then fallback aliases, then any key that
-// contains "OLLAMA" in its name. Trims whitespace and trailing slashes so
-// values pasted into Railway's UI don't produce double-slash URLs.
-const OLLAMA_URL_ALIASES = ['OLLAMA_URL', 'OLLAMA_HOST', 'NEXT_PUBLIC_OLLAMA_URL'];
+const OLLAMA_URL_ALIASES = [
+  'OLLAMA_URL',
+  'OLLAMA_HOST',
+  'NEXT_PUBLIC_OLLAMA_URL',
+  'RAILWAY_OLLAMA_URL',
+];
 
 function resolveOllamaUrl() {
+  // 1. Named aliases in priority order
   for (const key of OLLAMA_URL_ALIASES) {
     const raw = process.env[key];
     if (raw && raw.trim()) {
-      return raw.trim().replace(/\/+$/, '');
+      return { url: raw.trim().replace(/\/+$/, ''), foundKey: key };
     }
   }
-  // Last-resort scan: any env key containing "OLLAMA" that looks like a URL
-  const fallbackKey = Object.keys(process.env).find(
+
+  // 2. Any key that contains "OLLAMA" whose value starts with http
+  const ollamaLike = Object.keys(process.env).find(
     (k) =>
       k.toUpperCase().includes('OLLAMA') &&
       !k.toUpperCase().includes('KEY') &&
       !k.toUpperCase().includes('MODEL') &&
       process.env[k]?.trim().startsWith('http')
   );
-  if (fallbackKey) {
-    return process.env[fallbackKey].trim().replace(/\/+$/, '');
+  if (ollamaLike) {
+    return { url: process.env[ollamaLike].trim().replace(/\/+$/, ''), foundKey: ollamaLike };
   }
-  return null;
+
+  // 3. Last resort: any value starting with http that contains ngrok/tunnel/11434
+  const lastResortKey = Object.keys(process.env).find((k) => {
+    const v = (process.env[k] || '').trim();
+    return (
+      v.startsWith('http') &&
+      (v.includes('ngrok') || v.includes('tunnel') || v.includes('11434'))
+    );
+  });
+  if (lastResortKey) {
+    return {
+      url: process.env[lastResortKey].trim().replace(/\/+$/, ''),
+      foundKey: `${lastResortKey} (auto-detectada)`,
+    };
+  }
+
+  return { url: null, foundKey: null };
 }
 
-// Log available OLLAMA vars once at module load — visible in Railway boot logs
-const _ollamaVarsAtBoot = Object.keys(process.env)
-  .filter((k) => k.toUpperCase().includes('OLLAMA'))
-  .map((k) => `${k}=${(process.env[k] || '').trim().slice(0, 40) || '(vacío)'}`)
-  .join(' | ');
-console.log('[NutrIA] Variables OLLAMA al arrancar:', _ollamaVarsAtBoot || '(ninguna detectada)');
+// ── Boot-time diagnostics — printed once when Railway starts the container ───
+console.log(
+  '[NutrIA] Keys disponibles al arrancar (OLLAMA/URL/KEY):',
+  Object.keys(process.env)
+    .filter((k) => k.includes('OLLAMA') || k.includes('URL') || k.includes('KEY'))
+    .join(', ') || '(ninguna)'
+);
+const { url: _bootUrl, foundKey: _bootKey } = resolveOllamaUrl();
+console.log(
+  '[NutrIA] URL resuelta al arrancar:',
+  _bootUrl ? `${_bootUrl} (via ${_bootKey})` : 'NO ENCONTRADA'
+);
 
 const NUTRIA_SYSTEM_PROMPT =
   'Eres NutrIA, la nutria asistente oficial de Aynimar, una plataforma de ' +
@@ -62,22 +88,33 @@ router.post('/nutria/chat', async (req, res, next) => {
       return res.status(400).json({ message: 'Se requiere el campo "message".' });
     }
 
-    ollamaUrl = resolveOllamaUrl();
+    // Log inside handler so it appears per-request in Railway — helps confirm
+    // whether env vars changed after a redeploy without restarting the container.
+    console.log(
+      '[NutrIA] Variables de entorno disponibles:',
+      Object.keys(process.env)
+        .filter((k) => k.includes('OLLAMA') || k.includes('URL') || k.includes('KEY'))
+        .join(', ')
+    );
+
+    const { url: resolvedUrl, foundKey } = resolveOllamaUrl();
+    ollamaUrl = resolvedUrl;
     const model   = (process.env.OLLAMA_MODEL           || 'gemma2').trim();
     const authKey = (process.env.OLLAMA_AYNI_NUTRIA_KEY || '').trim();
 
     if (!ollamaUrl) {
-      const detected = Object.keys(process.env)
-        .filter((k) => k.toUpperCase().includes('OLLAMA'))
-        .join(', ');
       console.error(
-        `[NutrIA] Sin URL de Ollama. Variables detectadas en Railway: [${detected || 'ninguna'}]`
+        '[NutrIA] Sin URL de Ollama. Todas las keys del proceso:',
+        Object.keys(process.env).join(', ')
       );
-      return res.status(503).json({ message: 'NutrIA está en mantenimiento. Vuelve pronto 🦦.' });
+      return res.status(503).json({
+        error: 'Mantenimiento',
+        details: 'No se detectó ninguna URL válida en el entorno.',
+      });
     }
 
     console.log(
-      `[NutrIA] Iniciando proxy → url="${ollamaUrl}/api/chat"  model="${model}"  key=${authKey ? '✓' : '✗'}`
+      `[NutrIA] Iniciando proxy → url="${ollamaUrl}/api/chat"  via="${foundKey}"  model="${model}"  key=${authKey ? '✓' : '✗'}`
     );
 
     const safeHistory = Array.isArray(history)
