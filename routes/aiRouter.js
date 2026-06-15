@@ -2,70 +2,23 @@
 
 const express  = require('express');
 const passport = require('passport');
-const { checkRoles } = require('../middlewares/authHandler');
+const OpenAI   = require('openai');
+const { checkRoles }        = require('../middlewares/authHandler');
 const { optimizeProductCopy } = require('../integrations/aiCopyService');
 
 const router = express.Router();
 
-// ── Ollama URL resolver ───────────────────────────────────────────────────────
-const OLLAMA_URL_ALIASES = [
-  'OLLAMA_URL',
-  'OLLAMA_HOST',
-  'NEXT_PUBLIC_OLLAMA_URL',
-  'RAILWAY_OLLAMA_URL',
-];
-
-function resolveOllamaUrl() {
-  // 1. Named aliases in priority order
-  for (const key of OLLAMA_URL_ALIASES) {
-    const raw = process.env[key];
-    if (raw && raw.trim()) {
-      return { url: raw.trim().replace(/\/+$/, ''), foundKey: key };
-    }
-  }
-
-  // 2. Any key that contains "OLLAMA" whose value starts with http
-  const ollamaLike = Object.keys(process.env).find(
-    (k) =>
-      k.toUpperCase().includes('OLLAMA') &&
-      !k.toUpperCase().includes('KEY') &&
-      !k.toUpperCase().includes('MODEL') &&
-      process.env[k]?.trim().startsWith('http')
-  );
-  if (ollamaLike) {
-    return { url: process.env[ollamaLike].trim().replace(/\/+$/, ''), foundKey: ollamaLike };
-  }
-
-  // 3. Last resort: any value starting with http that contains ngrok/tunnel/11434
-  const lastResortKey = Object.keys(process.env).find((k) => {
-    const v = (process.env[k] || '').trim();
-    return (
-      v.startsWith('http') &&
-      (v.includes('ngrok') || v.includes('tunnel') || v.includes('11434'))
-    );
+// ── Groq client (OpenAI-compatible) ─────────────────────────────────────────
+// Initialized lazily per-request so a missing key returns a clean 503
+// instead of crashing the module at boot.
+function getGroqClient() {
+  const apiKey = process.env.GROQ_IA_KEY;
+  if (!apiKey) return null;
+  return new OpenAI({
+    apiKey,
+    baseURL: 'https://api.groq.com/openai/v1',
   });
-  if (lastResortKey) {
-    return {
-      url: process.env[lastResortKey].trim().replace(/\/+$/, ''),
-      foundKey: `${lastResortKey} (auto-detectada)`,
-    };
-  }
-
-  return { url: null, foundKey: null };
 }
-
-// ── Boot-time diagnostics — printed once when Railway starts the container ───
-console.log(
-  '[NutrIA] Keys disponibles al arrancar (OLLAMA/URL/KEY):',
-  Object.keys(process.env)
-    .filter((k) => k.includes('OLLAMA') || k.includes('URL') || k.includes('KEY'))
-    .join(', ') || '(ninguna)'
-);
-const { url: _bootUrl, foundKey: _bootKey } = resolveOllamaUrl();
-console.log(
-  '[NutrIA] URL resuelta al arrancar:',
-  _bootUrl ? `${_bootUrl} (via ${_bootKey})` : 'NO ENCONTRADA'
-);
 
 const NUTRIA_SYSTEM_PROMPT =
   'Eres NutrIA, la nutria asistente oficial de Aynimar, una plataforma de ' +
@@ -77,10 +30,9 @@ const NUTRIA_SYSTEM_PROMPT =
   'cortas, directas y enfocadas en la conversión o el reciclaje.';
 
 // ── POST /api/v1/ai/nutria/chat ──────────────────────────────────────────────
-// Public endpoint — proxy hacia Ollama. Recibe { message, history? } y
+// Public endpoint — proxy hacia Groq. Recibe { message, history? } y
 // devuelve { reply }. No requiere autenticación (widget público).
 router.post('/nutria/chat', async (req, res, next) => {
-  let ollamaUrl;
   try {
     const { message, history } = req.body;
 
@@ -88,34 +40,13 @@ router.post('/nutria/chat', async (req, res, next) => {
       return res.status(400).json({ message: 'Se requiere el campo "message".' });
     }
 
-    // Log inside handler so it appears per-request in Railway — helps confirm
-    // whether env vars changed after a redeploy without restarting the container.
-    console.log(
-      '[NutrIA] Variables de entorno disponibles:',
-      Object.keys(process.env)
-        .filter((k) => k.includes('OLLAMA') || k.includes('URL') || k.includes('KEY'))
-        .join(', ')
-    );
-
-    const { url: resolvedUrl, foundKey } = resolveOllamaUrl();
-    ollamaUrl = resolvedUrl;
-    const model   = (process.env.OLLAMA_MODEL           || 'gemma2').trim();
-    const authKey = (process.env.OLLAMA_AYNI_NUTRIA_KEY || '').trim();
-
-    if (!ollamaUrl) {
-      console.error(
-        '[NutrIA] Sin URL de Ollama. Todas las keys del proceso:',
-        Object.keys(process.env).join(', ')
-      );
-      return res.status(503).json({
-        error: 'Mantenimiento',
-        details: 'No se detectó ninguna URL válida en el entorno.',
-      });
+    const groq = getGroqClient();
+    if (!groq) {
+      console.error('[NutrIA] GROQ_IA_KEY no configurada en Railway.');
+      return res.status(503).json({ message: 'NutrIA está en mantenimiento. Vuelve pronto 🦦.' });
     }
 
-    console.log(
-      `[NutrIA] Iniciando proxy → url="${ollamaUrl}/api/chat"  via="${foundKey}"  model="${model}"  key=${authKey ? '✓' : '✗'}`
-    );
+    const model = (process.env.GROQ_MODEL || 'llama-3.1-8b-instant').trim();
 
     const safeHistory = Array.isArray(history)
       ? history.filter(
@@ -127,70 +58,22 @@ router.post('/nutria/chat', async (req, res, next) => {
         )
       : [];
 
-    const ollamaMessages = [
+    const messages = [
       { role: 'system', content: NUTRIA_SYSTEM_PROMPT },
       ...safeHistory,
       { role: 'user', content: message.trim() },
     ];
 
-    // Build headers — cover Ngrok free-tier (skips browser warning page),
-    // plus both Authorization and custom header for custom tunnel proxies.
-    const headers = {
-      'Content-Type': 'application/json',
-      'ngrok-skip-browser-warning': 'true',
-    };
-    if (authKey) {
-      headers['Authorization'] = `Bearer ${authKey}`;
-      headers['X-Ayni-Key']    = authKey;
-    }
+    console.log(`[NutrIA] → Groq  model="${model}"  msgs=${messages.length}`);
 
-    // Abort after 30 s to avoid Railway request timeouts
-    const controller = new AbortController();
-    const timeoutId  = setTimeout(() => controller.abort(), 30000);
+    const completion = await groq.chat.completions.create({ model, messages });
 
-    let ollamaRes;
-    try {
-      ollamaRes = await fetch(`${ollamaUrl}/api/chat`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ model, messages: ollamaMessages, stream: false }),
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
-
-    if (!ollamaRes.ok) {
-      const errText = await ollamaRes.text().catch(() => '');
-      console.error(`[NutrIA] Ollama HTTP ${ollamaRes.status}:`, errText.slice(0, 300));
-      return res.status(502).json({
-        message: `Error del modelo (${ollamaRes.status}). Inténtalo de nuevo.`,
-      });
-    }
-
-    const data = await ollamaRes.json();
-
-    // Extract reply from any of the three common formats:
-    //   Ollama /api/chat      → { message: { content } }
-    //   OpenAI-compatible     → { choices: [{ message: { content } }] }
-    //   Ollama /api/generate  → { response }
-    const reply =
-      data.message?.content ??
-      data.choices?.[0]?.message?.content ??
-      data.response ??
-      '';
-
-    console.log(`[NutrIA] ✓ reply (${reply.length} chars) via format=${
-      data.message ? 'ollama-chat' : data.choices ? 'openai' : data.response !== undefined ? 'ollama-generate' : 'unknown'
-    }`);
+    const reply = completion.choices?.[0]?.message?.content ?? '';
+    console.log(`[NutrIA] ✓ reply (${reply.length} chars)`);
 
     return res.json({ reply });
   } catch (err) {
-    if (err.name === 'AbortError') {
-      console.error(`[NutrIA] Timeout alcanzado para ${ollamaUrl}`);
-      return res.status(504).json({ message: 'NutrIA tardó demasiado en responder. Inténtalo de nuevo.' });
-    }
-    console.error(`[NutrIA] Error inesperado: ${err.message}  (code: ${err.code ?? 'n/a'})`);
+    console.error(`[NutrIA] Error inesperado: ${err.message}`);
     next(err);
   }
 });
@@ -198,7 +81,6 @@ router.post('/nutria/chat', async (req, res, next) => {
 // ── POST /api/v1/ai/optimize-copy ────────────────────────────────────────────
 // Receives { text } and returns AI-optimized e-commerce copy.
 // Used by the Dropi importer's "Optimizar con IA" button.
-
 router.post(
   '/optimize-copy',
   passport.authenticate('jwt', { session: false }),
