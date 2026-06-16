@@ -394,6 +394,78 @@ function expandSearchTerms(term) {
   return [term];
 }
 
+// ── Internal Needs-Driven Semantic Engine ─────────────────────────────────────
+// Runs server-side on every request BEFORE the Groq call.
+// Maps customer pain patterns to reptilian codes + product search terms,
+// pre-fetching inventory so the model gets real catalog data in its context.
+const NEEDS_MAP = [
+  {
+    codigo: 'exploracion',
+    label: 'Exploracion/Placer',
+    patterns: [/excursi[oó]n|camping|aventura|naturaleza|monta[nñ]|viaje de campo|outdoor|trekking/i],
+    ambiguous: false,
+    searchTerms: ['solar', 'kit generador', 'linterna'],
+  },
+  {
+    codigo: 'seguridad_energia',
+    label: 'Proteccion/Seguridad - Energia',
+    patterns: [/se me descarg|quedo sin bater[ií]a|sin carga|bater[ií]a baja|apagado.*celular|celular.*apag/i],
+    ambiguous: true,
+    preguntaConsultiva: '¿Necesitas algo para llevar en la calle (powerbank compacto) o te vas de aventura en la naturaleza, ve?',
+  },
+  {
+    codigo: 'seguridad_luz',
+    label: 'Proteccion/Seguridad - Iluminacion',
+    patterns: [/sin luz|apag[oó]n|no tengo luz|falta electricidad|corte de luz|oscuridad/i],
+    ambiguous: false,
+    searchTerms: ['linterna', 'solar'],
+  },
+  {
+    codigo: 'dominacion',
+    label: 'Dominacion/Poder',
+    patterns: [/bullying|me molestan|quiero ser fuerte|entrenar|deport|boxeo|guantes|gimnas/i],
+    ambiguous: false,
+    searchTerms: ['guantes box', 'deporte'],
+  },
+  {
+    codigo: 'reconocimiento',
+    label: 'Reconocimiento/Estatus',
+    patterns: [/quedar bien|impresionar|regalo para|busco lo mejor|de calidad|regalo.*cumplea[nñ]|jefe|regalo.*novia|regalo.*novio/i],
+    ambiguous: false,
+    searchTerms: ['kit', 'gadget', 'regalo'],
+  },
+  {
+    codigo: 'ahorro_energia',
+    label: 'Ahorro de Energia',
+    patterns: [/cargador.*casa|cable.*roto|adaptador|mi cargador se da[nñ]o|necesito cable|cable usb/i],
+    ambiguous: false,
+    searchTerms: ['cargador', 'cable'],
+  },
+  {
+    codigo: 'libertad',
+    label: 'Libertad/Autonomia',
+    patterns: [/sin cable|inal[aá]mbric|bluetooth|aut[oó]nom|auricular|earphone|headset/i],
+    ambiguous: false,
+    searchTerms: ['auricular', 'bluetooth'],
+  },
+];
+
+function evaluarNecesidadesCliente(mensaje) {
+  const text = (mensaje || '').toLowerCase();
+  for (const need of NEEDS_MAP) {
+    if (need.patterns.some((p) => p.test(text))) {
+      return {
+        codigo:             need.codigo,
+        label:              need.label,
+        ambiguous:          need.ambiguous,
+        searchTerms:        need.searchTerms       ?? null,
+        preguntaConsultiva: need.preguntaConsultiva ?? null,
+      };
+    }
+  }
+  return null;
+}
+
 // ── Tool executor ─────────────────────────────────────────────────────────────
 async function executeTool(name, args, clientActions, estadoActualizado) {
   const { models } = sequelize;
@@ -550,20 +622,63 @@ router.post('/nutria/chat', async (req, res) => {
         )
       : [];
 
-    // contexto enriches the system prompt with structured profile/cart data
+    const clientActions     = [];
+    const estadoActualizado = {};
+    const MAX_TOOL_ROUNDS   = 5;
+    let round = 0;
+
+    // ── Internal Needs Engine — pre-fetch catalog before Groq call ────────────
+    // Avoids a full tool-call round-trip for predictable pain→product matches.
     const contextNarrative = buildContextNarrative(contexto);
-    const systemContent    = NUTRIA_SYSTEM_PROMPT + contextNarrative;
+    let oportunidadStr = '';
+    const needsMatch = evaluarNecesidadesCliente(message.trim());
+
+    if (needsMatch) {
+      if (!needsMatch.ambiguous && Array.isArray(needsMatch.searchTerms) && needsMatch.searchTerms.length > 0) {
+        try {
+          const { models } = sequelize;
+          const allTerms  = [...new Set(needsMatch.searchTerms.flatMap((t) => expandSearchTerms(t)))];
+          const orClauses = allTerms.flatMap((t) => [
+            { name:        { [Op.iLike]: `%${t}%` } },
+            { description: { [Op.iLike]: `%${t}%` } },
+          ]);
+          const preProd = await models.Product.findAll({
+            where: { [Op.or]: orClauses, isDeleted: false },
+            limit: 4,
+            attributes: ['id', 'name', 'price', 'stock', 'description'],
+          });
+          if (preProd.length > 0) {
+            const payload = preProd.map((p) => ({
+              id:          p.id,
+              nombre:      p.name,
+              precio:      p.price,
+              stock:       p.stock ?? 'disponible',
+              descripcion: (p.description || '').slice(0, 80),
+            }));
+            clientActions.push({ type: 'show_products', productos: payload });
+            if (!estadoActualizado.historialIntereses) estadoActualizado.historialIntereses = [];
+            estadoActualizado.historialIntereses.push(...payload.map((p) => p.nombre));
+
+            const lista = payload.map((p) => `- ${p.nombre} | $${p.precio} | id:${p.id}`).join('\n');
+            oportunidadStr = `\n\nOPORTUNIDAD PRE-CARGADA (codigo reptiliano: ${needsMatch.label}):\n${lista}\nEscribe tu reply con estructura A-B-C-D usando estos productos. NO llames buscar_producto() este turno — los datos ya estan en el carrusel del cliente.`;
+            console.log(`[NutrIA Engine] Pre-fetch: ${preProd.length} productos | codigo="${needsMatch.codigo}"`);
+          }
+        } catch (engineErr) {
+          console.warn('[NutrIA Engine] Pre-fetch failed, tool-loop fallback activo:', engineErr.message);
+        }
+      } else if (needsMatch.ambiguous && needsMatch.preguntaConsultiva) {
+        oportunidadStr = `\n\nDOLOR AMBIGUO DETECTADO (${needsMatch.label}):\nHaz EXACTAMENTE esta pregunta consultiva antes de buscar nada: "${needsMatch.preguntaConsultiva}"`;
+        console.log(`[NutrIA Engine] Dolor ambiguo: "${needsMatch.codigo}" — pregunta consultiva inyectada`);
+      }
+    }
+
+    const systemContent = NUTRIA_SYSTEM_PROMPT + contextNarrative + oportunidadStr;
 
     const conversationMessages = [
       { role: 'system', content: systemContent },
       ...safeHistory,
       { role: 'user',   content: message.trim() },
     ];
-
-    const clientActions    = [];
-    const estadoActualizado = {};
-    const MAX_TOOL_ROUNDS  = 5;
-    let round = 0;
 
     console.log(`[NutrIA] → model="${model}" history=${safeHistory.length} turns context_chars=${systemContent.length}`);
 
