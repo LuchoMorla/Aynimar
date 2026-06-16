@@ -15,6 +15,20 @@ const router = express.Router();
 const MODEL_PRIMARY  = 'llama-3.3-70b-versatile';
 const MODEL_FALLBACK = 'llama-3.1-8b-instant';
 
+// In-memory order cache — one DB hit per order per 5 min regardless of tool-call repetitions
+const ORDER_CACHE     = new Map();
+const ORDER_CACHE_TTL = 5 * 60 * 1000;
+function cachedOrder(id) {
+  const e = ORDER_CACHE.get(id);
+  if (!e || Date.now() - e.ts > ORDER_CACHE_TTL) { ORDER_CACHE.delete(id); return null; }
+  return e.data;
+}
+function cacheOrder(id, data) { ORDER_CACHE.set(id, { data, ts: Date.now() }); }
+
+class RateLimitError extends Error {
+  constructor() { super('rate_limit'); this.isRateLimit = true; }
+}
+
 function getGroqClient() {
   const apiKey = process.env.GROQ_IA_KEY;
   if (!apiKey) return null;
@@ -28,14 +42,21 @@ function pickModel(message) {
   return COMPLEX_RE.test(message) ? MODEL_PRIMARY : MODEL_FALLBACK;
 }
 
-// safeGroqCall: tries primaryModel, falls back to MODEL_FALLBACK on 429
+// safeGroqCall: 70B→8B fallback on 429; throws RateLimitError when both models are saturated
 async function safeGroqCall(groq, params) {
   try {
     return await groq.chat.completions.create(params);
   } catch (err) {
-    if ((err.status === 429 || err.statusCode === 429) && params.model === MODEL_PRIMARY) {
-      console.error('[NutrIA] 429 rate-limit on 70B — retrying with 8B');
-      return groq.chat.completions.create({ ...params, model: MODEL_FALLBACK });
+    if (err.status === 429 || err.statusCode === 429) {
+      if (params.model === MODEL_PRIMARY) {
+        console.error('[NutrIA] 429 on 70B — retrying with 8B');
+        try {
+          return await groq.chat.completions.create({ ...params, model: MODEL_FALLBACK });
+        } catch (e2) {
+          throw (e2.status === 429 || e2.statusCode === 429) ? new RateLimitError() : e2;
+        }
+      }
+      throw new RateLimitError();
     }
     throw err;
   }
@@ -101,8 +122,11 @@ function buildContextNarrative(contexto) {
   }
 
   if (trackingSoporte?.ordenId) {
-    lines.push(`- Pedido en seguimiento: #${trackingSoporte.ordenId}` +
-      (trackingSoporte.estado ? ` (${trackingSoporte.estado})` : ''));
+    let orderLine = `- Pedido #${trackingSoporte.ordenId}: estado=${trackingSoporte.estado ?? 'n/a'}`;
+    if (trackingSoporte.guia)          orderLine += `, guia=${trackingSoporte.guia}`;
+    if (trackingSoporte.transportista) orderLine += `, carrier=${trackingSoporte.transportista}`;
+    orderLine += ' — DATOS YA CARGADOS, NO vuelvas a llamar obtener_estado_orden()';
+    lines.push(orderLine);
   }
 
   if (Array.isArray(contexto.ultimosProductos) && contexto.ultimosProductos.length > 0) {
@@ -620,18 +644,20 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
 
   if (name === 'obtener_estado_orden') {
     try {
+      const hit = cachedOrder(args.orden_id);
+      if (hit) {
+        estadoActualizado.trackingSoporte = {
+          ordenId: hit.id, estado: hit.estado, guia: hit.guia, transportista: hit.transportista,
+        };
+        return hit;
+      }
+
       const order = await models.Order.findByPk(args.orden_id, {
         attributes: ['id', 'state', 'stateOrder', 'createdAt', 'trackingNumber', 'carrierName'],
       });
       if (!order) return { error: 'Pedido no encontrado. Verifica el número.' };
 
-      // Update tracking in state manager
-      estadoActualizado.trackingSoporte = {
-        ordenId: order.id,
-        estado:  order.state,
-      };
-
-      return {
+      const result = {
         id:            order.id,
         estado:        order.state,
         detalle:       order.stateOrder,
@@ -639,6 +665,15 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
         transportista: order.carrierName    ?? null,
         creado:        order.createdAt,
       };
+      cacheOrder(args.orden_id, result);
+      estadoActualizado.trackingSoporte = {
+        ordenId:       order.id,
+        estado:        order.state,
+        detalle:       order.stateOrder,
+        guia:          order.trackingNumber ?? null,
+        transportista: order.carrierName    ?? null,
+      };
+      return result;
     } catch (err) {
       console.error('[NutrIA:obtener_estado_orden]', err.message);
       return { error: 'No pude consultar el pedido ahora.' };
@@ -650,7 +685,6 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
     const emoji  = args.tipo === 'critico' ? '⚠️' : '🚀';
     const titulo = args.tipo === 'critico' ? 'SOPORTE CRÍTICO' : 'OPORTUNIDAD DE VENTA';
     const sent   = await sendTelegram(`${emoji} <b>${titulo}</b>\n\n${args.mensaje}`);
-    console.log(`[NutrIA:alertar_telegram] tipo=${args.tipo} sent=${sent}`);
 
     // Extract profile data from the message if available
     const extracted = extractProfileFromMensaje(args.mensaje);
@@ -810,6 +844,14 @@ router.post('/nutria/chat', async (req, res) => {
     try {
       completion = await safeGroqCall(groq, groqParams);
     } catch (groqInitErr) {
+      if (groqInitErr.isRateLimit) {
+        await new Promise((r) => setTimeout(r, 5000));
+        return res.json({
+          reply: '¡Chuta! Dame un segundo que el sistema está procesando a máxima velocidad, ya te doy el precio. 🦦',
+          actions: clientActions,
+          estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
+        });
+      }
       console.error('[NutrIA] Groq initial call failed:', groqInitErr.message);
       return res.json({
         reply: '¡Chuta! Me distraje un momento. ¿Lo intentamos de nuevo? 🦦',
@@ -850,6 +892,14 @@ router.post('/nutria/chat', async (req, res) => {
         completion = await safeGroqCall(groq, { ...groqParams, messages: conversationMessages });
         choice = completion.choices[0];
       } catch (groqLoopErr) {
+        if (groqLoopErr.isRateLimit) {
+          await new Promise((r) => setTimeout(r, 5000));
+          return res.json({
+            reply: '¡Chuta! Dame un segundo que el sistema está procesando a máxima velocidad, ya te doy el precio. 🦦',
+            actions: clientActions,
+            estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
+          });
+        }
         console.error('[NutrIA] Groq loop error:', groqLoopErr.message);
         return res.json({
           reply: '¡Chuta! Me distraje buscando, ¿probamos con otro término? 🦦',
