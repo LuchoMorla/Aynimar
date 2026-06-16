@@ -945,6 +945,33 @@ router.post('/nutria/chat', async (req, res) => {
   }
 });
 
+// ── GET /api/v1/ai/telegram/debug ────────────────────────────────────────────
+// Returns live webhook status from Telegram + local env/auto-discovery state.
+// Hit this endpoint after deploy to confirm the webhook is registered correctly.
+router.get('/telegram/debug', async (req, res) => {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    return res.status(503).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN no configurado en Railway.' });
+  }
+  try {
+    const tgRes  = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
+    const tgData = await tgRes.json();
+    return res.json({
+      ok:           tgData.ok,
+      webhook_info: tgData.result ?? null,
+      local_state:  {
+        TELEGRAM_OWNER_ID: process.env.TELEGRAM_OWNER_ID || null,
+        TELEGRAM_CHAT_ID:  process.env.TELEGRAM_CHAT_ID  || null,
+        detectedOwnerId:   detectedOwnerId               || null,
+        ownerIdWarned,
+      },
+    });
+  } catch (err) {
+    console.error('[Telegram:debug]', err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ── POST /api/v1/ai/telegram/webhook ─────────────────────────────────────────
 // Receives Telegram bot updates. Must return 200 immediately or Telegram retries.
 // Extracts the sender's chat_id and:

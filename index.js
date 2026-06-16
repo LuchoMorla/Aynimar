@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 // Catch unhandled promise rejections before they crash the process in Node 15+
 // (Sequelize pool events, DB reconnects, and background tasks can emit these)
 process.on('unhandledRejection', (reason) => {
@@ -94,9 +95,52 @@ app.use(ormErrorHandler);
 app.use(boomErrorHandler);
 app.use(errorHandler);
 
+// ── Telegram webhook auto-registration ───────────────────────────────────────
+// Runs once after the server is up. Uses BACKEND_URL (set manually in Railway)
+// or falls back to RAILWAY_PUBLIC_DOMAIN (injected automatically by Railway).
+async function registerTelegramWebhook() {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    console.warn('[Telegram] TELEGRAM_BOT_TOKEN no configurado — webhook no registrado.');
+    return;
+  }
+
+  const rawDomain =
+    process.env.BACKEND_URL ||
+    (process.env.RAILWAY_PUBLIC_DOMAIN
+      ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+      : null);
+
+  if (!rawDomain) {
+    console.error('[Telegram][CRITICAL] No se puede registrar el webhook — define BACKEND_URL en Railway variables (ej: https://tu-proyecto.railway.app).');
+    return;
+  }
+
+  const webhookUrl = `${rawDomain.replace(/\/$/, '')}/api/v1/ai/telegram/webhook`;
+  console.log(`[Telegram] Registrando webhook en: ${webhookUrl}`);
+
+  try {
+    const res  = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ url: webhookUrl, drop_pending_updates: false }),
+    });
+    const data = await res.json();
+
+    if (data.ok) {
+      console.log(`[Telegram] Webhook registrado correctamente ✓  URL: ${webhookUrl}`);
+    } else {
+      console.error(`[Telegram][CRITICAL] setWebhook rechazado por Telegram: ${JSON.stringify(data)}`);
+    }
+  } catch (err) {
+    console.error(`[Telegram][CRITICAL] Error de red al registrar webhook: ${err.message}`);
+  }
+}
+
 const server = app.listen(puerto, '0.0.0.0', () => {
   console.log(`[OK] Server listening on 0.0.0.0:${puerto}`);
   console.log(`[OK] Start time: ${new Date().toISOString()}`);
+  registerTelegramWebhook(); // non-blocking — failures are logged, never crash the server
 });
 
 server.on('error', (err) => {
