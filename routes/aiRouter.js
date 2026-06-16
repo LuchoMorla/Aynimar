@@ -329,6 +329,8 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
         attributes: ['id', 'name', 'price', 'stock', 'description'],
       });
 
+      console.log(`[NutrIA Debug] Resultado de Query PostgreSQL para "${args.nombre}":`, products.length, 'resultados');
+
       if (products.length === 0) {
         return { encontrados: 0, productos: [], sinStock: true };
       }
@@ -432,15 +434,19 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
 }
 
 // ── POST /api/v1/ai/nutria/chat ───────────────────────────────────────────────
-// Accepts: { message: string, contexto: object }
+// Accepts: { message: string, history: array, contexto: object }
 // Returns: { reply: string, actions: array, estadoActualizado: object }
 router.post('/nutria/chat', async (req, res) => {
   try {
-    const { message, contexto } = req.body;
+    const { message, history, contexto } = req.body;
 
     if (!message || typeof message !== 'string' || message.trim().length < 1) {
       return res.status(400).json({ message: 'Se requiere el campo "message".' });
     }
+
+    // ── Diagnostic: log what the client actually sent ──────────────────────
+    console.log('[NutrIA Debug] Mensaje Recibido:', message);
+    console.log('[NutrIA Debug] Contexto Recibido:', JSON.stringify(contexto ?? null));
 
     const groq = getGroqClient();
     if (!groq) {
@@ -451,13 +457,23 @@ router.post('/nutria/chat', async (req, res) => {
     // 70B model is reliable for tool calling; 8B writes function tags as text
     const model = (process.env.GROQ_MODEL || 'llama-3.3-70b-versatile').trim();
 
-    // Build a compact context narrative from the structured state manager instead of
-    // sending the raw conversation history — keeps the context window small
+    // Restore conversation history so the model can follow multi-turn flows
+    // (e.g. "¿Cómo te llamas?" → "Luis" requires context of the previous turn).
+    // history[] contains all previous turns EXCEPT the current message — no duplication.
+    const safeHistory = Array.isArray(history)
+      ? history.filter(
+          (m) => m && typeof m.role === 'string' && typeof m.content === 'string'
+            && ['user', 'assistant'].includes(m.role)
+        )
+      : [];
+
+    // contexto enriches the system prompt with structured profile/cart data
     const contextNarrative = buildContextNarrative(contexto);
     const systemContent    = NUTRIA_SYSTEM_PROMPT + contextNarrative;
 
     const conversationMessages = [
       { role: 'system', content: systemContent },
+      ...safeHistory,
       { role: 'user',   content: message.trim() },
     ];
 
@@ -466,7 +482,7 @@ router.post('/nutria/chat', async (req, res) => {
     const MAX_TOOL_ROUNDS  = 5;
     let round = 0;
 
-    console.log(`[NutrIA] → model="${model}" context_chars=${systemContent.length}`);
+    console.log(`[NutrIA] → model="${model}" history=${safeHistory.length} turns context_chars=${systemContent.length}`);
 
     // ── First Groq call ───────────────────────────────────────────────────────
     let completion;
@@ -487,6 +503,9 @@ router.post('/nutria/chat', async (req, res) => {
     }
 
     let choice = completion.choices[0];
+
+    // ── Diagnostic: did Groq decide to call a tool? ───────────────────────────
+    console.log('[NutrIA Debug] ¿Groq decidió llamar tool?:', JSON.stringify(choice.message.tool_calls ?? null));
 
     // ── Tool-calling loop — all execution happens silently on the server ──────
     while (choice.finish_reason === 'tool_calls' && round < MAX_TOOL_ROUNDS) {
