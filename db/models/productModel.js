@@ -105,6 +105,21 @@ const ProductSchema = {
     allowNull: true,
     type: DataTypes.STRING,
   },
+  // Free-form product metadata — stored natively as JSONB in PostgreSQL.
+  // Example: { "Color": "Azul", "Talla": "XL" }
+  attributes: {
+    field: 'attributes',
+    allowNull: true,
+    type: DataTypes.JSONB,
+  },
+  // Bundle dispatch: when set, orderService sends one Dropi order containing all components.
+  // Example: [{ "id": "12345", "qty": 1 }, { "id": "67890", "qty": 1 }]
+  // Takes priority over dropiProductId in dispatchToProviders.
+  dropiItems: {
+    field: 'dropi_items',
+    allowNull: true,
+    type: DataTypes.JSONB,
+  },
 };
 
 class Product extends Model {

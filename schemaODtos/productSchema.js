@@ -21,6 +21,14 @@ const lastSyncAt     = Joi.date().allow(null);
 const images         = Joi.string().allow(null, ''); // JSON-stringified array of image URLs
 const dropiProductId = Joi.string().allow(null, ''); // Dropi product ID for internal organization
 const variants       = Joi.string().allow(null, ''); // JSON-stringified array of variant groups
+const attributes     = Joi.object().allow(null);     // JSONB key-value metadata, e.g. { "Color": "Azul" }
+// Bundle: one Aynimar product maps to multiple Dropi product IDs dispatched in one order.
+const dropiItems = Joi.array()
+  .items(Joi.object({
+    id:  Joi.string().required(),
+    qty: Joi.number().integer().min(1),
+  }))
+  .allow(null);
 
 //recibiremos un limit y un offset
 const limit = Joi.number().integer();
@@ -43,6 +51,8 @@ const createProductSchema = Joi.object({
   images,
   dropiProductId,
   variants,
+  attributes,
+  dropiItems,
 });
 
 const updateProductSchema = Joi.object({
@@ -61,6 +71,8 @@ const updateProductSchema = Joi.object({
   images,
   dropiProductId,
   variants,
+  attributes,
+  dropiItems,
 });
 
 const getProductSchema = Joi.object({

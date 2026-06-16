@@ -503,6 +503,25 @@ class OrderService {
     const byProvider = {};
 
     for (const item of order.items) {
+      // ── Bundle mode: dropiItems is a JSONB array [{id, qty}, ...] ────────────
+      // Each component is multiplied by the customer's order quantity.
+      // E.g. customer orders 2× a bundle {A×1 + B×1} → dispatches A×2 + B×2.
+      if (Array.isArray(item.dropiItems) && item.dropiItems.length > 0) {
+        if (!byProvider.dropi) byProvider.dropi = [];
+        for (const bundleItem of item.dropiItems) {
+          if (!bundleItem.id) continue;
+          byProvider.dropi.push({
+            externalId: String(bundleItem.id),
+            quantity:   (bundleItem.qty ?? 1) * item.OrderProduct.amount,
+          });
+        }
+        console.log(
+          `[Dispatch] Bundle product ${item.id} expanded to ${item.dropiItems.length} Dropi items`
+        );
+        continue;
+      }
+
+      // ── Single-product Dropi dispatch ────────────────────────────────────────
       // dropiProductId (manually linked) takes priority over sourceProvider+externalId
       const dropiId = item.dropiProductId || (item.sourceProvider === 'dropi' ? item.externalId : null);
       if (dropiId) {

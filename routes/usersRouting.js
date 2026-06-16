@@ -1,5 +1,6 @@
 const expressModule = require('express');
 const passport = require('passport');
+const boom = require('@hapi/boom');
 
 const { checkRoles } = require('../middlewares/authHandler');
 
@@ -86,8 +87,12 @@ router.delete(
   async (req, res, next) => {
     try {
       const { id } = req.params;
+      // Owners can only delete their own account; admins can delete any.
+      if (String(req.user.sub) !== String(id) && req.user.role !== 'admin') {
+        return next(boom.forbidden('Solo puedes eliminar tu propia cuenta'));
+      }
       await service.delete(id);
-      res.status(201).json({ id });
+      res.status(200).json({ id });
     } catch (error) {
       next(error);
     }
