@@ -301,13 +301,20 @@ class OrderService {
       // the dashboard via POST /orders/:id/retry-fulfillment.
       try {
         const dispatchResult = await this.dispatchToProviders(order);
-        // Persist Dropi order ID and mark as dispatched
         if (dispatchResult?.dropiOrderId) {
+          // Dropi items found and dispatched successfully
           await order.update({
             dropiOrderId:      dispatchResult.dropiOrderId,
             fulfillmentStatus: 'DISPATCHED',
             fulfillmentError:  null,
           });
+        } else if (dispatchResult === undefined) {
+          // No items had dropi_product_id — flag for manual warehouse logistics
+          await order.update({
+            fulfillmentStatus: 'MANUAL_LOGISTICS',
+            fulfillmentError:  null,
+          });
+          console.log(`[OrderService] Order ${id} has no Dropi items — marked MANUAL_LOGISTICS`);
         }
       } catch (dispatchError) {
         console.error(
