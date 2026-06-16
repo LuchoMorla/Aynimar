@@ -1,4 +1,5 @@
 'use strict';
+/* eslint-disable no-console */
 
 const express  = require('express');
 const passport = require('passport');
@@ -11,18 +12,42 @@ const sequelize               = require('../libs/sequelize');
 const router = express.Router();
 
 // ── Groq client ───────────────────────────────────────────────────────────────
+const MODEL_PRIMARY  = 'llama-3.3-70b-versatile';
+const MODEL_FALLBACK = 'llama-3.1-8b-instant';
+
 function getGroqClient() {
   const apiKey = process.env.GROQ_IA_KEY;
   if (!apiKey) return null;
   return new OpenAI({ apiKey, baseURL: 'https://api.groq.com/openai/v1' });
 }
 
+// Patterns that justify the 70B model (comparison, deep reasoning, neurosales analysis)
+const COMPLEX_RE = /compar[ae]|diferencia|mejor.*que|\bvs\b|versus|reptili|neuroven|por qu[eé]|expl[ií]ca|anal[iy]z|filosof|psicolog|estrategia|consejo.*negocio|c[oó]mo vender|qu[eé] es mejor|recomend.*entre/i;
+
+function pickModel(message) {
+  return COMPLEX_RE.test(message) ? MODEL_PRIMARY : MODEL_FALLBACK;
+}
+
+// safeGroqCall: tries primaryModel, falls back to MODEL_FALLBACK on 429
+async function safeGroqCall(groq, params) {
+  try {
+    return await groq.chat.completions.create(params);
+  } catch (err) {
+    if ((err.status === 429 || err.statusCode === 429) && params.model === MODEL_PRIMARY) {
+      console.error('[NutrIA] 429 rate-limit on 70B — retrying with 8B');
+      return groq.chat.completions.create({ ...params, model: MODEL_FALLBACK });
+    }
+    throw err;
+  }
+}
+
 // ── Telegram helper ───────────────────────────────────────────────────────────
+// TELEGRAM_OWNER_ID is the numeric user-id of the shop owner (not the bot itself)
 async function sendTelegram(text) {
   const token  = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+  const chatId = process.env.TELEGRAM_OWNER_ID || process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) {
-    console.warn('[NutrIA] Telegram no configurado — define TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID.');
+    console.warn('[NutrIA] Telegram no configurado — define TELEGRAM_BOT_TOKEN y TELEGRAM_OWNER_ID.');
     return false;
   }
   try {
@@ -32,7 +57,7 @@ async function sendTelegram(text) {
       body:    JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
     });
     const data = await resp.json();
-    if (!data.ok) console.error('[NutrIA] Telegram API error:', JSON.stringify(data));
+    if (!data.ok) console.error('[NutrIA] Telegram error:', JSON.stringify(data));
     return data.ok === true;
   } catch (err) {
     console.error('[NutrIA] Telegram fetch error:', err.message);
@@ -533,24 +558,25 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
 
   if (name === 'buscar_producto') {
     try {
-      const terms     = expandSearchTerms(args.nombre);
+      // Cap to 3 terms max (primary + 2 synonyms) to keep OR clause short
+      const terms     = expandSearchTerms(args.nombre).slice(0, 3);
       const orClauses = terms.flatMap((t) => [
         { name:        { [Op.iLike]: `%${t}%` } },
         { description: { [Op.iLike]: `%${t}%` } },
       ]);
 
-      // Phase 1: search products by name + description
+      // Query 1: search by product name + description
       let products = await models.Product.findAll({
         where: { [Op.or]: orClauses, isDeleted: false },
         limit: 5,
         attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
       });
 
-      // Phase 2: if no results, search by category name and include those products
+      // Query 2 (fallback only): match by category name when Q1 returns nothing
       if (products.length === 0) {
-        const catOrClauses = terms.map((t) => ({ name: { [Op.iLike]: `%${t}%` } }));
-        const categories   = await models.Category.findAll({
-          where: { [Op.or]: catOrClauses },
+        const primaryTerm = args.nombre;
+        const categories  = await models.Category.findAll({
+          where: { name: { [Op.iLike]: `%${primaryTerm}%` } },
           attributes: ['id'],
           limit: 3,
         });
@@ -563,8 +589,6 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
           });
         }
       }
-
-      console.log(`[NutrIA Debug] Resultado de Query PostgreSQL para "${args.nombre}" (terms: ${terms.join(', ')}):`, products.length, 'resultados');
 
       if (products.length === 0) {
         return { encontrados: 0, productos: [], sinStock: true };
@@ -701,27 +725,23 @@ router.post('/nutria/chat', async (req, res) => {
       return res.status(400).json({ message: 'Se requiere el campo "message".' });
     }
 
-    // ── Diagnostic: log what the client actually sent ──────────────────────
-    console.log('[NutrIA Debug] Mensaje Recibido:', message);
-    console.log('[NutrIA Debug] Contexto Recibido:', JSON.stringify(contexto ?? null));
-
     const groq = getGroqClient();
     if (!groq) {
       console.error('[NutrIA] GROQ_IA_KEY no configurada.');
       return res.status(503).json({ message: 'NutrIA está en mantenimiento. Vuelve pronto 🦦.' });
     }
 
-    // 70B model is reliable for tool calling; 8B writes function tags as text
-    const model = (process.env.GROQ_MODEL || 'llama-3.3-70b-versatile').trim();
+    // Pick model based on message complexity; 8B handles most sales chats
+    const model = process.env.GROQ_MODEL || pickModel(message.trim());
 
-    // Restore conversation history so the model can follow multi-turn flows
-    // (e.g. "¿Cómo te llamas?" → "Luis" requires context of the previous turn).
-    // history[] contains all previous turns EXCEPT the current message — no duplication.
+    // Keep last 6 turns (12 messages) — enough context without burning tokens
     const safeHistory = Array.isArray(history)
-      ? history.filter(
-          (m) => m && typeof m.role === 'string' && typeof m.content === 'string'
-            && ['user', 'assistant'].includes(m.role)
-        )
+      ? history
+          .filter(
+            (m) => m && typeof m.role === 'string' && typeof m.content === 'string'
+              && ['user', 'assistant'].includes(m.role)
+          )
+          .slice(-6)
       : [];
 
     const clientActions     = [];
@@ -739,7 +759,8 @@ router.post('/nutria/chat', async (req, res) => {
       if (!needsMatch.ambiguous && Array.isArray(needsMatch.searchTerms) && needsMatch.searchTerms.length > 0) {
         try {
           const { models } = sequelize;
-          const allTerms  = [...new Set(needsMatch.searchTerms.flatMap((t) => expandSearchTerms(t)))];
+          // Cap to 3 terms to keep the OR clause lightweight
+          const allTerms  = [...new Set(needsMatch.searchTerms.flatMap((t) => expandSearchTerms(t)))].slice(0, 3);
           const orClauses = allTerms.flatMap((t) => [
             { name:        { [Op.iLike]: `%${t}%` } },
             { description: { [Op.iLike]: `%${t}%` } },
@@ -755,7 +776,7 @@ router.post('/nutria/chat', async (req, res) => {
               nombre:      p.name,
               precio:      p.price,
               stock:       p.stock ?? 'disponible',
-              descripcion: (p.description || '').slice(0, 80),
+              descripcion: (p.description || '').slice(0, 60),
               imagen:      p.image || null,
             }));
             clientActions.push({ type: 'show_products', productos: payload });
@@ -764,15 +785,13 @@ router.post('/nutria/chat', async (req, res) => {
             estadoActualizado.ultimosProductos = payload.slice(0, 3).map((p) => ({ id: p.id, nombre: p.nombre, precio: p.precio }));
 
             const lista = payload.map((p) => `- ${p.nombre} | $${p.precio} | id:${p.id}`).join('\n');
-            oportunidadStr = `\n\nOPORTUNIDAD PRE-CARGADA (codigo reptiliano: ${needsMatch.label}):\n${lista}\nEscribe tu reply con estructura A-B-C-D usando estos productos. NO llames buscar_producto() este turno — los datos ya estan en el carrusel del cliente.`;
-            console.log(`[NutrIA Engine] Pre-fetch: ${preProd.length} productos | codigo="${needsMatch.codigo}"`);
+            oportunidadStr = `\n\nOPORTUNIDAD PRE-CARGADA (${needsMatch.label}):\n${lista}\nReply con A-B-C-D. NO llames buscar_producto() este turno.`;
           }
         } catch (engineErr) {
-          console.warn('[NutrIA Engine] Pre-fetch failed, tool-loop fallback activo:', engineErr.message);
+          console.error('[NutrIA] Pre-fetch error:', engineErr.message);
         }
       } else if (needsMatch.ambiguous && needsMatch.preguntaConsultiva) {
-        oportunidadStr = `\n\nDOLOR AMBIGUO DETECTADO (${needsMatch.label}):\nHaz EXACTAMENTE esta pregunta consultiva antes de buscar nada: "${needsMatch.preguntaConsultiva}"`;
-        console.log(`[NutrIA Engine] Dolor ambiguo: "${needsMatch.codigo}" — pregunta consultiva inyectada`);
+        oportunidadStr = `\n\nDOLOR AMBIGUO (${needsMatch.label}): Pregunta antes de buscar: "${needsMatch.preguntaConsultiva}"`;
       }
     }
 
@@ -784,51 +803,40 @@ router.post('/nutria/chat', async (req, res) => {
       { role: 'user',   content: message.trim() },
     ];
 
-    console.log(`[NutrIA] → model="${model}" history=${safeHistory.length} turns context_chars=${systemContent.length}`);
+    const groqParams = { model, messages: conversationMessages, tools: NUTRIA_TOOLS, tool_choice: 'auto' };
 
-    // ── First Groq call ───────────────────────────────────────────────────────
+    // ── First Groq call (with 70B→8B fallback on 429) ────────────────────────
     let completion;
     try {
-      completion = await groq.chat.completions.create({
-        model,
-        messages:    conversationMessages,
-        tools:       NUTRIA_TOOLS,
-        tool_choice: 'auto',
-      });
+      completion = await safeGroqCall(groq, groqParams);
     } catch (groqInitErr) {
-      console.error('[NutrIA] Groq initial call error:', groqInitErr.message);
+      console.error('[NutrIA] Groq initial call failed:', groqInitErr.message);
       return res.json({
-        reply: '¡Hola! Tuve un problemita técnico momentáneo. ¿Me repites tu pregunta? 🦦',
-        actions: [],
-        estadoActualizado: null,
+        reply: '¡Chuta! Me distraje un momento. ¿Lo intentamos de nuevo? 🦦',
+        actions: clientActions,
+        estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
       });
     }
 
     let choice = completion.choices[0];
 
-    // ── Diagnostic: did Groq decide to call a tool? ───────────────────────────
-    console.log('[NutrIA Debug] ¿Groq decidió llamar tool?:', JSON.stringify(choice.message.tool_calls ?? null));
-
-    // ── Tool-calling loop — all execution happens silently on the server ──────
+    // ── Tool-calling loop ─────────────────────────────────────────────────────
     while (choice.finish_reason === 'tool_calls' && round < MAX_TOOL_ROUNDS) {
       round++;
       conversationMessages.push(choice.message);
 
       const toolResults = await Promise.all(
         (choice.message.tool_calls || []).map(async (tc) => {
-          // Parse args — silently fall back to {} if JSON is malformed
           let rawArgs = {};
-          try { rawArgs = JSON.parse(tc.function.arguments); } catch (_) { /* malformed JSON */ }
+          try { rawArgs = JSON.parse(tc.function.arguments); } catch (_) { /* malformed */ }
 
-          // Normalize to the exact shape each tool expects, stripping extra/mistyped fields
           const args = normalizeToolArgs(tc.function.name, rawArgs);
-          console.log(`[NutrIA] tool(${round}): ${tc.function.name}(${JSON.stringify(args)})`);
 
           let result;
           try {
             result = await executeTool(tc.function.name, args, clientActions, estadoActualizado);
           } catch (toolErr) {
-            console.error(`[NutrIA] Tool execution error (${tc.function.name}):`, toolErr.message);
+            console.error(`[NutrIA] Tool error (${tc.function.name}):`, toolErr.message);
             result = { error: 'Herramienta no disponible temporalmente.' };
           }
 
@@ -838,40 +846,30 @@ router.post('/nutria/chat', async (req, res) => {
 
       conversationMessages.push(...toolResults);
 
-      // Groq 400 in the loop must NEVER reach the client — return what we have
       try {
-        completion = await groq.chat.completions.create({
-          model,
-          messages:    conversationMessages,
-          tools:       NUTRIA_TOOLS,
-          tool_choice: 'auto',
-        });
+        completion = await safeGroqCall(groq, { ...groqParams, messages: conversationMessages });
         choice = completion.choices[0];
       } catch (groqLoopErr) {
-        console.error(`[NutrIA] Groq error in loop (round ${round}):`, groqLoopErr.message);
+        console.error('[NutrIA] Groq loop error:', groqLoopErr.message);
         return res.json({
-          reply: '¡Uy, tuve un inconveniente buscando eso! ¿Me repites qué producto buscas? 🦦',
+          reply: '¡Chuta! Me distraje buscando, ¿probamos con otro término? 🦦',
           actions: clientActions,
           estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
         });
       }
     }
 
-    // Strip any leaked function-call artifacts before sending reply to the client
     const reply = sanitizeReply(choice.message?.content);
-
-    console.log(`[NutrIA] ✓ reply=${reply.length}ch actions=${clientActions.length} rounds=${round}`);
 
     return res.json({
       reply,
-      actions:          clientActions,
+      actions:           clientActions,
       estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
     });
   } catch (err) {
     console.error('[NutrIA] Error inesperado:', err.message);
-    // Last-resort catch: return friendly message, not a 400/500 to the client
     return res.json({
-      reply: 'Tuve un inconveniente técnico. Inténtalo de nuevo en un momento 🦦.',
+      reply: '¡Chuta! Me distraje un momento, ¿probamos de nuevo? 🦦',
       actions: [],
       estadoActualizado: null,
     });
@@ -894,14 +892,12 @@ router.post('/nutria/session-close', async (req, res) => {
       return res.json({ ok: true });
     }
 
-    const model = (process.env.GROQ_MODEL || 'llama-3.3-70b-versatile').trim();
-
     const safeHistory = history
       .filter((m) => m && ['user', 'assistant'].includes(m.role) && typeof m.content === 'string')
       .slice(-12);
 
-    const completion = await groq.chat.completions.create({
-      model,
+    const completion = await safeGroqCall(groq, {
+      model: MODEL_FALLBACK,
       messages: [
         {
           role: 'system',
