@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 const boom = require('@hapi/boom');
 const sequelize = require('../libs/sequelize');
 const { models } = sequelize;
@@ -65,6 +66,16 @@ class OrderService {
     if (order.customerId) {
       throw boom.forbidden('This order is already associated with a customer. Use the standard endpoint.');
     }
+
+    // FK safety check — prevents a DB constraint violation if the AI sends
+    // a stale, hallucinated, or default product_id that no longer exists.
+    const productoExiste = await models.Product.findByPk(data.productId, {
+      attributes: ['id'],
+    });
+    if (!productoExiste) {
+      throw boom.notFound(`Producto ${data.productId} no encontrado en inventario. Lo siento, ese producto no está disponible en este momento.`);
+    }
+
     const newItem = await models.OrderProduct.create(data);
 
     // Reset the 2-hour countdown each time an item is added (idempotent via jobId).
