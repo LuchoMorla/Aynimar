@@ -29,6 +29,12 @@ class RateLimitError extends Error {
   constructor() { super('rate_limit'); this.isRateLimit = true; }
 }
 
+// ── Telegram auto-discovery state ─────────────────────────────────────────────
+// Populated by the /telegram/webhook endpoint the first time a message arrives.
+// Used as last-resort fallback when neither TELEGRAM_OWNER_ID nor TELEGRAM_CHAT_ID is set.
+let detectedOwnerId = null;
+let ownerIdWarned   = false;
+
 function getGroqClient() {
   const apiKey = process.env.GROQ_IA_KEY;
   if (!apiKey) return null;
@@ -63,12 +69,12 @@ async function safeGroqCall(groq, params) {
 }
 
 // ── Telegram helper ───────────────────────────────────────────────────────────
-// TELEGRAM_OWNER_ID is the numeric user-id of the shop owner (not the bot itself)
+// Priority: TELEGRAM_OWNER_ID → TELEGRAM_CHAT_ID → auto-discovered detectedOwnerId
 async function sendTelegram(text) {
   const token  = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_OWNER_ID || process.env.TELEGRAM_CHAT_ID;
+  const chatId = process.env.TELEGRAM_OWNER_ID || process.env.TELEGRAM_CHAT_ID || detectedOwnerId;
   if (!token || !chatId) {
-    console.warn('[NutrIA] Telegram no configurado — define TELEGRAM_BOT_TOKEN y TELEGRAM_OWNER_ID.');
+    console.warn('[NutrIA] Telegram no configurado — envía un mensaje al bot para auto-detectar el chat_id.');
     return false;
   }
   try {
@@ -847,15 +853,17 @@ router.post('/nutria/chat', async (req, res) => {
       if (groqInitErr.isRateLimit) {
         await new Promise((r) => setTimeout(r, 5000));
         return res.json({
-          reply: '¡Chuta! Dame un segundo que el sistema está procesando a máxima velocidad, ya te doy el precio. 🦦',
-          actions: clientActions,
+          message:           '¡Chuta! Dame un segundo que el sistema está procesando a máxima velocidad, ya te doy el precio. 🦦',
+          products:          [],
+          actions:           clientActions.filter((a) => a.type !== 'show_products'),
           estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
         });
       }
       console.error('[NutrIA] Groq initial call failed:', groqInitErr.message);
       return res.json({
-        reply: '¡Chuta! Me distraje un momento. ¿Lo intentamos de nuevo? 🦦',
-        actions: clientActions,
+        message:           '¡Chuta! Me distraje un momento. ¿Lo intentamos de nuevo? 🦦',
+        products:          [],
+        actions:           clientActions.filter((a) => a.type !== 'show_products'),
         estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
       });
     }
@@ -895,15 +903,17 @@ router.post('/nutria/chat', async (req, res) => {
         if (groqLoopErr.isRateLimit) {
           await new Promise((r) => setTimeout(r, 5000));
           return res.json({
-            reply: '¡Chuta! Dame un segundo que el sistema está procesando a máxima velocidad, ya te doy el precio. 🦦',
-            actions: clientActions,
+            message:           '¡Chuta! Dame un segundo que el sistema está procesando a máxima velocidad, ya te doy el precio. 🦦',
+            products:          clientActions.filter((a) => a.type === 'show_products').flatMap((a) => a.productos ?? []),
+            actions:           clientActions.filter((a) => a.type !== 'show_products'),
             estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
           });
         }
         console.error('[NutrIA] Groq loop error:', groqLoopErr.message);
         return res.json({
-          reply: '¡Chuta! Me distraje buscando, ¿probamos con otro término? 🦦',
-          actions: clientActions,
+          message:           '¡Chuta! Me distraje buscando, ¿probamos con otro término? 🦦',
+          products:          clientActions.filter((a) => a.type === 'show_products').flatMap((a) => a.productos ?? []),
+          actions:           clientActions.filter((a) => a.type !== 'show_products'),
           estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
         });
       }
@@ -911,18 +921,54 @@ router.post('/nutria/chat', async (req, res) => {
 
     const reply = sanitizeReply(choice.message?.content);
 
+    // Hoist products to a top-level key so the frontend reads them directly
+    // without traversing the actions array (prevents silent null on no-tool turns)
+    const products     = clientActions
+      .filter((a) => a.type === 'show_products')
+      .flatMap((a) => a.productos ?? []);
+    const otherActions = clientActions.filter((a) => a.type !== 'show_products');
+
     return res.json({
-      reply,
-      actions:           clientActions,
+      message:           reply,
+      products,
+      actions:           otherActions,
       estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
     });
   } catch (err) {
     console.error('[NutrIA] Error inesperado:', err.message);
     return res.json({
-      reply: '¡Chuta! Me distraje un momento, ¿probamos de nuevo? 🦦',
-      actions: [],
+      message:           '¡Chuta! Me distraje un momento, ¿probamos de nuevo? 🦦',
+      products:          [],
+      actions:           [],
       estadoActualizado: null,
     });
+  }
+});
+
+// ── POST /api/v1/ai/telegram/webhook ─────────────────────────────────────────
+// Receives Telegram bot updates. Must return 200 immediately or Telegram retries.
+// Extracts the sender's chat_id and:
+//   a) stores it as the dynamic fallback for sendTelegram()
+//   b) prints a one-time warning if TELEGRAM_OWNER_ID is unset / mismatched
+router.post('/telegram/webhook', (req, res) => {
+  res.sendStatus(200); // ack first — never block Telegram
+
+  const update = req.body;
+  const msg    = update?.message ?? update?.channel_post ?? update?.edited_message;
+  if (!msg?.chat?.id) return;
+
+  const incomingId = String(msg.chat.id);
+
+  if (!detectedOwnerId) {
+    detectedOwnerId = incomingId;
+  }
+
+  if (!ownerIdWarned) {
+    const configured = process.env.TELEGRAM_OWNER_ID;
+    if (!configured || configured !== incomingId) {
+      ownerIdWarned = true;
+      console.warn(`[AUTO-CONFIG] Detected potential Owner ID: ${incomingId}. Please update TELEGRAM_OWNER_ID in Railway variables.`);
+    }
   }
 });
 
