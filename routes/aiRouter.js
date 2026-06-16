@@ -80,6 +80,13 @@ function buildContextNarrative(contexto) {
       (trackingSoporte.estado ? ` (${trackingSoporte.estado})` : ''));
   }
 
+  if (Array.isArray(contexto.ultimosProductos) && contexto.ultimosProductos.length > 0) {
+    const lista = contexto.ultimosProductos
+      .map((p) => `id:${p.id} "${p.nombre}" $${p.precio}`)
+      .join(' | ');
+    lines.push(`- Ultimos productos mostrados (IDs reales para get_detalles_producto): ${lista}`);
+  }
+
   if (lines.length === 0) return '';
   return '\n\nCONTEXTO ACTIVO DEL CLIENTE:\n' + lines.join('\n');
 }
@@ -131,8 +138,12 @@ function normalizeToolArgs(name, raw) {
     return { tipo, mensaje };
   }
 
-  // redirigir_checkout — no args needed
   if (name === 'redirigir_checkout') return {};
+
+  if (name === 'get_detalles_producto') {
+    const id = parseInt(r.producto_id ?? r.productId ?? r.id ?? 0, 10);
+    return { producto_id: Number.isFinite(id) ? id : 0 };
+  }
 
   return r;
 }
@@ -274,6 +285,23 @@ const NUTRIA_TOOLS = [
           },
         },
         required: ['tipo', 'mensaje'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_detalles_producto',
+      description:
+        'Obtiene los detalles completos de un producto usando su ID real de la base de datos. ' +
+        'Úsala cuando el cliente pida más info sobre un producto ya mostrado ("¿qué es eso?", "dame los detalles", "¿cuáles son las características?"). ' +
+        'NUNCA describas un producto de memoria — usa siempre esta herramienta con el ID del contexto.',
+      parameters: {
+        type: 'object',
+        properties: {
+          producto_id: { type: 'integer', description: 'ID real del producto (de buscar_producto, del contexto o de "Ultimos productos mostrados")' },
+        },
+        required: ['producto_id'],
       },
     },
   },
@@ -535,9 +563,10 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
       // Frontend will render product cards
       clientActions.push({ type: 'show_products', productos: payload });
 
-      // Merge into historialIntereses for the state manager
+      // Merge into historialIntereses and ultimosProductos for the state manager
       const nombres = payload.map((p) => p.nombre);
       estadoActualizado.historialIntereses = nombres;
+      estadoActualizado.ultimosProductos   = payload.slice(0, 3).map((p) => ({ id: p.id, nombre: p.nombre, precio: p.precio }));
 
       return { encontrados: payload.length, productos: payload };
     } catch (err) {
@@ -589,6 +618,26 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
     }
 
     return { enviado: sent };
+  }
+
+  if (name === 'get_detalles_producto') {
+    try {
+      const product = await models.Product.findByPk(args.producto_id, {
+        attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
+      });
+      if (!product) return { error: 'Producto no encontrado. Verifica el ID.' };
+      return {
+        id:          product.id,
+        nombre:      product.name,
+        precio:      product.price,
+        stock:       product.stock ?? 'disponible',
+        descripcion: product.description,
+        imagen:      product.image || null,
+      };
+    } catch (err) {
+      console.error('[NutrIA:get_detalles_producto]', err.message);
+      return { error: 'No pude obtener los detalles del producto.' };
+    }
   }
 
   // ── Client-side actions ───────────────────────────────────────────────────
@@ -693,6 +742,7 @@ router.post('/nutria/chat', async (req, res) => {
             clientActions.push({ type: 'show_products', productos: payload });
             if (!estadoActualizado.historialIntereses) estadoActualizado.historialIntereses = [];
             estadoActualizado.historialIntereses.push(...payload.map((p) => p.nombre));
+            estadoActualizado.ultimosProductos = payload.slice(0, 3).map((p) => ({ id: p.id, nombre: p.nombre, precio: p.precio }));
 
             const lista = payload.map((p) => `- ${p.nombre} | $${p.precio} | id:${p.id}`).join('\n');
             oportunidadStr = `\n\nOPORTUNIDAD PRE-CARGADA (codigo reptiliano: ${needsMatch.label}):\n${lista}\nEscribe tu reply con estructura A-B-C-D usando estos productos. NO llames buscar_producto() este turno — los datos ya estan en el carrusel del cliente.`;
