@@ -6,6 +6,7 @@ const { Op } = require('sequelize');
 const WalletService = require('./walletService');
 const { createOrderInDropi, fetchDropiOrderStatus } = require('../integrations/dropi/dropiAdapter');
 const { createOrderInEffi }  = require('../integrations/effi/effiAdapter');
+const { sendTelegramNotification } = require('../utils/telegramNotify');
 
 const { config } = require('./../config/config');
 // const nodemailer = require('nodemailer');
@@ -495,21 +496,25 @@ class OrderService {
     const byProvider = {};
 
     for (const item of order.items) {
-      const { sourceProvider, externalId } = item;
-      if (!sourceProvider || !externalId) continue;      // own-stock product
-
-      if (sourceProvider !== 'dropi' && sourceProvider !== 'effi') {
-        console.warn(
-          `[Dispatch] Unknown sourceProvider "${sourceProvider}" on product ${item.id} — skipped`
-        );
+      // dropiProductId (manually linked) takes priority over sourceProvider+externalId
+      const dropiId = item.dropiProductId || (item.sourceProvider === 'dropi' ? item.externalId : null);
+      if (dropiId) {
+        if (!byProvider.dropi) byProvider.dropi = [];
+        byProvider.dropi.push({ externalId: dropiId, quantity: item.OrderProduct.amount });
         continue;
       }
 
-      if (!byProvider[sourceProvider]) byProvider[sourceProvider] = [];
-      byProvider[sourceProvider].push({
-        externalId,
-        quantity: item.OrderProduct.amount,
-      });
+      if (item.sourceProvider === 'effi' && item.externalId) {
+        if (!byProvider.effi) byProvider.effi = [];
+        byProvider.effi.push({ externalId: item.externalId, quantity: item.OrderProduct.amount });
+        continue;
+      }
+
+      if (item.sourceProvider && item.sourceProvider !== 'dropi' && item.sourceProvider !== 'effi') {
+        console.warn(
+          `[Dispatch] Unknown sourceProvider "${item.sourceProvider}" on product ${item.id} — skipped`
+        );
+      }
     }
 
     if (Object.keys(byProvider).length === 0) return; // nothing to dispatch
@@ -544,6 +549,15 @@ class OrderService {
         dropiOrderId = result.externalOrderId ?? null;
         console.log(
           `[Dispatch] Dropi order created for Aynimar #${order.id}: ${dropiOrderId}`
+        );
+        const customerName = order.customer
+          ? `${order.customer.name ?? ''} ${order.customer.lastName ?? ''}`.trim()
+          : 'Invitado';
+        await sendTelegramNotification(
+          `✅ <b>Orden #${order.id} enviada a Dropi</b>\n` +
+          `ID Dropi: <code>${dropiOrderId}</code>\n` +
+          `Cliente: ${customerName}\n` +
+          `Productos: ${byProvider.dropi.length} ítem(s)`
         );
       } catch (err) {
         errors.push(`dropi: ${err.message}`);

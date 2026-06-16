@@ -20,6 +20,7 @@ const sourceProvider = Joi.string().valid('dropi', 'effi').allow(null);
 const lastSyncAt     = Joi.date().allow(null);
 const images         = Joi.string().allow(null, ''); // JSON-stringified array of image URLs
 const dropiProductId = Joi.string().allow(null, ''); // Dropi product ID for internal organization
+const variants       = Joi.string().allow(null, ''); // JSON-stringified array of variant groups
 
 //recibiremos un limit y un offset
 const limit = Joi.number().integer();
@@ -41,6 +42,7 @@ const createProductSchema = Joi.object({
   showShop:      showShop,
   images,
   dropiProductId,
+  variants,
 });
 
 const updateProductSchema = Joi.object({
@@ -58,6 +60,7 @@ const updateProductSchema = Joi.object({
   lastSyncAt,
   images,
   dropiProductId,
+  variants,
 });
 
 const getProductSchema = Joi.object({
