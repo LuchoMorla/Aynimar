@@ -51,8 +51,7 @@ function sanitizeReply(text) {
 }
 
 // ── Build a compact narrative from the client's state manager ─────────────────
-// The frontend sends a structured "contexto" object instead of a raw history
-// array, keeping the model context window small and unambiguous.
+// Plain text only — HTML tags in the system prompt corrupt tool call arguments.
 function buildContextNarrative(contexto) {
   if (!contexto || typeof contexto !== 'object') return '';
   const lines = [];
@@ -60,12 +59,12 @@ function buildContextNarrative(contexto) {
   const { perfilCliente, historialIntereses, estadoCarrito, trackingSoporte } = contexto;
 
   if (perfilCliente) {
-    if (perfilCliente.nombre) lines.push(`• Cliente: <b>${perfilCliente.nombre}</b>`);
-    if (perfilCliente.telefono) lines.push(`• WhatsApp: ${perfilCliente.telefono}`);
+    if (perfilCliente.nombre)   lines.push(`- Cliente: ${perfilCliente.nombre}`);
+    if (perfilCliente.telefono) lines.push(`- WhatsApp: ${perfilCliente.telefono}`);
   }
 
   if (Array.isArray(historialIntereses) && historialIntereses.length > 0) {
-    lines.push(`• Productos de interés previos: ${historialIntereses.slice(-6).join(', ')}`);
+    lines.push(`- Intereses previos: ${historialIntereses.slice(-6).join(', ')}`);
   }
 
   if (estadoCarrito && typeof estadoCarrito === 'object') {
@@ -73,16 +72,69 @@ function buildContextNarrative(contexto) {
       .filter(([, qty]) => qty > 0)
       .map(([id, qty]) => `id:${id} x${qty}`)
       .join(', ');
-    if (items) lines.push(`• Carrito activo: ${items}`);
+    if (items) lines.push(`- Carrito activo: ${items}`);
   }
 
   if (trackingSoporte?.ordenId) {
-    lines.push(`• Pedido en seguimiento: #${trackingSoporte.ordenId}` +
+    lines.push(`- Pedido en seguimiento: #${trackingSoporte.ordenId}` +
       (trackingSoporte.estado ? ` (${trackingSoporte.estado})` : ''));
   }
 
   if (lines.length === 0) return '';
   return '\n\nCONTEXTO ACTIVO DEL CLIENTE:\n' + lines.join('\n');
+}
+
+// ── Normalize and validate tool arguments before execution ────────────────────
+// Groq 70B sometimes generates extra fields, mistyped values, or aliased keys.
+// This function coerces every tool's args to the exact shape our code expects,
+// preventing Groq 400 errors from propagating when arg parsing goes wrong.
+function normalizeToolArgs(name, raw) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+
+  if (name === 'buscar_producto') {
+    // Accept any reasonable alias for the search term
+    const term = String(r.nombre || r.query || r.producto || r.name || r.busqueda || '').trim();
+    return { nombre: term || 'producto' };
+  }
+
+  if (name === 'obtener_estado_orden') {
+    const id = parseInt(r.orden_id ?? r.orderId ?? r.id ?? 0, 10);
+    return { orden_id: Number.isFinite(id) ? id : 0 };
+  }
+
+  if (name === 'agregar_al_carrito') {
+    const pid = parseInt(r.producto_id ?? r.productId ?? r.id ?? 0, 10);
+    const qty = Math.max(1, parseInt(r.cantidad ?? r.quantity ?? r.amount ?? 1, 10));
+    return {
+      producto_id: Number.isFinite(pid) ? pid : 0,
+      cantidad:    Number.isFinite(qty) ? qty : 1,
+    };
+  }
+
+  if (name === 'eliminar_del_carrito') {
+    const pid = parseInt(r.producto_id ?? r.productId ?? r.id ?? 0, 10);
+    const qty = Math.max(0, parseInt(r.cantidad ?? r.quantity ?? r.amount ?? 0, 10));
+    return {
+      producto_id: Number.isFinite(pid) ? pid : 0,
+      cantidad:    Number.isFinite(qty) ? qty : 0,
+    };
+  }
+
+  if (name === 'navegar_a') {
+    const dest = String(r.destino || r.destination || r.page || '').toLowerCase().trim();
+    return { destino: Object.prototype.hasOwnProperty.call(APP_ROUTES, dest) ? dest : 'tienda' };
+  }
+
+  if (name === 'alertar_telegram') {
+    const tipo    = ['oportunidad', 'critico'].includes(r.tipo) ? r.tipo : 'oportunidad';
+    const mensaje = String(r.mensaje || r.message || r.contenido || '').trim() || 'Sin detalles.';
+    return { tipo, mensaje };
+  }
+
+  // redirigir_checkout — no args needed
+  if (name === 'redirigir_checkout') return {};
+
+  return r;
 }
 
 // ── Try to extract nombre / telefono from an alertar_telegram message ─────────
@@ -237,12 +289,20 @@ PERSONALIDAD: Carismática, empática, confiable, con jerga ecuatoriana sutil ("
 REGLA CRÍTICA — HERRAMIENTAS:
 Las herramientas se ejecutan automáticamente en el servidor. NUNCA escribas "<function=...>", JSON de herramientas ni código en tus respuestas de texto. Tu texto es solo para hablar con el cliente en español natural.
 
+INFERENCIA DE NECESIDAD — LEY ABSOLUTA:
+NUNCA digas "no tengo" o "no hay stock" sin antes llamar buscar_producto(). SIEMPRE.
+Cuando el cliente exprese una necesidad, dolor o situación, INFIERE el producto y busca:
+  - "se me descarga el celular" → busca "powerbank"
+  - "no tengo luz" → busca "linterna" o "panel solar"
+  - "quiero regalar algo" → pregunta qué tipo y luego busca
+Solo di "¡Chuta, ese no lo tengo ahora!" DESPUÉS de que buscar_producto() retorne { encontrados: 0 }.
+
 CUÁNDO USAR CADA HERRAMIENTA:
-• Cliente pregunta por precio/disponibilidad → buscar_producto() de inmediato.
+• Cliente menciona cualquier necesidad, dolor o producto → buscar_producto() primero, siempre.
 • Cliente confirma que quiere un producto → agregar_al_carrito() con el id de buscar_producto().
 • Cliente listo para pagar o no encuentra el botón → redirigir_checkout() sin preguntar.
 • Cliente pregunta cómo llegar a una sección → navegar_a() directamente.
-• Producto sin stock → di "¡Chuta, ese no lo tengo ahora! Pero no te preocupes, te lo gestiono personalmente. ¿Cómo te llamas?" — recoge primero el nombre, luego el WhatsApp en mensajes separados. Solo DESPUÉS de tener ambos → alertar_telegram(tipo="oportunidad").
+• buscar_producto() retorna { encontrados: 0 } → di "¡Chuta, ese no lo tengo ahora! Pero no te preocupes, te lo gestiono yo. ¿Cómo te llamas?" — recoge nombre, luego WhatsApp en mensajes separados. Solo con ambos datos → alertar_telegram(tipo="oportunidad").
 • Reclamo grave / reembolso / problema complejo → alertar_telegram(tipo="critico") y avisa que un humano le contactará.
 • Cliente da un ID de pedido → obtener_estado_orden().
 
@@ -374,7 +434,7 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
 // ── POST /api/v1/ai/nutria/chat ───────────────────────────────────────────────
 // Accepts: { message: string, contexto: object }
 // Returns: { reply: string, actions: array, estadoActualizado: object }
-router.post('/nutria/chat', async (req, res, next) => {
+router.post('/nutria/chat', async (req, res) => {
   try {
     const { message, contexto } = req.body;
 
@@ -408,38 +468,72 @@ router.post('/nutria/chat', async (req, res, next) => {
 
     console.log(`[NutrIA] → model="${model}" context_chars=${systemContent.length}`);
 
-    let completion = await groq.chat.completions.create({
-      model,
-      messages:    conversationMessages,
-      tools:       NUTRIA_TOOLS,
-      tool_choice: 'auto',
-    });
-    let choice = completion.choices[0];
-
-    // Tool-calling loop — all tool execution happens silently on the server
-    while (choice.finish_reason === 'tool_calls' && round < MAX_TOOL_ROUNDS) {
-      round++;
-      conversationMessages.push(choice.message);
-
-      const toolResults = await Promise.all(
-        (choice.message.tool_calls || []).map(async (tc) => {
-          let args = {};
-          try { args = JSON.parse(tc.function.arguments); } catch (_) { /* ignore */ }
-          console.log(`[NutrIA] tool(${round}): ${tc.function.name}(${JSON.stringify(args)})`);
-          const result = await executeTool(tc.function.name, args, clientActions, estadoActualizado);
-          return { role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result) };
-        })
-      );
-
-      conversationMessages.push(...toolResults);
-
+    // ── First Groq call ───────────────────────────────────────────────────────
+    let completion;
+    try {
       completion = await groq.chat.completions.create({
         model,
         messages:    conversationMessages,
         tools:       NUTRIA_TOOLS,
         tool_choice: 'auto',
       });
-      choice = completion.choices[0];
+    } catch (groqInitErr) {
+      console.error('[NutrIA] Groq initial call error:', groqInitErr.message);
+      return res.json({
+        reply: '¡Hola! Tuve un problemita técnico momentáneo. ¿Me repites tu pregunta? 🦦',
+        actions: [],
+        estadoActualizado: null,
+      });
+    }
+
+    let choice = completion.choices[0];
+
+    // ── Tool-calling loop — all execution happens silently on the server ──────
+    while (choice.finish_reason === 'tool_calls' && round < MAX_TOOL_ROUNDS) {
+      round++;
+      conversationMessages.push(choice.message);
+
+      const toolResults = await Promise.all(
+        (choice.message.tool_calls || []).map(async (tc) => {
+          // Parse args — silently fall back to {} if JSON is malformed
+          let rawArgs = {};
+          try { rawArgs = JSON.parse(tc.function.arguments); } catch (_) { /* malformed JSON */ }
+
+          // Normalize to the exact shape each tool expects, stripping extra/mistyped fields
+          const args = normalizeToolArgs(tc.function.name, rawArgs);
+          console.log(`[NutrIA] tool(${round}): ${tc.function.name}(${JSON.stringify(args)})`);
+
+          let result;
+          try {
+            result = await executeTool(tc.function.name, args, clientActions, estadoActualizado);
+          } catch (toolErr) {
+            console.error(`[NutrIA] Tool execution error (${tc.function.name}):`, toolErr.message);
+            result = { error: 'Herramienta no disponible temporalmente.' };
+          }
+
+          return { role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result) };
+        })
+      );
+
+      conversationMessages.push(...toolResults);
+
+      // Groq 400 in the loop must NEVER reach the client — return what we have
+      try {
+        completion = await groq.chat.completions.create({
+          model,
+          messages:    conversationMessages,
+          tools:       NUTRIA_TOOLS,
+          tool_choice: 'auto',
+        });
+        choice = completion.choices[0];
+      } catch (groqLoopErr) {
+        console.error(`[NutrIA] Groq error in loop (round ${round}):`, groqLoopErr.message);
+        return res.json({
+          reply: '¡Uy, tuve un inconveniente buscando eso! ¿Me repites qué producto buscas? 🦦',
+          actions: clientActions,
+          estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
+        });
+      }
     }
 
     // Strip any leaked function-call artifacts before sending reply to the client
@@ -454,7 +548,12 @@ router.post('/nutria/chat', async (req, res, next) => {
     });
   } catch (err) {
     console.error('[NutrIA] Error inesperado:', err.message);
-    next(err);
+    // Last-resort catch: return friendly message, not a 400/500 to the client
+    return res.json({
+      reply: 'Tuve un inconveniente técnico. Inténtalo de nuevo en un momento 🦦.',
+      actions: [],
+      estadoActualizado: null,
+    });
   }
 });
 
