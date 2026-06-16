@@ -43,7 +43,16 @@ const OrderProductSchema =  {
     },
     onUpdate: 'CASCADE',
     onDelete: 'SET NULL'
-  }
+  },
+  // Dropi variant ID chosen by the customer at add-to-cart time.
+  // Only set for variant products (isBundle=false, dropiItems.length > 1).
+  // Used by dispatchToProviders to send the correct variant to Dropi.
+  selectedDropiId: {
+    field: 'selected_dropi_id',
+    allowNull: true,
+    type: DataTypes.STRING(64),
+    defaultValue: null,
+  },
 }
 
 class OrderProduct extends Model {

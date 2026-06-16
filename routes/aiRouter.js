@@ -25,6 +25,19 @@ function cachedOrder(id) {
 }
 function cacheOrder(id, data) { ORDER_CACHE.set(id, { data, ts: Date.now() }); }
 
+// ── Sales performance logger (fire-and-forget) ────────────────────────────────
+function logSalesEvent(models, { sessionId, outcome, productIds, turns, lastIntent, toolCallNames }) {
+  if (!models?.SalesPerformance) return;
+  models.SalesPerformance.create({
+    sessionId:  sessionId.slice(0, 64),
+    outcome,
+    productIds: productIds?.length > 0 ? productIds : null,
+    turns,
+    lastIntent: lastIntent ? lastIntent.slice(0, 500) : null,
+    toolCalls:  toolCallNames?.length > 0 ? toolCallNames : null,
+  }).catch((err) => console.error('[SalesPerformance] log error:', err.message));
+}
+
 class RateLimitError extends Error {
   constructor() { super('rate_limit'); this.isRateLimit = true; }
 }
@@ -928,6 +941,34 @@ router.post('/nutria/chat', async (req, res) => {
       .flatMap((a) => a.productos ?? []);
     const otherActions = clientActions.filter((a) => a.type !== 'show_products');
 
+    // ── Sales performance logging (fire-and-forget) ───────────────────────────
+    const { models } = sequelize;
+    const sessionId  = String(req.body.sessionId || `anon-${Date.now()}`);
+    const turns      = safeHistory.length + 1;
+
+    let outcome = 'no_action';
+    if (otherActions.some((a) => a.type === 'redirect'))      outcome = 'checkout_redirect';
+    else if (otherActions.some((a) => a.type === 'add_to_cart')) outcome = 'cart_add';
+    else if (estadoActualizado.trackingSoporte?.ordenId)         outcome = 'support_query';
+
+    const addedProducts = otherActions
+      .filter((a) => a.type === 'add_to_cart')
+      .map((a) => ({ id: a.productoId, qty: a.cantidad }));
+
+    const toolCallNames = conversationMessages
+      .filter((m) => m.role === 'assistant' && Array.isArray(m.tool_calls))
+      .flatMap((m) => m.tool_calls.map((tc) => tc.function.name));
+
+    logSalesEvent(models, {
+      sessionId,
+      outcome,
+      productIds:    addedProducts,
+      turns,
+      lastIntent:    message.trim(),
+      toolCallNames,
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
     return res.json({
       message:           reply,
       products,
@@ -942,6 +983,44 @@ router.post('/nutria/chat', async (req, res) => {
       actions:           [],
       estadoActualizado: null,
     });
+  }
+});
+
+// ── GET /api/v1/ai/stats ─────────────────────────────────────────────────────
+// Requires admin JWT. Returns real chatbot conversion metrics.
+// Query params: ?from=YYYY-MM-DD&to=YYYY-MM-DD (both optional)
+router.get('/stats', passport.authenticate('jwt', { session: false }), checkRoles('admin'), async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const { models }   = sequelize;
+
+    const where = {};
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt[Op.gte] = new Date(from);
+      if (to)   where.createdAt[Op.lte]  = new Date(to);
+    }
+
+    const rows = await models.SalesPerformance.findAll({ where, order: [['createdAt', 'DESC']] });
+
+    const totals = { cart_add: 0, checkout_redirect: 0, support_query: 0, no_action: 0 };
+    rows.forEach((r) => { if (totals[r.outcome] !== undefined) totals[r.outcome]++; });
+
+    const meaningful   = totals.cart_add + totals.checkout_redirect + totals.support_query;
+    const convRate     = meaningful > 0
+      ? `${((totals.checkout_redirect / meaningful) * 100).toFixed(1)}%`
+      : '0%';
+
+    return res.json({
+      period:                  { from: from ?? 'all', to: to ?? 'all' },
+      total_sessions:          rows.length,
+      meaningful_interactions: meaningful,
+      conversion_rate:         convRate,
+      totals,
+    });
+  } catch (err) {
+    console.error('[NutrIA:stats]', err.message);
+    return res.status(500).json({ message: 'Error al obtener estadísticas de ventas.' });
   }
 });
 

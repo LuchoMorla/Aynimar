@@ -23,12 +23,18 @@ const dropiProductId = Joi.string().allow(null, ''); // Dropi product ID for int
 const variants       = Joi.string().allow(null, ''); // JSON-stringified array of variant groups
 const attributes     = Joi.object().allow(null);     // JSONB key-value metadata, e.g. { "Color": "Azul" }
 // Bundle: one Aynimar product maps to multiple Dropi product IDs dispatched in one order.
+// Bundle items OR variant options — shared field, mode determined by isBundle.
+// Bundle:   [{ id, qty }]
+// Variants: [{ id, value, name? }]
 const dropiItems = Joi.array()
   .items(Joi.object({
-    id:  Joi.string().required(),
-    qty: Joi.number().integer().min(1),
+    id:    Joi.string().required(),
+    qty:   Joi.number().integer().min(1).optional(),
+    value: Joi.string().allow('', null).optional(),
+    name:  Joi.string().allow('', null).optional(),
   }))
   .allow(null);
+const isBundle = Joi.boolean().allow(null);
 
 //recibiremos un limit y un offset
 const limit = Joi.number().integer();
@@ -53,6 +59,7 @@ const createProductSchema = Joi.object({
   variants,
   attributes,
   dropiItems,
+  isBundle,
 });
 
 const updateProductSchema = Joi.object({
@@ -73,6 +80,7 @@ const updateProductSchema = Joi.object({
   variants,
   attributes,
   dropiItems,
+  isBundle,
 });
 
 const getProductSchema = Joi.object({

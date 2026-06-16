@@ -112,13 +112,21 @@ const ProductSchema = {
     allowNull: true,
     type: DataTypes.JSONB,
   },
-  // Bundle dispatch: when set, orderService sends one Dropi order containing all components.
-  // Example: [{ "id": "12345", "qty": 1 }, { "id": "67890", "qty": 1 }]
-  // Takes priority over dropiProductId in dispatchToProviders.
+  // Bundle/variant items: shared JSONB field for both modes.
+  // Bundle   (isBundle=true):  [{ id, qty }]           — all items dispatched together.
+  // Variants (isBundle=false): [{ id, value, name? }]  — user selects one; selected_dropi_id on OrderProduct drives dispatch.
   dropiItems: {
     field: 'dropi_items',
     allowNull: true,
     type: DataTypes.JSONB,
+  },
+  // When true → all dropiItems dispatched as a pack.
+  // When false/null → dropiItems are selectable variants; dispatch uses OrderProduct.selectedDropiId.
+  isBundle: {
+    field: 'is_bundle',
+    allowNull: true,
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
   },
 };
 

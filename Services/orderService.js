@@ -503,21 +503,35 @@ class OrderService {
     const byProvider = {};
 
     for (const item of order.items) {
-      // ── Bundle mode: dropiItems is a JSONB array [{id, qty}, ...] ────────────
-      // Each component is multiplied by the customer's order quantity.
-      // E.g. customer orders 2× a bundle {A×1 + B×1} → dispatches A×2 + B×2.
+      // ── dropiItems mode: bundle OR variant ────────────────────────────────────
       if (Array.isArray(item.dropiItems) && item.dropiItems.length > 0) {
         if (!byProvider.dropi) byProvider.dropi = [];
-        for (const bundleItem of item.dropiItems) {
-          if (!bundleItem.id) continue;
-          byProvider.dropi.push({
-            externalId: String(bundleItem.id),
-            quantity:   (bundleItem.qty ?? 1) * item.OrderProduct.amount,
-          });
+
+        if (item.isBundle === true) {
+          // BUNDLE: dispatch ALL components × order quantity.
+          // E.g. customer orders 2× a bundle {A×1 + B×1} → dispatches A×2 + B×2.
+          for (const bundleItem of item.dropiItems) {
+            if (!bundleItem.id) continue;
+            byProvider.dropi.push({
+              externalId: String(bundleItem.id),
+              quantity:   (bundleItem.qty ?? 1) * item.OrderProduct.amount,
+            });
+          }
+          console.log(`[Dispatch] Bundle product ${item.id} expanded to ${item.dropiItems.length} Dropi items`);
+        } else {
+          // VARIANT: dispatch only the customer-selected dropi ID.
+          // Falls back to the first variant if the selection was not stored.
+          const selectedId = item.OrderProduct?.selectedDropiId || item.dropiItems[0]?.id;
+          if (selectedId) {
+            byProvider.dropi.push({
+              externalId: String(selectedId),
+              quantity:   item.OrderProduct.amount,
+            });
+            console.log(`[Dispatch] Variant product ${item.id} → dropi_id=${selectedId}`);
+          } else {
+            console.warn(`[Dispatch] Variant product ${item.id} has no selectedDropiId and no fallback — skipped`);
+          }
         }
-        console.log(
-          `[Dispatch] Bundle product ${item.id} expanded to ${item.dropiItems.length} Dropi items`
-        );
         continue;
       }
 
