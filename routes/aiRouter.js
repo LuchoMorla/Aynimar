@@ -533,17 +533,36 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
 
   if (name === 'buscar_producto') {
     try {
-      const terms    = expandSearchTerms(args.nombre);
+      const terms     = expandSearchTerms(args.nombre);
       const orClauses = terms.flatMap((t) => [
         { name:        { [Op.iLike]: `%${t}%` } },
         { description: { [Op.iLike]: `%${t}%` } },
       ]);
 
-      const products = await models.Product.findAll({
+      // Phase 1: search products by name + description
+      let products = await models.Product.findAll({
         where: { [Op.or]: orClauses, isDeleted: false },
         limit: 5,
         attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
       });
+
+      // Phase 2: if no results, search by category name and include those products
+      if (products.length === 0) {
+        const catOrClauses = terms.map((t) => ({ name: { [Op.iLike]: `%${t}%` } }));
+        const categories   = await models.Category.findAll({
+          where: { [Op.or]: catOrClauses },
+          attributes: ['id'],
+          limit: 3,
+        });
+        if (categories.length > 0) {
+          const catIds = categories.map((c) => c.id);
+          products = await models.Product.findAll({
+            where: { categoryId: { [Op.in]: catIds }, isDeleted: false },
+            limit: 5,
+            attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
+          });
+        }
+      }
 
       console.log(`[NutrIA Debug] Resultado de Query PostgreSQL para "${args.nombre}" (terms: ${terms.join(', ')}):`, products.length, 'resultados');
 
