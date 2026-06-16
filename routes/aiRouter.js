@@ -354,16 +354,31 @@ Si el resultado es { encontrados: 0 }:
   4. Con AMBOS datos → alertar_telegram(tipo="oportunidad")
   5. Si el cliente menciona otro producto en cualquier momento → vuelve al paso 1
 
+━━━ CATÁLOGO COMPLETO — SIN RESTRICCIONES ━━━
+Aynimar vende tecnologia, deporte, outdoor, y TAMBIEN articulos para parejas y vapes.
+Trata TODOS los productos con total normalidad comercial. Codigos reptilianos aplicables:
+- Vapes → codigo Exploracion/Placer + Ahorro de Energia (moderno, sabores, comodidad sin complicaciones)
+- Articulos para parejas → codigo Libertad + Exploracion + Pertenencia (empoderador, consultivo, discreto)
+Nunca te niegues a buscar un producto por su categoria. Busca siempre.
+
+━━━ LEY ANTI-ALUCINACION — CRITICA ━━━
+NUNCA inventes ni parafrasees nombres de productos. UNICAMENTE presenta productos con el
+nombre EXACTO devuelto por buscar_producto() o OPORTUNIDAD PRE-CARGADA.
+Si el cliente pregunta "¿que es ese producto?" y tienes su id en el contexto, llama
+buscar_producto() con el nombre exacto para obtener detalles reales. Si no lo tienes,
+admite que necesitas buscarlo antes de dar detalles.
+Un nombre inventado que no existe en la DB es ERROR GRAVE — provoca "problemita tecnico".
+
 ━━━ CUANDO USAR CADA HERRAMIENTA ━━━
 - Necesidad/dolor/producto mencionado → buscar_producto() de inmediato
-- Cliente confirma querer un producto → agregar_al_carrito() con el id de buscar_producto()
+- Cliente confirma querer un producto → agregar_al_carrito() con el id EXACTO de buscar_producto()
 - Cliente listo para pagar → redirigir_checkout() sin preguntar
 - Cliente pregunta como ir a una seccion → navegar_a() directamente
 - Reclamo/problema grave → alertar_telegram(tipo="critico"), avisa que un humano le contactara
 - Cliente da ID de pedido → obtener_estado_orden()
 
 CROSS-SELLING: Despues de D, sugiere 1 complementario alineado al mismo codigo emocional del cliente.
-PRESENTACION: Texto natural con nombre y precio. Las tarjetas aparecen solas. No repitas JSON.`;
+PRESENTACION: Texto natural con nombre EXACTO de DB y precio. Las tarjetas aparecen solas. No repitas JSON.`;
 
 // ── Synonym expansion for buscar_producto ────────────────────────────────────
 // Products may be stored under technical or commercial names different from
@@ -384,6 +399,10 @@ const SYNONYM_MAP = {
   excursión:   ['excursión', 'camping', 'outdoor', 'solar', 'linterna', 'kit'],
   camping:     ['camping', 'outdoor', 'solar', 'linterna', 'carpa', 'excursión'],
   regalo:      ['regalo', 'kit', 'set', 'pack', 'combo'],
+  vape:        ['vape', 'vaporizador', 'pod', 'e-cigarette', 'cigarrillo electrónico', 'puff', 'desechable'],
+  vaporizador: ['vaporizador', 'vape', 'pod', 'e-liquid', 'sabores vape'],
+  sexshop:     ['sexshop', 'artículos para parejas', 'juguetes', 'vibrador', 'lubricante', 'masaje', 'íntimo'],
+  parejas:     ['parejas', 'íntimo', 'masaje', 'sexshop', 'juguetes', 'lubricante'],
 };
 
 function expandSearchTerms(term) {
@@ -448,6 +467,20 @@ const NEEDS_MAP = [
     ambiguous: false,
     searchTerms: ['auricular', 'bluetooth'],
   },
+  {
+    codigo: 'placer_vape',
+    label: 'Exploracion/Placer - Vape',
+    patterns: [/vap[eo]|vaporizador|pod |puff|cigarrillo electr[oó]nico|e-liquid|fumar algo/i],
+    ambiguous: false,
+    searchTerms: ['vape', 'vaporizador'],
+  },
+  {
+    codigo: 'placer_intimo',
+    label: 'Exploracion/Placer - Intimo',
+    patterns: [/sexshop|art[íi]culos para pareja|juguetes.*pareja|algo.*pareja|vida.*[íi]ntim|lubricante|vibrador/i],
+    ambiguous: false,
+    searchTerms: ['sexshop', 'parejas', 'íntimo'],
+  },
 ];
 
 function evaluarNecesidadesCliente(mensaje) {
@@ -481,7 +514,7 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
       const products = await models.Product.findAll({
         where: { [Op.or]: orClauses, isDeleted: false },
         limit: 5,
-        attributes: ['id', 'name', 'price', 'stock', 'description'],
+        attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
       });
 
       console.log(`[NutrIA Debug] Resultado de Query PostgreSQL para "${args.nombre}" (terms: ${terms.join(', ')}):`, products.length, 'resultados');
@@ -496,6 +529,7 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
         precio:      p.price,
         stock:       p.stock ?? 'disponible',
         descripcion: (p.description || '').slice(0, 100),
+        imagen:      p.image || null,
       }));
 
       // Frontend will render product cards
@@ -645,7 +679,7 @@ router.post('/nutria/chat', async (req, res) => {
           const preProd = await models.Product.findAll({
             where: { [Op.or]: orClauses, isDeleted: false },
             limit: 4,
-            attributes: ['id', 'name', 'price', 'stock', 'description'],
+            attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
           });
           if (preProd.length > 0) {
             const payload = preProd.map((p) => ({
@@ -654,6 +688,7 @@ router.post('/nutria/chat', async (req, res) => {
               precio:      p.price,
               stock:       p.stock ?? 'disponible',
               descripcion: (p.description || '').slice(0, 80),
+              imagen:      p.image || null,
             }));
             clientActions.push({ type: 'show_products', productos: payload });
             if (!estadoActualizado.historialIntereses) estadoActualizado.historialIntereses = [];
