@@ -167,29 +167,60 @@ async function autoRefreshToken() {
 
   let newToken;
 
+  // Clear the stale DB token so the system is forced into a clean login.
+  try {
+    await saveTokenToDB('');
+    _cachedToken    = '';
+    _tokenExpiresAt = 0;
+    console.log('[Dropi Auth] Token expirado eliminado de BD. Iniciando login limpio...');
+  } catch (clearErr) {
+    console.warn('[Dropi Auth] No se pudo limpiar el token de BD:', clearErr.message);
+  }
+
+  // Login MUST bypass the Worker — the Worker requires a valid dropiToken in
+  // the request body, which we don't have yet (that's why we're logging in).
+  // Strategy: try direct call to Dropi first; if WAF blocks it, fall back to
+  // Worker using the stale env token as a placeholder (Worker only checks presence).
+  const dropiBase = process.env.DROPI_API_URL || 'https://api.dropi.ec';
+
   const _doLogin = async (payload) => {
-    if (process.env.DROPI_WORKER_URL && process.env.DROPI_WORKER_KEY) {
+    // Primary: direct call — correct for a public /login endpoint, no Bearer needed.
+    try {
+      const { data } = await axios.post(
+        `${dropiBase}/api/users/login`,
+        payload,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept':       'application/json',
+            'Origin':       'https://app.dropi.ec',
+            'Referer':      'https://app.dropi.ec/login',
+            'User-Agent':   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          },
+          timeout: 30000,
+        }
+      );
+      console.log('[Dropi Auth] Login directo a Dropi exitoso (sin Worker).');
+      return data;
+    } catch (directErr) {
+      const directStatus = directErr.response?.status;
+      // 400/401 from Dropi = wrong credentials/payload — do NOT fall back, these won't improve.
+      if (directStatus === 400 || directStatus === 401) throw directErr;
+
+      // WAF block (403/503) or network error: try through Worker using stale token as placeholder.
+      const placeholder = process.env.DROPI_SESSION_TOKEN || 'dropi-login-bypass';
+      console.warn(`[Dropi Auth] Login directo falló (${directStatus ?? directErr.code}) — intentando via Worker...`);
+
+      if (!process.env.DROPI_WORKER_URL || !process.env.DROPI_WORKER_KEY) throw directErr;
+
       const { data } = await axios.post(
         process.env.DROPI_WORKER_URL,
-        { dropiToken: '', path: '/api/users/login', method: 'POST', payload },
+        { dropiToken: placeholder, path: '/api/users/login', method: 'POST', payload },
         { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 30000 }
       );
+      console.log('[Dropi Auth] Login via Worker completado.');
       return data;
     }
-    const { data } = await axios.post(
-      `${process.env.DROPI_API_URL || 'https://api.dropi.ec'}/api/users/login`,
-      payload,
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'Origin':       'https://app.dropi.ec',
-          'Referer':      'https://app.dropi.ec/login',
-          'User-Agent':   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        },
-        timeout: 30000,
-      }
-    );
-    return data;
   };
 
   // Attempt login — if 400 and 2FA is involved, probe each field name in sequence.
