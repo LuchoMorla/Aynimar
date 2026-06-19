@@ -160,17 +160,19 @@ function normalizeProduct(p) {
     })
     .filter((w) => w.name);
 
+  // Use || (not ??) for string fields: Dropi sometimes returns '' for empty fields,
+  // which ?? treats as a valid value. || falls through empty strings to the next candidate.
   return {
     externalId:  String(p.id ?? p.sku ?? ''),
-    title:       p.name ?? p.nombre ?? p.title ?? 'Sin nombre',
-    description: p.description ?? p.descripcion ?? '',
+    title:       p.name || p.nombre || p.nombre_producto || p.titulo || p.title || p.product_name || 'Sin nombre',
+    description: p.description || p.descripcion || p.descripcion_corta || p.short_description || '',
     rawDetails,
     warehouses,
     image:       imageUrl,
     imagesArray,
     variants,
-    price:       parseFloat(p.sale_price      ?? p.price        ?? p.precio_costo  ?? p.costo ?? 0),
-    retailPrice: parseFloat(p.suggested_price ?? p.regular_price ?? p.precio_venta ?? p.pvp  ?? 0),
+    price:       parseFloat(p.sale_price || p.price || p.precio || p.precio_costo || p.costo || p.cost_price || 0),
+    retailPrice: parseFloat(p.suggested_price || p.regular_price || p.precio_venta || p.pvp || p.precio_sugerido || 0),
     stock:       parseInt(p.total_stock ?? p.stock_quantity ?? p.stock_simple ?? p.stock ?? -1, 10),
     sku:         p.sku ?? String(p.id ?? ''),
   };
