@@ -390,6 +390,8 @@ router.post(
         const resolvedImages = req.body.imagesJson
           || (image ? JSON.stringify([image]) : null);
 
+        const defaultDropiItems = [{ id: String(externalId), qty: 1 }];
+
         const [product, created] = await models.Product.findOrCreate({
           where: { externalId, sourceProvider: 'dropi' },
           defaults: {
@@ -406,6 +408,7 @@ router.post(
             isDeleted:      false,
             lastSyncAt:     new Date(),
             sourceProvider: 'dropi',
+            dropiItems:     defaultDropiItems,
           },
         });
 
@@ -423,6 +426,10 @@ router.post(
           // Only overwrite description if product has none — keeps AI copy on re-import.
           if (!product.description && (aiCopy || description)) {
             update.description = aiCopy ?? description;
+          }
+          // Set dropiItems if not already configured (enables storefront dispatch)
+          if (!product.dropiItems || product.dropiItems.length === 0) {
+            update.dropiItems = defaultDropiItems;
           }
           await product.update(update);
         }

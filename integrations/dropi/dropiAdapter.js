@@ -100,14 +100,9 @@ function normalizeProduct(p) {
   // Dropi uses different gallery field names depending on the endpoint:
   //   catalog v4  → p.gallery  (array of { urlS3, url, main })
   //   product/:id → p.photos, p.product_photos, p.multimedia, p.pictures
-  const gallery =
-    p.gallery ??
-    p.photos ??
-    p.product_photos ??
-    p.multimedia ??
-    p.pictures ??
-    p.images ??
-    [];
+  // Use .find() so empty arrays are skipped (Dropi sometimes returns gallery:[] with real photos in another field).
+  const gallery = [p.gallery, p.photos, p.product_photos, p.multimedia, p.pictures, p.images]
+    .find((a) => Array.isArray(a) && a.length > 0) ?? [];
 
   const mainPhoto = gallery.find?.((g) => g.main) ?? gallery[0] ?? null;
   const rawImg    = mainPhoto?.urlS3 ?? mainPhoto?.url ?? mainPhoto?.src ?? p.image ?? null;
