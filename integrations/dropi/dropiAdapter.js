@@ -4,8 +4,12 @@ const axios    = require('axios');
 const FormData = require('form-data');
 const { getToken, invalidateToken, autoRefreshToken } = require('./dropiAuthService');
 
-const WOO_JWT        = process.env.WOO_CONSUMER_SECRET || '';
-const DROPI_API_BASE = process.env.DROPI_API_URL       || 'https://api.dropi.ec';
+// Bearer JWT for Dropi's order/fulfillment API (api.dropi.co).
+// Use DROPI_ORDER_TOKEN in Railway. WOO_CONSUMER_SECRET is kept as a
+// backward-compat fallback so existing deployments keep working until
+// the Railway var is renamed.
+const DROPI_ORDER_TOKEN = process.env.DROPI_ORDER_TOKEN || process.env.WOO_CONSUMER_SECRET || '';
+const DROPI_API_BASE    = process.env.DROPI_API_URL     || 'https://api.dropi.ec';
 
 // IS_MOCK sólo se activa con la flag explícita DROPI_MOCK=true.
 // Sin env-vars de Dropi, getToken() consulta la BD (app_settings) antes de rendirse.
@@ -27,12 +31,12 @@ async function makeCatalogClient() {
   });
 }
 
-function createWooClient() {
+function createOrderClient() {
   return axios.create({
     baseURL: 'https://api.dropi.co/api/v1',
     timeout: 15000,
     headers: {
-      'Authorization': `Bearer ${WOO_JWT}`,
+      'Authorization': `Bearer ${DROPI_ORDER_TOKEN}`,
       'Content-Type':  'application/json',
       'Accept':        'application/json',
     },
@@ -346,13 +350,13 @@ async function fetchDropiCatalog({ page = 1, limit = 20, keyword = '', categoryI
  *   warehouse       — optional Dropi warehouse name/id for origin stock
  */
 async function createOrderInDropi(payload) {
-  if (!WOO_JWT) {
+  if (!DROPI_ORDER_TOKEN) {
     const externalOrderId = `MOCK-DRP-${Date.now()}`;
     console.log(`[Dropi MOCK] createOrderInDropi — referenceId: ${payload.referenceId}, externalOrderId: ${externalOrderId}`);
     return { externalOrderId };
   }
 
-  const client = createWooClient();
+  const client = createOrderClient();
 
   const body = {
     referencia: payload.referenceId,
@@ -386,13 +390,13 @@ async function createOrderInDropi(payload) {
 /**
  * Fetches the current delivery status of a Dropi order.
  * Returns the raw status string from Dropi (e.g. 'Generada', 'En transporte', 'Entregado').
- * Returns null when the order cannot be found or WOO_JWT is not configured.
+ * Returns null when the order cannot be found or DROPI_ORDER_TOKEN is not configured.
  */
 async function fetchDropiOrderStatus(dropiOrderId) {
-  if (!WOO_JWT || !dropiOrderId) return null;
+  if (!DROPI_ORDER_TOKEN || !dropiOrderId) return null;
 
   try {
-    const client = createWooClient();
+    const client = createOrderClient();
     const { data } = await client.get(`/orders/${dropiOrderId}`);
     return (
       data.estado        ??
