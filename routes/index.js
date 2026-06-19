@@ -24,6 +24,7 @@ const importRouter       = require('./importRouter');
 const reviewsRouter      = require('./reviewsRouter');
 const couponRouter       = require('./couponRouter');
 const woocommerceMirror  = require('./woocommerceMirror');
+const wcAuthRouter       = require('./wcAuthRouter');
 const aiRouter           = require('./aiRouter');
 const testRouter         = require('./testRouter');
 
@@ -62,6 +63,10 @@ function routerApi(app) {
     // WooCommerce emulation layer — mounted at root level (not under /api/v1)
     // so Dropi can reach it at the standard WC path: /wp-json/wc/v3/
     app.use('/wp-json/wc/v3', woocommerceMirror);
+
+    // WooCommerce OAuth mock — intercepts Dropi's authorization handshake.
+    // Public route (no JWT): browser-redirect OAuth flow from the admin.
+    app.use('/store/wc-auth/v1', wcAuthRouter);
 }
 
 module.exports = routerApi;
