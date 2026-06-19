@@ -347,10 +347,21 @@ async function fetchDropiCatalog({ page = 1, limit = 20, keyword = '', categoryI
  *   warehouse       — optional Dropi warehouse name/id for origin stock
  */
 async function createOrderInDropi(payload) {
-  if (!DROPI_ORDER_TOKEN) {
+  // Explicit dev mock — only when DROPI_MOCK=true is set on purpose
+  if (IS_MOCK) {
     const externalOrderId = `MOCK-DRP-${Date.now()}`;
     console.log(`[Dropi MOCK] createOrderInDropi — referenceId: ${payload.referenceId}, externalOrderId: ${externalOrderId}`);
     return { externalOrderId };
+  }
+
+  if (!DROPI_ORDER_TOKEN) {
+    // Throw instead of silently mocking — the order will be marked PENDING_DROPI_FULFILLMENT
+    // and the dropiRetryWorker will retry automatically once the token is configured in Railway.
+    throw new Error(
+      'DROPI_ORDER_TOKEN no configurado en Railway. ' +
+      'Ve a Variables → DROPI_ORDER_TOKEN y pega el JWT Bearer de tu cuenta Dropi. ' +
+      'La orden quedará en PENDING_DROPI_FULFILLMENT para reintento automático.'
+    );
   }
 
   const client = createOrderClient();

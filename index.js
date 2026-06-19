@@ -14,6 +14,8 @@ process.on('uncaughtException', (err) => {
 const expressModule = require('express');
 // Bootstrap BullMQ cart-recovery worker — starts listening for delayed jobs
 require('./workers/cartRecoveryWorker');
+// Bootstrap Dropi retry worker — retries PENDING_DROPI_FULFILLMENT orders every 5 min
+require('./workers/dropiRetryWorker');
 const routerApi = require('./routes');
 const cors = require('cors');
 const { checkApiKey } = require('./middlewares/authHandler');
@@ -140,6 +142,16 @@ async function registerTelegramWebhook() {
 const server = app.listen(puerto, '0.0.0.0', () => {
   console.log(`[OK] Server listening on 0.0.0.0:${puerto}`);
   console.log(`[OK] Start time: ${new Date().toISOString()}`);
+
+  // ── Critical env-var checks ───────────────────────────────────────────────
+  if (!process.env.DROPI_ORDER_TOKEN && !process.env.WOO_CONSUMER_SECRET) {
+    console.error(
+      '[CRITICAL] DROPI_ORDER_TOKEN no está configurado en Railway. ' +
+      'Las órdenes de Dropi FALLARÁN y quedarán en PENDING_DROPI_FULFILLMENT. ' +
+      'Ve a Variables en Railway y añade DROPI_ORDER_TOKEN con el JWT Bearer de tu cuenta Dropi.'
+    );
+  }
+
   registerTelegramWebhook(); // non-blocking — failures are logged, never crash the server
 });
 

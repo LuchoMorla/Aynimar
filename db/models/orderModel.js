@@ -93,6 +93,13 @@ const OrderSchema = {
     allowNull: true,
     type:      DataTypes.STRING(100),
   },
+  // Number of automated retry attempts by dropiRetryWorker (max 3 before FAILED_DROPI_FULFILLMENT)
+  fulfillmentRetryCount: {
+    field:        'fulfillment_retry_count',
+    allowNull:    false,
+    type:         DataTypes.INTEGER,
+    defaultValue: 0,
+  },
   total: {
     type: DataTypes.VIRTUAL,
     get() {
