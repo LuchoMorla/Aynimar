@@ -100,36 +100,51 @@ const _sendTelegram = async (text) => {
 
 // ── Dropi direct login — bypasses Worker (login is a public endpoint) ─────────
 
+// Dropi's login endpoint is /api/login (POST). The previous /api/users/login returns 405.
+// WAF blocks Railway datacenter IPs → always route through Worker, which bypasses WAF.
+// The Worker requires a non-empty dropiToken; we use the stale env token as a placeholder.
+// The login endpoint on Dropi's side ignores the Authorization header for credential auth.
 const _dropiLoginDirect = async (payload) => {
-  const dropiBase = process.env.DROPI_API_URL || 'https://api.dropi.ec';
-  try {
-    const { data } = await axios.post(`${dropiBase}/api/users/login`, payload, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept':       'application/json',
-        'Origin':       'https://app.dropi.ec',
-        'Referer':      'https://app.dropi.ec/login',
-        'User-Agent':   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
-      timeout: 30000,
-    });
-    console.log('[Dropi Auth] Login directo a Dropi exitoso (sin Worker).');
-    return data;
-  } catch (directErr) {
-    const directStatus = directErr.response?.status;
-    if (directStatus === 400 || directStatus === 401) throw directErr;
-    // WAF block: fallback to Worker using stale env token as bearer placeholder.
+  const WORKER_URL = process.env.DROPI_WORKER_URL;
+  const WORKER_KEY = process.env.DROPI_WORKER_KEY;
+
+  if (WORKER_URL && WORKER_KEY) {
+    // Primary path: route through Worker to bypass WAF (Dropi blocks Railway IPs).
     const placeholder = process.env.DROPI_SESSION_TOKEN || 'dropi-login-bypass';
-    console.warn(`[Dropi Auth] Login directo falló (${directStatus ?? directErr.code}) — intentando via Worker...`);
-    if (!process.env.DROPI_WORKER_URL || !process.env.DROPI_WORKER_KEY) throw directErr;
-    const { data } = await axios.post(
-      process.env.DROPI_WORKER_URL,
-      { dropiToken: placeholder, path: '/api/users/login', method: 'POST', payload },
-      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 30000 }
-    );
-    console.log('[Dropi Auth] Login via Worker completado.');
-    return data;
+    try {
+      const { data } = await axios.post(
+        WORKER_URL,
+        { dropiToken: placeholder, path: '/api/login', method: 'POST', payload },
+        { headers: { 'X-Worker-Key': WORKER_KEY }, timeout: 30000 }
+      );
+      if (data.isSuccess === false && (data.status === 400 || data.status === 401)) {
+        const err = new Error(data.message || 'Dropi login failed');
+        err.response = { status: data.status, data };
+        throw err;
+      }
+      console.log('[Dropi Auth] Login via Worker exitoso.');
+      return data;
+    } catch (workerErr) {
+      const st = workerErr.response?.status;
+      if (st === 400 || st === 401) throw workerErr;
+      console.warn(`[Dropi Auth] Worker falló (${st ?? workerErr.code}) — intentando directo...`);
+    }
   }
+
+  // Fallback: direct call (may be blocked by WAF on Railway).
+  const dropiBase = process.env.DROPI_API_URL || 'https://api.dropi.ec';
+  const { data } = await axios.post(`${dropiBase}/api/login`, payload, {
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept':       'application/json',
+      'Origin':       'https://app.dropi.ec',
+      'Referer':      'https://app.dropi.ec/login',
+      'User-Agent':   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    },
+    timeout: 30000,
+  });
+  console.log('[Dropi Auth] Login directo exitoso.');
+  return data;
 };
 
 // ── Public auth API ───────────────────────────────────────────────────────────
@@ -197,7 +212,9 @@ async function autoRefreshToken() {
     );
   }
 
-  const brandId   = Number(process.env.DROPI_WHITE_BRAND_ID) || null;
+  // white_brand_id is required by Dropi's /api/login endpoint.
+  // Default 8 is Dropi Ecuador's public brand; override with DROPI_WHITE_BRAND_ID.
+  const brandId   = Number(process.env.DROPI_WHITE_BRAND_ID) || 8;
   const secret2fa = process.env.DROPI_2FA_SECRET;
   const otpField  = process.env.DROPI_2FA_FIELD || 'otp';
   let newToken;
@@ -220,8 +237,7 @@ async function autoRefreshToken() {
   const windows = secret2fa ? [0, -1, 1] : [null]; // null = no 2FA configured
 
   for (const windowOffset of windows) {
-    const payload = { email, password };
-    if (brandId) payload.white_brand_id = brandId;
+    const payload = { email, password, white_brand_id: brandId };
 
     if (windowOffset !== null) {
       const otp = generateTOTP(secret2fa, windowOffset);
@@ -286,11 +302,10 @@ async function completeManual2FA(code) {
   const password = process.env.DROPI_PASSWORD || '';
   if (!email || !password) throw new Error('Sin credenciales DROPI_EMAIL/DROPI_PASSWORD configuradas.');
 
-  const brandId  = Number(process.env.DROPI_WHITE_BRAND_ID) || null;
+  const brandId  = Number(process.env.DROPI_WHITE_BRAND_ID) || 8;
   const otpField = process.env.DROPI_2FA_FIELD || 'otp';
 
-  const payload = { email, password, [otpField]: String(code).trim() };
-  if (brandId) payload.white_brand_id = brandId;
+  const payload = { email, password, white_brand_id: brandId, [otpField]: String(code).trim() };
 
   // Clear stale DB token before attempting login.
   await saveTokenToDB('').catch(() => {});
