@@ -263,7 +263,7 @@ async function doFetchViaWorker(page, limit, keyword, categoryId, priceMin, pric
     },
     {
       headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY },
-      timeout: 20000,
+      timeout: 30000,
     }
   );
 
@@ -468,7 +468,27 @@ async function fetchDropiProductById(productId) {
   const id = String(productId).trim();
 
   if (process.env.DROPI_WORKER_URL && process.env.DROPI_WORKER_KEY) {
-    return _fetchByIdViaWorker(id);
+    try {
+      return await _fetchByIdViaWorker(id);
+    } catch (err) {
+      if (err.code !== 'DROPI_TOKEN_EXPIRED') throw err;
+      console.log('[Dropi Auth] Token expirado (Worker path). Renovando...');
+      invalidateToken();
+      try {
+        await autoRefreshToken();
+        console.log(`[Dropi Auth] Token renovado. Reintentando Worker para ID: ${id}`);
+        return await _fetchByIdViaWorker(id);
+      } catch (refreshErr) {
+        console.warn('[Dropi Auth] Auto-renovación fallida (Worker path):', refreshErr.message);
+        const message = refreshErr.message.includes('credenciales') || refreshErr.message.includes('Sin credenciales')
+          ? 'Token de Dropi expirado y no hay credenciales configuradas. ' +
+            'Configura DROPI_EMAIL + DROPI_PASSWORD en Railway, o actualiza el token manualmente desde el importador.'
+          : 'Token de Dropi expirado. Actualiza el token manualmente desde el importador.';
+        const e = new Error(message);
+        e.code = 'DROPI_TOKEN_EXPIRED';
+        throw e;
+      }
+    }
   }
 
   console.log(`[Dropi Auth] Intentando conectar con token existente para producto ${id}...`);
@@ -525,7 +545,7 @@ async function _fetchByIdViaWorker(id) {
     const { data } = await axios.post(
       process.env.DROPI_WORKER_URL,
       { dropiToken: token, path: `/api/products/${id}`, method: 'GET', payload: {} },
-      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 20000 },
+      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 30000 },
     );
     _assertWorkerAuthOk(data, `GET /api/products/${id}`);
     const raw = data?.objects ?? data;
@@ -553,7 +573,7 @@ async function _fetchByIdViaWorker(id) {
     const { data: d } = await axios.post(
       process.env.DROPI_WORKER_URL,
       { dropiToken: token, path: '/api/products/v4/index', method: 'POST', payload },
-      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 20000 },
+      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 30000 },
     );
     searchData = d;
   } catch (err) {

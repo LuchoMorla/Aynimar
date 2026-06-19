@@ -169,7 +169,7 @@ async function autoRefreshToken() {
         method:     'POST',
         payload:    loginPayload,
       },
-      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 20000 }
+      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 30000 }
     );
     newToken = data?.token ?? data?.access_token ?? data?.data?.token ?? null;
   } else {
