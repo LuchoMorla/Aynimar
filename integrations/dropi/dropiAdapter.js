@@ -495,6 +495,23 @@ async function fetchDropiProductById(productId) {
   }
 }
 
+// Throws a standardized DROPI_TOKEN_EXPIRED error when the Worker relays a
+// Dropi 401/403. Without this, isSuccess=false responses are silently treated
+// as "product not found", burying the real auth failure behind a 500.
+function _assertWorkerAuthOk(data, context) {
+  if (data?.isSuccess === false) {
+    const status = data.status ?? data.statusCode ?? 0;
+    if (status === 401 || status === 403) {
+      const e = new Error(
+        'Token de Dropi expirado o inválido. ' +
+        'Actualiza el token manualmente desde el Importador de Dropi.',
+      );
+      e.code = 'DROPI_TOKEN_EXPIRED';
+      throw e;
+    }
+  }
+}
+
 async function _fetchByIdViaWorker(id) {
   const rawToken = await getToken();
   const token = rawToken.startsWith('Bearer ') ? rawToken.slice(7) : rawToken;
@@ -506,17 +523,19 @@ async function _fetchByIdViaWorker(id) {
       { dropiToken: token, path: `/api/products/${id}`, method: 'GET', payload: {} },
       { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 20000 },
     );
+    _assertWorkerAuthOk(data, `GET /api/products/${id}`);
     const raw = data?.objects ?? data;
     const product = Array.isArray(raw) ? raw[0] : raw;
     if (product && (product.id || product.name)) {
-      // DEBUG — log raw keys so we can see exact field names from Dropi product/:id
       console.log(`[Dropi DEBUG Worker] raw keys for product ${id}:`, Object.keys(product).join(', '));
-      console.log(`[Dropi DEBUG Worker] gallery — gallery:${JSON.stringify(product.gallery)?.slice(0,120)} | photos:${JSON.stringify(product.photos)?.slice(0,120)} | product_photos:${JSON.stringify(product.product_photos)?.slice(0,80)}`);
-      console.log(`[Dropi DEBUG Worker] detail — detail:${String(product.detail ?? '').slice(0,120)} | long_description:${String(product.long_description ?? '').slice(0,120)} | characteristics:${String(product.characteristics ?? '').slice(0,120)}`);
       const normalized = normalizeProduct(product);
       if (normalized) return normalized;
     }
-  } catch { /* fall through to keyword search */ }
+  } catch (err) {
+    // Re-throw auth errors immediately — no fallback for expired tokens.
+    if (err.code === 'DROPI_TOKEN_EXPIRED') throw err;
+    // Any other error (404, network): fall through to keyword-search.
+  }
 
   // Worker keyword-search fallback
   const payload = buildCatalogPayload(1, 10, id, null, null, null);
@@ -525,12 +544,11 @@ async function _fetchByIdViaWorker(id) {
     { dropiToken: token, path: '/api/products/v4/index', method: 'POST', payload },
     { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 20000 },
   );
+  _assertWorkerAuthOk(data, 'POST /api/products/v4/index');
   const { list } = extractList(data);
   const match = list.find((p) => String(p.id) === id || String(p.sku) === id) ?? list[0];
   if (!match) throw new Error(`Producto ${id} no encontrado en Dropi.`);
-  // DEBUG — keyword-search fallback via Worker
   console.log(`[Dropi DEBUG Worker] keyword-fallback raw keys for product ${id}:`, Object.keys(match).join(', '));
-  console.log(`[Dropi DEBUG Worker] gallery — gallery:${JSON.stringify(match.gallery)?.slice(0,120)} | photos:${JSON.stringify(match.photos)?.slice(0,120)}`);
   return normalizeProduct(match);
 }
 

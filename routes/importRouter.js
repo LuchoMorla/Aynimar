@@ -266,17 +266,31 @@ router.get(
       const product = await fetchDropiProductById(productId);
       return res.json(product);
     } catch (err) {
+      // Auth errors — Dropi token expired or never configured.
       if (
         err.code === 'DROPI_TOKEN_EXPIRED' ||
         err.message?.includes('Sin token') ||
-        err.message?.includes('token de sesión')
+        err.message?.includes('token de sesión') ||
+        err.message?.toLowerCase().includes('token') && (err.dropiStatus === 401 || err.dropiStatus === 403)
       ) {
         return res.status(503).json({
-          message: 'Token de Dropi expirado o no configurado.',
+          message: 'Token de Dropi expirado o no configurado. Actualízalo en el Importador de Dropi.',
           code: 'DROPI_TOKEN_EXPIRED',
         });
       }
-      next(err);
+      // Product not found in Dropi's catalog.
+      if (err.message?.includes('no encontrado en Dropi')) {
+        return res.status(404).json({
+          message: err.message,
+          code: 'DROPI_NOT_FOUND',
+        });
+      }
+      // All other external/network errors — never expose a raw 500.
+      console.error('[dropi-preview] Unhandled error:', err.message, err.stack?.split('\n')[1]);
+      return res.status(502).json({
+        message: 'Error al comunicarse con Dropi. Intenta nuevamente en unos segundos.',
+        code: 'DROPI_UPSTREAM_ERROR',
+      });
     }
   }
 );
