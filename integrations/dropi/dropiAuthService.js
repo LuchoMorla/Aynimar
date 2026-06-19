@@ -131,8 +131,11 @@ function invalidateToken() {
  *   DROPI_WORKER_KEY     — Worker auth key
  */
 async function autoRefreshToken() {
-  const email    = process.env.DROPI_EMAIL;
-  const password = process.env.DROPI_PASSWORD;
+  // Canonical vars are DROPI_EMAIL / DROPI_PASSWORD.
+  // Fall back to DROPI_USER_EMAIL / DROPI_USER_PASSWORD so the system keeps
+  // working while duplicate Railway variables are cleaned up from the dashboard.
+  const email    = process.env.DROPI_EMAIL    || process.env.DROPI_USER_EMAIL    || '';
+  const password = process.env.DROPI_PASSWORD || process.env.DROPI_USER_PASSWORD || '';
 
   if (!email || !password) {
     throw new Error(
@@ -147,14 +150,19 @@ async function autoRefreshToken() {
   const loginPayload = { email, password };
   if (brandId) loginPayload.white_brand_id = brandId;
 
-  // Inject TOTP code if 2FA secret is configured
+  // Inject TOTP code — try DROPI_2FA_FIELD first, then common Dropi field names.
+  // The 2FA probe order: explicit config → otp → totp → code → token_2fa
   const secret2fa = process.env.DROPI_2FA_SECRET;
+  const OTP_FIELD_CANDIDATES = process.env.DROPI_2FA_FIELD
+    ? [process.env.DROPI_2FA_FIELD]
+    : ['otp', 'totp', 'code', 'token_2fa'];
+  let resolvedOtpField = OTP_FIELD_CANDIDATES[0];
+
   if (secret2fa) {
     console.log('[Dropi Auth] Generando código 2FA de respaldo matemático...');
-    const otp      = generateTOTP(secret2fa);
-    const otpField = process.env.DROPI_2FA_FIELD || 'otp';
-    loginPayload[otpField] = otp;
-    console.log(`[Dropi Auth] Código 2FA generado para ventana actual (campo: "${otpField}").`);
+    const otp = generateTOTP(secret2fa);
+    loginPayload[resolvedOtpField] = otp;
+    console.log(`[Dropi Auth] Código 2FA generado para ventana actual (campo: "${resolvedOtpField}").`);
   }
 
   let newToken;
@@ -184,35 +192,48 @@ async function autoRefreshToken() {
     return data;
   };
 
-  // Attempt login — log Dropi's full error body on failure for diagnosis.
+  // Attempt login — if 400 and 2FA is involved, probe each field name in sequence.
   let loginData;
-  try {
-    loginData = await _doLogin(loginPayload);
-  } catch (loginErr) {
-    const dropiBody = loginErr.response?.data;
-    console.error('[Dropi Auth] Login HTTP', loginErr.response?.status ?? 'ERR',
-      '— Dropi response body:', JSON.stringify(dropiBody));
+  let lastErr;
 
-    // If 400 and 2FA was sent, retry WITHOUT the OTP field — helps diagnose
-    // whether Dropi is rejecting the OTP specifically or the credentials.
-    if (loginErr.response?.status === 400 && secret2fa) {
-      console.warn('[Dropi Auth] Reintentando login SIN 2FA para aislar el error...');
-      const payloadNo2fa = { email, password };
-      if (brandId) payloadNo2fa.white_brand_id = brandId;
-      try {
-        loginData = await _doLogin(payloadNo2fa);
-        console.warn('[Dropi Auth] Login sin 2FA exitoso — DROPI_2FA_SECRET puede ser incorrecto ' +
-          'o el campo OTP tiene nombre distinto. Revisa DROPI_2FA_FIELD y DROPI_2FA_SECRET en Railway.');
-      } catch (retryErr) {
-        const retryBody = retryErr.response?.data;
-        console.error('[Dropi Auth] Login sin 2FA también falló HTTP',
-          retryErr.response?.status ?? 'ERR', '— body:', JSON.stringify(retryBody));
-        throw loginErr; // throw original error
+  const attemptsToTry = secret2fa
+    ? [...OTP_FIELD_CANDIDATES.map((f) => ({ field: f })), { field: null }] // + fallback without OTP
+    : [{ field: null }];
+
+  for (const { field } of attemptsToTry) {
+    const payload = { email, password };
+    if (brandId) payload.white_brand_id = brandId;
+
+    if (secret2fa && field) {
+      payload[field] = generateTOTP(secret2fa); // fresh TOTP per attempt (30-s window)
+      if (field !== resolvedOtpField) {
+        console.log(`[Dropi Auth] Probando campo 2FA alternativo: "${field}"`);
       }
-    } else {
-      throw loginErr;
+    } else if (secret2fa && !field) {
+      console.warn('[Dropi Auth] Último intento — login sin campo 2FA.');
+    }
+
+    try {
+      loginData = await _doLogin(payload);
+      if (field && field !== resolvedOtpField) {
+        console.warn(`[Dropi Auth] ✓ Login exitoso con campo 2FA "${field}". ` +
+          `Configura DROPI_2FA_FIELD=${field} en Railway para evitar los reintentos.`);
+      } else if (!field && secret2fa) {
+        console.warn('[Dropi Auth] ✓ Login exitoso SIN 2FA — verifica si la cuenta tiene ' +
+          '2FA activo en Dropi; si no, elimina DROPI_2FA_SECRET de Railway.');
+      }
+      lastErr = null;
+      break; // success — exit the probe loop
+    } catch (err) {
+      lastErr = err;
+      const status = err.response?.status;
+      const body   = JSON.stringify(err.response?.data);
+      console.error(`[Dropi Auth] Login HTTP ${status ?? 'ERR'} (campo="${field ?? 'ninguno'}") — body: ${body}`);
+      if (status !== 400) break; // only retry 400s — 401/5xx are not field-name issues
     }
   }
+
+  if (lastErr) throw lastErr;
 
   newToken = loginData?.token ?? loginData?.access_token ?? loginData?.data?.token ?? null;
 
