@@ -536,20 +536,36 @@ async function _fetchByIdViaWorker(id) {
       if (normalized) return normalized;
     }
   } catch (err) {
-    // Re-throw auth errors immediately — no fallback for expired tokens.
     if (err.code === 'DROPI_TOKEN_EXPIRED') throw err;
+    // HTTP 401/403 from the Worker means the Dropi token is expired/invalid — surface it properly.
+    if (err.response?.status === 401 || err.response?.status === 403) {
+      const e = new Error('Token de Dropi expirado o inválido. Actualiza el token desde el Importador de Dropi.');
+      e.code = 'DROPI_TOKEN_EXPIRED';
+      throw e;
+    }
     // Any other error (404, network): fall through to keyword-search.
   }
 
   // Worker keyword-search fallback
   const payload = buildCatalogPayload(1, 10, id, null, null, null);
-  const { data } = await axios.post(
-    process.env.DROPI_WORKER_URL,
-    { dropiToken: token, path: '/api/products/v4/index', method: 'POST', payload },
-    { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 20000 },
-  );
-  _assertWorkerAuthOk(data, 'POST /api/products/v4/index');
-  const { list } = extractList(data);
+  let searchData;
+  try {
+    const { data: d } = await axios.post(
+      process.env.DROPI_WORKER_URL,
+      { dropiToken: token, path: '/api/products/v4/index', method: 'POST', payload },
+      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 20000 },
+    );
+    searchData = d;
+  } catch (err) {
+    if (err.response?.status === 401 || err.response?.status === 403) {
+      const e = new Error('Token de Dropi expirado o inválido. Actualiza el token desde el Importador de Dropi.');
+      e.code = 'DROPI_TOKEN_EXPIRED';
+      throw e;
+    }
+    throw err;
+  }
+  _assertWorkerAuthOk(searchData, 'POST /api/products/v4/index');
+  const { list } = extractList(searchData);
   const match = list.find((p) => String(p.id) === id || String(p.sku) === id) ?? list[0];
   if (!match) throw new Error(`Producto ${id} no encontrado en Dropi.`);
   console.log(`[Dropi DEBUG Worker] keyword-fallback raw keys for product ${id}:`, Object.keys(match).join(', '));
