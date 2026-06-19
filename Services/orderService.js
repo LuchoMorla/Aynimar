@@ -486,6 +486,58 @@ class OrderService {
   }
 
   /**
+   * Pre-flight validation for dropi_items before any API call is made.
+   * Runs synchronously — no network, no DB. Throws on the first batch of errors
+   * so dispatchToProviders fails fast with a clear, actionable message.
+   *
+   * Rules (validated against productSchema.js Joi contract):
+   *   - dropiItems[n].id  must be a non-empty string
+   *   - dropiItems[n].qty must be a positive integer when isBundle=true
+   *
+   * @param {Array} items  order.items with Product data pre-loaded
+   */
+  _validateDispatchItems(items) {
+    const errors = [];
+
+    for (const item of items) {
+      if (!Array.isArray(item.dropiItems) || item.dropiItems.length === 0) continue;
+
+      item.dropiItems.forEach((entry, i) => {
+        if (!entry || typeof entry !== 'object') {
+          errors.push(`Product ${item.id}: dropiItems[${i}] is not an object`);
+          return;
+        }
+        if (!entry.id || typeof entry.id !== 'string' || entry.id.trim() === '') {
+          errors.push(`Product ${item.id}: dropiItems[${i}].id is missing or empty`);
+        }
+        if (item.isBundle === true) {
+          const qty = entry.qty ?? 1;
+          if (!Number.isInteger(qty) || qty < 1) {
+            errors.push(
+              `Product ${item.id}: dropiItems[${i}].qty must be a positive integer (got ${JSON.stringify(qty)})`,
+            );
+          }
+        }
+      });
+
+      if (item.isBundle === true && item.dropiItems.length < 2) {
+        console.warn(
+          `[Dispatch][WARN] Product ${item.id} has isBundle=true but only 1 dropiItem — ` +
+          'verify this is intentional (bundle should have 2+ different Dropi IDs)',
+        );
+      }
+    }
+
+    if (errors.length > 0) {
+      const detail = errors.join(' | ');
+      console.error(`[Dispatch][PRE-FLIGHT FAILED] ${detail}`);
+      throw new Error(`Dispatch pre-flight validation failed: ${detail}`);
+    }
+
+    console.log(`[Dispatch][PRE-FLIGHT OK] ${items.length} item(s) validated`);
+  }
+
+  /**
    * Dispatches fulfillment orders to external dropshipping providers.
    *
    * Iterates over the order's items. Any item whose Product has a
@@ -499,6 +551,9 @@ class OrderService {
    * @param {Order} order  Sequelize Order instance with `items` and `customer` preloaded
    */
   async dispatchToProviders(order) {
+    // ── 0. Pre-flight: validate dropi_items structure before any API call ────
+    this._validateDispatchItems(order.items);
+
     // ── 1. Group dropship items by provider ──────────────────────────────────
     const byProvider = {};
 
