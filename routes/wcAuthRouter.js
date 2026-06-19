@@ -1,29 +1,30 @@
 'use strict';
 
 /**
- * WooCommerce OAuth 1.0 Authorization Mock
+ * WooCommerce OAuth 1.0 Authorization Mock — Dropi Integration
  *
- * Dropi uses the standard WooCommerce wc-auth flow to connect to stores.
- * Since we are not a real WooCommerce installation, this router intercepts
- * the authorization request and completes the handshake automatically.
+ * Dropi's store connector uses the standard WooCommerce wc-auth flow.
+ * This router completes the handshake on behalf of www.aynimar.com.
  *
- * Flow:
- *   1. Admin in Dropi panel clicks "Connect store → https://www.aynimar.com"
- *   2. Dropi redirects admin browser to:
- *        GET /store/wc-auth/v1/authorize?app_name=Dropi&scope=read_write
- *                                        &user_id=<dropi_uid>
- *                                        &return_url=<dropi_return>
- *                                        &callback_url=<dropi_callback>
- *   3. This handler validates the request, POSTs our WC credentials to
- *      Dropi's callback_url (server-to-server), then redirects the admin
- *      browser back to Dropi with ?success=1.
+ * Request from Dropi (browser redirect):
+ *   GET /store/wc-auth/v1/authorize
+ *       ?app_name=Dropi
+ *       &scope=read_write
+ *       &user_id=75551
+ *       &return_url=https://app.dropi.ec/dashboard/shop/edit?id=54329
+ *       &callback_url=https://api.dropi.ec/api/shops/woocomerceoAuth/?shop_id=54329
  *
- * Mount: app.use('/store/wc-auth/v1', wcAuthRouter)   ← set in routes/index.js
+ * Handler flow:
+ *   1. Validate app_name === 'Dropi'
+ *   2. Validate callback_url is on api.dropi.ec (SSRF guard)
+ *   3. Validate shop_id in callback_url matches DROPI_SHOP_ID env var
+ *   4. POST FRONT_WOO_CONSUMER_KEY + FRONT_WOO_CONSUMER_SECRET to callback_url
+ *   5. Redirect browser → return_url?success=1
  *
- * Security:
- *   - Only accepts app_name === 'Dropi'
- *   - callback_url must be on api.dropi.ec (prevents SSRF to arbitrary hosts)
- *   - No JWT required — this is a browser-redirect OAuth flow, not an API call
+ * Required Railway env vars:
+ *   FRONT_WOO_CONSUMER_KEY    — WC consumer key for www.aynimar.com ↔ Dropi
+ *   FRONT_WOO_CONSUMER_SECRET — WC consumer secret
+ *   DROPI_SHOP_ID             — Dropi shop ID tied to aynimar.com (e.g. 54329)
  */
 
 const express = require('express');
@@ -37,17 +38,21 @@ const ALLOWED_CALLBACK_HOST = 'api.dropi.ec';
 router.get('/authorize', async (req, res) => {
   const { app_name, scope, user_id, return_url, callback_url } = req.query;
 
-  // ── Validate required params ──────────────────────────────────────────────
+  console.log(`[WC OAuth] Incoming request — app_name="${app_name}" user_id="${user_id}"`);
+
+  // ── 1. Required params ────────────────────────────────────────────────────
   if (!app_name || !callback_url || !return_url) {
-    return res.status(400).send('Bad Request: missing OAuth parameters (app_name, callback_url, return_url required).');
+    console.warn('[WC OAuth] Rejected: missing required parameters.');
+    return res.status(400).send('Bad Request: app_name, callback_url, and return_url are required.');
   }
 
+  // ── 2. App identity check ─────────────────────────────────────────────────
   if (app_name !== ALLOWED_APP_NAME) {
-    console.warn(`[WC OAuth] Rejected request from unknown app: "${app_name}"`);
+    console.warn(`[WC OAuth] Rejected: unknown app_name="${app_name}"`);
     return res.status(403).send('Forbidden: only the Dropi application is authorized.');
   }
 
-  // ── Security: block SSRF — only POST to Dropi's own API domain ───────────
+  // ── 3. SSRF guard — callback must be on api.dropi.ec ─────────────────────
   let parsedCallback;
   try {
     parsedCallback = new URL(callback_url);
@@ -56,24 +61,31 @@ router.get('/authorize', async (req, res) => {
   }
 
   if (parsedCallback.hostname !== ALLOWED_CALLBACK_HOST) {
-    console.warn(`[WC OAuth] SSRF attempt blocked — callback_url host: "${parsedCallback.hostname}"`);
+    console.warn(`[WC OAuth] SSRF blocked — callback_url host="${parsedCallback.hostname}"`);
     return res.status(403).send('Forbidden: callback_url host not allowed.');
   }
 
-  // ── Read WC credentials ───────────────────────────────────────────────────
-  // These are stored in Railway env vars and must match the Business row that
-  // woocommerceMirror.js looks up in wooBasicAuth (wooConsumerKey / wooConsumerSecret).
-  const consumerKey    = process.env.WOO_CONSUMER_KEY;
-  const consumerSecret = process.env.WOO_CONSUMER_SECRET;
+  // ── 4. Shop identity validation ───────────────────────────────────────────
+  // Dropi embeds shop_id in the callback_url — validate it matches our store.
+  const incomingShopId = parsedCallback.searchParams.get('shop_id');
+  const expectedShopId = process.env.DROPI_SHOP_ID || '54329'; // aynimar.com Dropi shop ID
 
-  if (!consumerKey || !consumerSecret) {
-    console.error('[WC OAuth] WOO_CONSUMER_KEY or WOO_CONSUMER_SECRET not set in Railway.');
-    return res.status(500).send('Store credentials not configured. Contact the administrator.');
+  if (incomingShopId && incomingShopId !== expectedShopId) {
+    console.warn(`[WC OAuth] Shop ID mismatch — got "${incomingShopId}", expected "${expectedShopId}"`);
+    return res.status(403).send('Forbidden: shop_id does not match this store integration.');
   }
 
-  // ── POST credentials to Dropi (server-to-server) ─────────────────────────
-  // WooCommerce sends this payload to the callback URL so the connecting app
-  // can authenticate against the store in future requests.
+  // ── 5. Credentials — FRONT_WOO_* are the aynimar.com ↔ Dropi keys ────────
+  const consumerKey    = process.env.FRONT_WOO_CONSUMER_KEY;
+  const consumerSecret = process.env.FRONT_WOO_CONSUMER_SECRET;
+
+  if (!consumerKey || !consumerSecret) {
+    console.error('[WC OAuth] FRONT_WOO_CONSUMER_KEY or FRONT_WOO_CONSUMER_SECRET not set in Railway.');
+    return res.status(500).send('Store credentials not configured. Set FRONT_WOO_CONSUMER_KEY and FRONT_WOO_CONSUMER_SECRET in Railway.');
+  }
+
+  // ── 6. POST credentials to Dropi (server-to-server handshake) ────────────
+  // WooCommerce OAuth spec: https://woocommerce.github.io/woocommerce-rest-api-docs/#authentication
   const callbackPayload = {
     key_id:          1,
     user_id:         user_id ? Number(user_id) : 0,
@@ -82,19 +94,23 @@ router.get('/authorize', async (req, res) => {
     key_permissions: scope === 'read' ? 'read' : 'read_write',
   };
 
+  console.log(`[WC OAuth] POSTing credentials to Dropi: ${callback_url}`);
+  console.log(`[WC OAuth] shop_id="${incomingShopId}" user_id="${user_id}" scope="${scope}"`);
+
   try {
-    console.log(`[WC OAuth] POSTing credentials to Dropi callback: ${callback_url}`);
     const cbRes = await axios.post(callback_url, callbackPayload, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       timeout: 15000,
     });
-    console.log(`[WC OAuth] Dropi callback responded: ${cbRes.status}`);
+    console.log(`[WC OAuth] Dropi callback accepted — HTTP ${cbRes.status} ✓`);
   } catch (err) {
-    // Log but do not block the flow — redirect anyway so the admin is not stuck.
-    console.error(`[WC OAuth] Dropi callback failed: ${err.response?.status ?? err.message}`);
+    const status = err.response?.status ?? 'network error';
+    console.error(`[WC OAuth] Dropi callback failed — HTTP ${status}: ${err.message}`);
+    // Do not block — redirect anyway so the admin is not left on a broken page.
+    // Dropi may have already persisted the credentials on their side.
   }
 
-  // ── Redirect admin browser back to Dropi with success=1 ──────────────────
+  // ── 7. Redirect browser → Dropi success page ─────────────────────────────
   let redirectTarget;
   try {
     redirectTarget = new URL(return_url);
@@ -103,7 +119,7 @@ router.get('/authorize', async (req, res) => {
     return res.status(400).send('Bad Request: return_url is not a valid URL.');
   }
 
-  console.log(`[WC OAuth] Redirecting to: ${redirectTarget}`);
+  console.log(`[WC OAuth] Authorization complete — redirecting to ${redirectTarget}`);
   return res.redirect(302, redirectTarget.toString());
 });
 
