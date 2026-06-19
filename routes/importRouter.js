@@ -240,6 +240,9 @@ router.get(
         },
       });
     } catch (err) {
+      if (err.code === 'DROPI_2FA_PENDING') {
+        return res.status(202).json({ message: '2FA requerido. Verifica Telegram.', code: 'DROPI_2FA_PENDING' });
+      }
       if (err.code === 'DROPI_TOKEN_EXPIRED' || err.message?.includes('Sin token') || err.message?.includes('token de sesión')) {
         return res.status(503).json({ message: 'Token de Dropi expirado o no configurado.', code: 'DROPI_TOKEN_EXPIRED' });
       }
@@ -266,6 +269,10 @@ router.get(
       const product = await fetchDropiProductById(productId);
       return res.json(product);
     } catch (err) {
+      // 2FA required — CEO notified via Telegram, waiting for manual code.
+      if (err.code === 'DROPI_2FA_PENDING') {
+        return res.status(202).json({ message: '2FA requerido. Verifica Telegram.', code: 'DROPI_2FA_PENDING' });
+      }
       // Auth errors — Dropi token expired or never configured.
       if (
         err.code === 'DROPI_TOKEN_EXPIRED' ||

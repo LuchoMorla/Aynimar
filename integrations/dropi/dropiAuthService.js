@@ -2,7 +2,7 @@
 
 const crypto = require('crypto');
 const axios  = require('axios');
-const { getTokenFromDB, saveTokenToDB } = require('./dropiTokenService');
+const { getTokenFromDB, saveTokenToDB, set2FAStatus } = require('./dropiTokenService');
 
 // ── In-memory token cache ─────────────────────────────────────────────────────
 
@@ -117,9 +117,17 @@ const _dropiLoginDirect = async (payload) => {
         { dropiToken: placeholder, path: '/api/login', method: 'POST', payload },
         { headers: { 'X-Worker-Key': WORKER_KEY }, timeout: 30000 }
       );
-      if (data.isSuccess === false && (data.status === 400 || data.status === 401)) {
+      // Pre-auth state: credentials OK but Dropi requires 2FA completion via a separate step.
+      // This token is NOT valid for catalog/orders — throw so caller handles it explicitly.
+      if (data.message === '2fa') {
+        const err2fa = new Error('Dropi requiere 2FA — el código OTP no fue incluido o es inválido');
+        err2fa.code = 'DROPI_2FA_REQUIRED';
+        err2fa.response = { status: 401, data };
+        throw err2fa;
+      }
+      if (data.isSuccess === false) {
         const err = new Error(data.message || 'Dropi login failed');
-        err.response = { status: data.status, data };
+        err.response = { status: data.status ?? 400, data };
         throw err;
       }
       console.log('[Dropi Auth] Login via Worker exitoso.');
@@ -213,8 +221,8 @@ async function autoRefreshToken() {
   }
 
   // white_brand_id is required by Dropi's /api/login endpoint.
-  // Default 8 is Dropi Ecuador's public brand; override with DROPI_WHITE_BRAND_ID.
-  const brandId   = Number(process.env.DROPI_WHITE_BRAND_ID) || 8;
+  // 1 = Dropi Ecuador main platform (confirmed working). Override with DROPI_WHITE_BRAND_ID.
+  const brandId   = Number(process.env.DROPI_WHITE_BRAND_ID) || 1;
   const secret2fa = process.env.DROPI_2FA_SECRET;
   const otpField  = process.env.DROPI_2FA_FIELD || 'otp';
   let newToken;
@@ -254,21 +262,35 @@ async function autoRefreshToken() {
       const status = err.response?.status;
       const body   = JSON.stringify(err.response?.data);
       console.error(`[Dropi Auth] Login HTTP ${status ?? 'ERR'} (ventana=${windowOffset ?? 'sin-2FA'}) — body: ${body}`);
+      // DROPI_2FA_REQUIRED = credentials OK but Dropi demands 2FA and no OTP was sent.
+      // No point trying other TOTP windows — it's a missing OTP, not a clock-skew issue.
+      if (err.code === 'DROPI_2FA_REQUIRED') break;
       if (status !== 400) break; // 401/5xx won't improve with a different TOTP window
     }
   }
 
   if (lastErr) {
-    // All automatic TOTP windows failed (400). Activate Telegram failover.
-    if (secret2fa && lastErr.response?.status === 400) {
+    // Activate Telegram failover when:
+    //   a) DROPI_2FA_SECRET is set but all TOTP windows are rejected (wrong secret)
+    //   b) No DROPI_2FA_SECRET and Dropi demands 2FA (DROPI_2FA_REQUIRED)
+    const needs2FA = (lastErr.response?.status === 400) || (lastErr.code === 'DROPI_2FA_REQUIRED');
+    if (needs2FA) {
+      const dropiBody = JSON.stringify(lastErr.response?.data ?? {});
       const pendingErr = new Error(
-        'Autenticación 2FA automática falló en todos los intervalos TOTP. ' +
-        'Código 2FA manual requerido — el CEO ha sido notificado vía Telegram.'
+        'Autenticación 2FA automática falló. Código 2FA manual requerido — CEO notificado vía Telegram.'
       );
       pendingErr.code = 'DROPI_2FA_PENDING';
+
+      // Persist waiting state so the webhook knows what to resume
+      await set2FAStatus('AWAITING_2FA').catch((dbErr) =>
+        console.warn('[Dropi Auth] No se pudo guardar estado AWAITING_2FA en BD:', dbErr.message)
+      );
+
       await _sendTelegram(
         '⚠️ <b>Error de autenticación en Dropi.</b>\n\n' +
-        'El código 2FA automático falló. Por favor, ingresa el código 2FA de tu app autenticadora:'
+        'El código 2FA automático falló.\n' +
+        `Respuesta de Dropi: <code>${dropiBody.slice(0, 300)}</code>\n\n` +
+        'Por favor, ingresa el código de 6 dígitos de tu app autenticadora:'
       );
       throw pendingErr;
     }
@@ -302,7 +324,7 @@ async function completeManual2FA(code) {
   const password = process.env.DROPI_PASSWORD || '';
   if (!email || !password) throw new Error('Sin credenciales DROPI_EMAIL/DROPI_PASSWORD configuradas.');
 
-  const brandId  = Number(process.env.DROPI_WHITE_BRAND_ID) || 8;
+  const brandId  = Number(process.env.DROPI_WHITE_BRAND_ID) || 1;
   const otpField = process.env.DROPI_2FA_FIELD || 'otp';
 
   const payload = { email, password, white_brand_id: brandId, [otpField]: String(code).trim() };

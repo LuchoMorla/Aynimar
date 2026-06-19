@@ -24,7 +24,8 @@
 
 const express = require('express');
 const axios   = require('axios');
-const { completeManual2FA } = require('../integrations/dropi/dropiAuthService');
+const { completeManual2FA }     = require('../integrations/dropi/dropiAuthService');
+const { set2FAStatus }          = require('../integrations/dropi/dropiTokenService');
 
 const router = express.Router();
 
@@ -84,7 +85,8 @@ router.post('/', async (req, res) => {
 
   try {
     await completeManual2FA(code);
-    await _reply(chatId, '✅ <b>Autenticación exitosa.</b>\n\nEl token de Dropi ha sido renovado. Las importaciones pueden continuar.');
+    await set2FAStatus('').catch(() => {});
+    await _reply(chatId, '✅ <b>Autenticación exitosa.</b>\n\nEl token de Dropi ha sido renovado. Puedes reintentar la importación desde el dashboard.');
     console.log('[Telegram Webhook] Login manual completado y CEO notificado.');
   } catch (err) {
     const msg = err.response?.data?.message || err.message || 'Error desconocido';

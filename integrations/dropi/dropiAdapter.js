@@ -479,6 +479,8 @@ async function fetchDropiProductById(productId) {
         console.log(`[Dropi Auth] Token renovado. Reintentando Worker para ID: ${id}`);
         return await _fetchByIdViaWorker(id);
       } catch (refreshErr) {
+        // 2FA pending — propagate so the route handler can return 202
+        if (refreshErr.code === 'DROPI_2FA_PENDING') throw refreshErr;
         console.warn('[Dropi Auth] Auto-renovación fallida (Worker path):', refreshErr.message);
         const message = refreshErr.message.includes('credenciales') || refreshErr.message.includes('Sin credenciales')
           ? 'Token de Dropi expirado y no hay credenciales configuradas. ' +
@@ -507,6 +509,8 @@ async function fetchDropiProductById(productId) {
       console.log(`[Dropi Auth] Token renovado con éxito. Reintentando búsqueda de ID: ${id}`);
       return await _doFetchById(id);
     } catch (refreshErr) {
+      // 2FA pending — propagate so the route handler can return 202
+      if (refreshErr.code === 'DROPI_2FA_PENDING') throw refreshErr;
       console.warn('[Dropi Auth] Auto-renovación fallida:', refreshErr.message);
       const message = refreshErr.message.includes('credenciales') || refreshErr.message.includes('Sin credenciales')
         ? 'Token de Dropi expirado y no hay credenciales configuradas. ' +
