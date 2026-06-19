@@ -6,7 +6,7 @@ const passport = require('passport');
 const OpenAI   = require('openai');
 const { Op }   = require('sequelize');
 const { checkRoles }          = require('../middlewares/authHandler');
-const { optimizeProductCopy } = require('../integrations/aiCopyService');
+const { optimizeProductCopy, NEURO_SYSTEM_PROMPT, buildNeuroCopyUserContent } = require('../integrations/aiCopyService');
 const { completeManual2FA }   = require('../integrations/dropi/dropiAuthService');
 const sequelize               = require('../libs/sequelize');
 
@@ -1170,6 +1170,103 @@ router.post('/nutria/session-close', async (req, res) => {
     return res.json({ ok: true });
   }
 });
+
+// ── POST /api/v1/ai/neuro-copy ────────────────────────────────────────────────
+// SSE streaming endpoint — returns text/event-stream chunks so the dashboard
+// can render the description word-by-word as the model generates it.
+// Body: { name, description?, rawDetails?, variants? }
+// Events: data: {"text":"chunk"}\n\n  →  event: done\ndata: {}\n\n
+router.post(
+  '/neuro-copy',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  async (req, res) => {
+    const { name, description, rawDetails, variants } = req.body ?? {};
+
+    if (!name || typeof name !== 'string' || name.trim().length < 2) {
+      return res.status(400).json({ message: 'Se requiere "name" con el nombre del producto.' });
+    }
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(503).json({ message: 'ANTHROPIC_API_KEY no configurada en el servidor.' });
+    }
+
+    // SSE headers — disable buffering at every proxy layer
+    res.setHeader('Content-Type',    'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control',   'no-cache, no-transform');
+    res.setHeader('Connection',      'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+
+    let anthropicStream;
+    try {
+      const response = await axios.post(
+        'https://api.anthropic.com/v1/messages',
+        {
+          model:      'claude-haiku-4-5-20251001',
+          max_tokens: 650,
+          stream:     true,
+          system:     NEURO_SYSTEM_PROMPT,
+          messages:   [{ role: 'user', content: buildNeuroCopyUserContent({ name: name.trim(), description, rawDetails, variants }) }],
+        },
+        {
+          headers: {
+            'x-api-key':         process.env.ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01',
+            'content-type':      'application/json',
+          },
+          responseType: 'stream',
+          timeout:      35000,
+        },
+      );
+
+      anthropicStream = response.data;
+      let buffer = '';
+
+      anthropicStream.on('data', (chunk) => {
+        buffer += chunk.toString('utf8');
+        const lines  = buffer.split('\n');
+        buffer = lines.pop(); // hold incomplete last line across chunks
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (!raw || raw === '[DONE]') continue;
+          try {
+            const evt = JSON.parse(raw);
+            if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta' && evt.delta.text) {
+              send({ text: evt.delta.text });
+            }
+          } catch (_) { /* skip malformed SSE line */ }
+        }
+      });
+
+      anthropicStream.on('end', () => {
+        res.write('event: done\ndata: {}\n\n');
+        res.end();
+        console.log(`[NeuroAI] Stream completado para "${name.trim()}"`);
+      });
+
+      anthropicStream.on('error', (err) => {
+        console.error('[NeuroAI] Stream error:', err.message);
+        send({ error: 'Error en el stream de la IA.' });
+        res.end();
+      });
+
+    } catch (err) {
+      console.error('[NeuroAI] Error al iniciar stream:', err.message);
+      send({ error: 'Error al conectar con la IA. Intenta de nuevo.' });
+      res.end();
+      return;
+    }
+
+    // Abort the Anthropic stream if the client disconnects early
+    req.on('close', () => {
+      if (anthropicStream) anthropicStream.destroy();
+    });
+  },
+);
 
 // ── POST /api/v1/ai/optimize-copy ────────────────────────────────────────────
 router.post(

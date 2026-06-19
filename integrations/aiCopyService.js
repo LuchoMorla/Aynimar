@@ -170,4 +170,81 @@ async function extractSearchKeywords(userIntent) {
   }
 }
 
-module.exports = { generateProductCopy, optimizeProductCopy, extractSearchKeywords };
+// ── Shared neuro-marketing system prompt ─────────────────────────────────────
+// Used by both the streaming endpoint and background import flow.
+const NEURO_SYSTEM_PROMPT = `Actúa como un experto en neuro-marketing y copywriting de alta conversión para e-commerce latinoamericano.
+Escribe una descripción de producto aplicando estas técnicas psicológicas de forma natural y persuasiva:
+
+1. Sesgo de Anclaje: Presenta el valor percibido y el beneficio ANTES de cualquier referencia al precio.
+2. Principio de Escasez/Urgencia: Incluye UNA frase sutil que incite a la acción inmediata (sin ser agresivo ni inventar stock).
+3. Reducción de Carga Cognitiva: Usa frases cortas, viñetas y lenguaje simple y directo.
+4. Activación del Sistema Límbico: Enfócate en el beneficio EMOCIONAL — qué siente el cliente al tenerlo — en lugar de solo enumerar características técnicas.
+
+REGLA ABSOLUTA: USA SOLO la información real que te proporcionan. NO inventes especificaciones, dimensiones, materiales, garantías ni precios.
+Responde ÚNICAMENTE con el texto en Markdown, sin prefacio ni explicaciones adicionales.`;
+
+function buildNeuroCopyUserContent({ name, description, rawDetails, variants } = {}) {
+  const sourceText = (rawDetails || '').trim() || (description || '').trim();
+  const variantsText = Array.isArray(variants) && variants.length > 0
+    ? `\nVARIANTES DISPONIBLES: ${variants.map((g) => `${g.option}: ${g.values.map((v) => (typeof v === 'string' ? v : v.label)).join(', ')}`).join(' | ')}`
+    : '';
+
+  return `Datos reales del producto:
+NOMBRE: ${(name || 'Sin nombre').trim()}
+${sourceText ? `DESCRIPCIÓN ORIGINAL DEL PROVEEDOR:\n${sourceText}` : '(Sin descripción adicional del proveedor)'}${variantsText}
+
+Escribe la descripción neuro-optimizada con EXACTAMENTE este formato en español:
+
+## [Título impactante — máx. 10 palabras, orientado al beneficio emocional]
+
+[Párrafo de gancho: 1-2 oraciones que conectan con lo que el cliente SIENTE al tenerlo]
+
+### ¿Por qué lo van a querer?
+- **[Beneficio emocional 1]:** [explicación breve]
+- **[Beneficio emocional 2]:** [explicación breve]
+- **[Beneficio emocional 3]:** [explicación breve]
+
+### [Llamado a la acción con urgencia sutil — 1 oración concisa]`;
+}
+
+/**
+ * Non-streaming neuro-copy for background import flow.
+ * The streaming version lives in aiRouter.js (POST /api/v1/ai/neuro-copy).
+ */
+async function neuroCopyProduct(productData) {
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  try {
+    const { data } = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model:      'claude-haiku-4-5-20251001',
+        max_tokens: 600,
+        system:     NEURO_SYSTEM_PROMPT,
+        messages:   [{ role: 'user', content: buildNeuroCopyUserContent(productData) }],
+      },
+      {
+        headers: {
+          'x-api-key':         process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'content-type':      'application/json',
+        },
+        timeout: 25000,
+      },
+    );
+    const text = data?.content?.[0]?.text ?? null;
+    console.log(`[NeuroAI] Copy para "${productData?.name}" (${text?.length ?? 0} chars)`);
+    return text;
+  } catch (err) {
+    console.warn(`[NeuroAI] neuroCopyProduct falló: ${err.message}`);
+    return null;
+  }
+}
+
+module.exports = {
+  generateProductCopy,
+  optimizeProductCopy,
+  neuroCopyProduct,
+  extractSearchKeywords,
+  NEURO_SYSTEM_PROMPT,
+  buildNeuroCopyUserContent,
+};
