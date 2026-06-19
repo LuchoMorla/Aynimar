@@ -159,24 +159,18 @@ async function autoRefreshToken() {
 
   let newToken;
 
-  if (process.env.DROPI_WORKER_URL && process.env.DROPI_WORKER_KEY) {
-    // Route through Cloudflare Worker to bypass WAF that blocks Railway datacenter IPs
-    const { data } = await axios.post(
-      process.env.DROPI_WORKER_URL,
-      {
-        dropiToken: '',
-        path:       '/api/users/login',
-        method:     'POST',
-        payload:    loginPayload,
-      },
-      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 30000 }
-    );
-    newToken = data?.token ?? data?.access_token ?? data?.data?.token ?? null;
-  } else {
-    // Direct call — may be blocked by Cloudflare WAF from Railway IPs
+  const _doLogin = async (payload) => {
+    if (process.env.DROPI_WORKER_URL && process.env.DROPI_WORKER_KEY) {
+      const { data } = await axios.post(
+        process.env.DROPI_WORKER_URL,
+        { dropiToken: '', path: '/api/users/login', method: 'POST', payload },
+        { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 30000 }
+      );
+      return data;
+    }
     const { data } = await axios.post(
       `${process.env.DROPI_API_URL || 'https://api.dropi.ec'}/api/users/login`,
-      loginPayload,
+      payload,
       {
         headers: {
           'Content-Type': 'application/json',
@@ -184,11 +178,43 @@ async function autoRefreshToken() {
           'Referer':      'https://app.dropi.ec/login',
           'User-Agent':   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         },
-        timeout: 15000,
+        timeout: 30000,
       }
     );
-    newToken = data?.token ?? data?.access_token ?? data?.data?.token ?? null;
+    return data;
+  };
+
+  // Attempt login — log Dropi's full error body on failure for diagnosis.
+  let loginData;
+  try {
+    loginData = await _doLogin(loginPayload);
+  } catch (loginErr) {
+    const dropiBody = loginErr.response?.data;
+    console.error('[Dropi Auth] Login HTTP', loginErr.response?.status ?? 'ERR',
+      '— Dropi response body:', JSON.stringify(dropiBody));
+
+    // If 400 and 2FA was sent, retry WITHOUT the OTP field — helps diagnose
+    // whether Dropi is rejecting the OTP specifically or the credentials.
+    if (loginErr.response?.status === 400 && secret2fa) {
+      console.warn('[Dropi Auth] Reintentando login SIN 2FA para aislar el error...');
+      const payloadNo2fa = { email, password };
+      if (brandId) payloadNo2fa.white_brand_id = brandId;
+      try {
+        loginData = await _doLogin(payloadNo2fa);
+        console.warn('[Dropi Auth] Login sin 2FA exitoso — DROPI_2FA_SECRET puede ser incorrecto ' +
+          'o el campo OTP tiene nombre distinto. Revisa DROPI_2FA_FIELD y DROPI_2FA_SECRET en Railway.');
+      } catch (retryErr) {
+        const retryBody = retryErr.response?.data;
+        console.error('[Dropi Auth] Login sin 2FA también falló HTTP',
+          retryErr.response?.status ?? 'ERR', '— body:', JSON.stringify(retryBody));
+        throw loginErr; // throw original error
+      }
+    } else {
+      throw loginErr;
+    }
   }
+
+  newToken = loginData?.token ?? loginData?.access_token ?? loginData?.data?.token ?? null;
 
   if (!newToken) {
     throw new Error(
