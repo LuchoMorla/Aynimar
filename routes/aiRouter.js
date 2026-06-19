@@ -7,6 +7,7 @@ const OpenAI   = require('openai');
 const { Op }   = require('sequelize');
 const { checkRoles }          = require('../middlewares/authHandler');
 const { optimizeProductCopy } = require('../integrations/aiCopyService');
+const { completeManual2FA }   = require('../integrations/dropi/dropiAuthService');
 const sequelize               = require('../libs/sequelize');
 
 const router = express.Router();
@@ -1052,19 +1053,29 @@ router.get('/telegram/debug', async (req, res) => {
 });
 
 // ── POST /api/v1/ai/telegram/webhook ─────────────────────────────────────────
-// Receives Telegram bot updates. Must return 200 immediately or Telegram retries.
-// Extracts the sender's chat_id and:
-//   a) stores it as the dynamic fallback for sendTelegram()
-//   b) prints a one-time warning if TELEGRAM_OWNER_ID is unset / mismatched
-router.post('/telegram/webhook', (req, res) => {
-  res.sendStatus(200); // ack first — never block Telegram
+// Receives ALL Telegram bot updates (NutrIA alerts + Dropi 2FA failover).
+// Returns 200 immediately — Telegram retries if we don't respond within 3 s.
+router.post('/telegram/webhook', async (req, res) => {
+  // Validate optional webhook secret (set when registering with Telegram).
+  const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  if (expectedSecret) {
+    const incoming = req.headers['x-telegram-bot-api-secret-token'];
+    if (incoming !== expectedSecret) {
+      console.warn('[Telegram Webhook] Rejected: invalid secret token.');
+      return res.sendStatus(403);
+    }
+  }
+
+  res.sendStatus(200); // ack before any async work
 
   const update = req.body;
   const msg    = update?.message ?? update?.channel_post ?? update?.edited_message;
   if (!msg?.chat?.id) return;
 
   const incomingId = String(msg.chat.id);
+  const text       = (msg.text || '').trim();
 
+  // Auto-discovery: capture the owner's chat_id on first message.
   if (!detectedOwnerId) {
     detectedOwnerId = incomingId;
   }
@@ -1073,8 +1084,29 @@ router.post('/telegram/webhook', (req, res) => {
     const configured = process.env.TELEGRAM_OWNER_ID;
     if (!configured || configured !== incomingId) {
       ownerIdWarned = true;
-      console.warn(`[AUTO-CONFIG] Detected potential Owner ID: ${incomingId}. Please update TELEGRAM_OWNER_ID in Railway variables.`);
+      console.warn(`[AUTO-CONFIG] First message from chat_id=${incomingId}. Set TELEGRAM_OWNER_ID=${incomingId} in Railway to make this permanent.`);
     }
+  }
+
+  // ── Dropi 2FA failover — CEO sends 6-digit code ───────────────────────────
+  // Only process from the configured owner chat; ignore bots and groups.
+  const allowedChatId = process.env.TELEGRAM_OWNER_ID || process.env.TELEGRAM_CHAT_ID;
+  if (!allowedChatId || incomingId !== String(allowedChatId)) return;
+
+  const codeMatch = text.match(/\b(\d{6})\b/);
+  if (!codeMatch) return; // Not a 2FA code — NutrIA alert replies are ignored
+
+  const code = codeMatch[1];
+  console.log(`[Telegram Webhook] Código 2FA recibido del CEO (chat_id=${incomingId}): ${code}`);
+
+  try {
+    await completeManual2FA(code);
+    await sendTelegram('✅ <b>Autenticación exitosa.</b>\n\nEl token de Dropi ha sido renovado. Las importaciones pueden continuar.');
+    console.log('[Telegram Webhook] Login manual completado.');
+  } catch (err) {
+    const errMsg = err.response?.data?.message || err.message || 'Error desconocido';
+    await sendTelegram(`❌ <b>Error de autenticación.</b>\n\n${errMsg}\n\nVerifica el código e inténtalo de nuevo.`);
+    console.error('[Telegram Webhook] Login manual fallido:', errMsg);
   }
 });
 
