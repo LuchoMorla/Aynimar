@@ -24,8 +24,9 @@ const importRouter       = require('./importRouter');
 const reviewsRouter      = require('./reviewsRouter');
 const couponRouter       = require('./couponRouter');
 const woocommerceMirror  = require('./woocommerceMirror');
-const wcAuthRouter       = require('./wcAuthRouter');
-const aiRouter           = require('./aiRouter');
+const wcAuthRouter           = require('./wcAuthRouter');
+const telegramWebhookRouter  = require('./telegramWebhookRouter');
+const aiRouter               = require('./aiRouter');
 const testRouter         = require('./testRouter');
 
 function routerApi(app) {
@@ -67,6 +68,10 @@ function routerApi(app) {
     // WooCommerce OAuth mock — intercepts Dropi's authorization handshake.
     // Public route (no JWT): browser-redirect OAuth flow from the admin.
     app.use('/store/wc-auth/v1', wcAuthRouter);
+
+    // Telegram webhook — receives 2FA codes from the CEO for Dropi login failover.
+    // Public route (no JWT): Telegram POSTs directly to this endpoint.
+    app.use('/telegram/webhook', telegramWebhookRouter);
 }
 
 module.exports = routerApi;
