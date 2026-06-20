@@ -78,6 +78,28 @@ app.get('/', (req, res) => {
   );
 });
 
+// ── Health check — no auth, no DB hit — Railway uses this for uptime monitoring ──
+app.get('/health', (req, res) => {
+  const groqKey    = !!(process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY);
+  const orderToken = !!(process.env.DROPI_ORDER_TOKEN || process.env.WOO_CONSUMER_SECRET);
+  const jwtSecret  = !!process.env.JWT_SECRET;
+  const worker     = !!(process.env.DROPI_WORKER_URL && process.env.DROPI_WORKER_KEY);
+
+  const degraded = !groqKey || !orderToken || !jwtSecret;
+
+  res.status(degraded ? 200 : 200).json({
+    status:    degraded ? 'degraded' : 'ok',
+    uptime:    Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    checks: {
+      jwt_secret:         jwtSecret,
+      dropi_order_token:  orderToken,
+      groq_api_key:       groqKey,
+      cloudflare_worker:  worker,
+    },
+  });
+});
+
 // un ejemplo de protección de nuestra api con un key o apiKey de ejemplo
 app.get('/nueva-ruta', checkApiKey, (req, res) => {
   res.send('hola, soy tu nueva ruta');
@@ -139,6 +161,58 @@ async function registerTelegramWebhook() {
   }
 }
 
+// ── Deploy health notifier ────────────────────────────────────────────────────
+// Sends a Telegram message on every Railway deploy with the exact health status.
+// Non-blocking — failures are logged but never crash the server.
+async function notifyDeployHealth() {
+  const token  = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_OWNER_ID || process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) return; // Telegram not configured — skip silently
+
+  const checks = {
+    jwt_secret:        !!process.env.JWT_SECRET,
+    dropi_order_token: !!(process.env.DROPI_ORDER_TOKEN || process.env.WOO_CONSUMER_SECRET),
+    groq_api_key:      !!(process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY),
+    telegram_bot:      !!process.env.TELEGRAM_BOT_TOKEN,
+  };
+
+  const criticalFails = Object.entries(checks)
+    .filter(([, ok]) => !ok)
+    .map(([k]) => k);
+
+  const statusLine = criticalFails.length === 0
+    ? '✅ <b>Deploy OK — sistema estable</b>'
+    : `⚠️ <b>Deploy DEGRADADO — ${criticalFails.length} var(s) faltante(s)</b>`;
+
+  const checkLines = Object.entries(checks)
+    .map(([k, ok]) => `${ok ? '✅' : '🚨'} ${k}`)
+    .join('\n');
+
+  const deployId = process.env.RAILWAY_DEPLOYMENT_ID
+    ? `Deploy: <code>${process.env.RAILWAY_DEPLOYMENT_ID.slice(0, 8)}</code>\n`
+    : '';
+
+  const msg =
+    `${statusLine}\n\n` +
+    `${deployId}` +
+    `🕐 ${new Date().toISOString()}\n\n` +
+    checkLines +
+    (criticalFails.length > 0
+      ? `\n\n🚨 Acción requerida:\n${criticalFails.map((k) => `  • Añade <code>${k.toUpperCase()}</code> en Railway Variables`).join('\n')}`
+      : '');
+
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'HTML' }),
+    });
+    console.log('[DeployHealth] Telegram notificado.');
+  } catch (err) {
+    console.error('[DeployHealth] Error enviando Telegram:', err.message);
+  }
+}
+
 const server = app.listen(puerto, '0.0.0.0', () => {
   console.log(`[OK] Server listening on 0.0.0.0:${puerto}`);
   console.log(`[OK] Start time: ${new Date().toISOString()}`);
@@ -152,6 +226,7 @@ const server = app.listen(puerto, '0.0.0.0', () => {
     );
   }
 
+  notifyDeployHealth();   // deploy health report to Telegram on every Railway restart
   registerTelegramWebhook(); // non-blocking — failures are logged, never crash the server
 });
 

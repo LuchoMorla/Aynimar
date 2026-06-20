@@ -4,7 +4,11 @@
   "description": "circular economy and recycling application",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node scripts/smoke-test.js",
+    "smoke-test": "node scripts/smoke-test.js",
+    "health-check": "node scripts/health-check.js",
+    "post-deploy": "node scripts/post-deploy.js",
+    "install-hooks": "sh scripts/install-hooks.sh",
     "dev": "nodemon index.js",
     "prestart": "npx sequelize-cli db:migrate || echo '[prestart] Migration warning — DB may be unavailable; server starting anyway'",
     "start": "node index.js",

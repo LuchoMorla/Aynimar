@@ -10,6 +10,7 @@ const {
   optimizeProductCopy,
   NEURO_SYSTEM_PROMPT,
   buildNeuroCopyUserContent,
+  validateCopyOutput,
 } = require('../integrations/aiCopyService');
 const { completeManual2FA }   = require('../integrations/dropi/dropiAuthService');
 const sequelize               = require('../libs/sequelize');
@@ -1294,6 +1295,11 @@ router.post(
         const text = completion.choices[0]?.message?.content ?? null;
         console.log(`[NeuroAI] NON-STREAM completado — ${text?.length ?? 0} chars`);
         if (!text) return res.status(502).json({ message: 'Groq no devolvió contenido.' });
+        const qvNonStream = validateCopyOutput(text);
+        if (!qvNonStream.ok) {
+          console.error(`[NeuroAI] QUALITY GATE FAIL (non-stream) — "${name.trim()}" — motivo: ${qvNonStream.reason} | preview: ${text.slice(0, 120)}`);
+          return res.status(422).json({ message: `Copy rechazado por control de calidad: ${qvNonStream.reason}. Regenera el copy.` });
+        }
         return res.json({ text });
       } catch (err) {
         console.error('[NeuroAI] NON-STREAM error:', err.message);
@@ -1341,16 +1347,32 @@ router.post(
       );
 
       let chunkCount = 0;
+      let assembledText = '';
       for await (const chunk of stream) {
         if (res.writableEnded) break;
         const text = chunk.choices[0]?.delta?.content ?? '';
         if (text) {
           chunkCount++;
+          assembledText += text;
           console.log(`[NeuroAI] chunk #${chunkCount} (${text.length} chars) → ${JSON.stringify(text.slice(0, 30))}`);
           send({ text });
         }
       }
       console.log(`[NeuroAI] Stream loop terminado — total chunks: ${chunkCount}`);
+
+      // Quality gate on the fully assembled output.
+      // Cannot un-send SSE chunks, so we emit a warning event that the dashboard uses
+      // to show a "Regenerar" alert without blocking the display of the generated copy.
+      if (assembledText) {
+        const qv = validateCopyOutput(assembledText);
+        if (!qv.ok) {
+          console.error(`[NeuroAI] QUALITY GATE FAIL (stream) — "${name.trim()}" — motivo: ${qv.reason} | preview: ${assembledText.slice(0, 120)}`);
+          if (!res.writableEnded) {
+            res.write(`event: quality_warning\ndata: ${JSON.stringify({ reason: qv.reason })}\n\n`);
+            flush();
+          }
+        }
+      }
 
       if (!res.writableEnded) {
         res.write('event: done\ndata: {}\n\n');

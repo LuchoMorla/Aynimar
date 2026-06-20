@@ -26,6 +26,22 @@ async function groqChat(messages, { max_tokens = 600 } = {}) {
   return completion.choices[0]?.message?.content ?? null;
 }
 
+// ── Copy quality guard ────────────────────────────────────────────────────────
+// Detects unfilled prompt-template placeholders that leak into the output.
+// Pattern: [UppercaseSpanish text with 7+ chars] NOT followed by ( — excludes markdown links.
+// Both generateProductCopy and neuroCopyProduct prompts prohibit brackets in output.
+function _hasBracketLeak(text) {
+  if (!text || typeof text !== 'string') return false;
+  return /\[[A-Za-záéíóúüñÁÉÍÓÚÜÑ][^\]\n]{6,}\](?!\()/.test(text);
+}
+
+// Exposed for smoke tests and external validation.
+function validateCopyOutput(text) {
+  if (!text || text.trim().length < 10) return { ok: false, reason: 'EMPTY_OUTPUT' };
+  if (_hasBracketLeak(text)) return { ok: false, reason: 'BRACKET_LEAK' };
+  return { ok: true };
+}
+
 // ── generateProductCopy ───────────────────────────────────────────────────────
 // Called by importRouter during Dropi product import.
 // Returns null on failure — import continues without AI copy.
@@ -63,7 +79,12 @@ async function generateProductCopy(name, rawDescription) {
 
   try {
     const text = await groqChat(messages, { max_tokens: 600 });
-    console.log(`[AI Copy] Generado para "${name}" (${text?.length ?? 0} chars)`);
+    const validation = validateCopyOutput(text);
+    if (!validation.ok) {
+      console.error(`[AI Copy] OUTPUT RECHAZADO para "${name}" — motivo: ${validation.reason} | preview: ${String(text).slice(0, 120)}`);
+      return null;
+    }
+    console.log(`[AI Copy] Generado para "${name}" (${text.length} chars)`);
     return text;
   } catch (err) {
     console.warn(`[AI Copy] Falló para "${name}": ${err.message}`);
@@ -230,7 +251,12 @@ async function neuroCopyProduct(productData) {
 
   try {
     const text = await groqChat(messages, { max_tokens: 600 });
-    console.log(`[NeuroAI] Copy para "${productData?.name}" (${text?.length ?? 0} chars)`);
+    const validation = validateCopyOutput(text);
+    if (!validation.ok) {
+      console.error(`[NeuroAI] OUTPUT RECHAZADO para "${productData?.name}" — motivo: ${validation.reason} | preview: ${String(text).slice(0, 120)}`);
+      return null;
+    }
+    console.log(`[NeuroAI] Copy para "${productData?.name}" (${text.length} chars)`);
     return text;
   } catch (err) {
     console.warn(`[NeuroAI] neuroCopyProduct falló: ${err.message}`);
@@ -243,6 +269,7 @@ module.exports = {
   optimizeProductCopy,
   neuroCopyProduct,
   extractSearchKeywords,
+  validateCopyOutput,
   NEURO_SYSTEM_PROMPT,
   buildNeuroCopyUserContent,
   GROQ_MODEL,
