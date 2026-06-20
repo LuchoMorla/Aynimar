@@ -6,7 +6,13 @@ const passport = require('passport');
 const OpenAI   = require('openai');
 const { Op }   = require('sequelize');
 const { checkRoles }          = require('../middlewares/authHandler');
-const { optimizeProductCopy, NEURO_SYSTEM_PROMPT, buildNeuroCopyUserContent } = require('../integrations/aiCopyService');
+const {
+  optimizeProductCopy,
+  NEURO_SYSTEM_PROMPT,
+  buildNeuroCopyUserContent,
+  OLLAMA_BASE_URL,
+  OLLAMA_MODEL,
+} = require('../integrations/aiCopyService');
 const { completeManual2FA }   = require('../integrations/dropi/dropiAuthService');
 const sequelize               = require('../libs/sequelize');
 
@@ -1186,84 +1192,82 @@ router.post(
     if (!name || typeof name !== 'string' || name.trim().length < 2) {
       return res.status(400).json({ message: 'Se requiere "name" con el nombre del producto.' });
     }
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return res.status(503).json({ message: 'ANTHROPIC_API_KEY no configurada en el servidor.' });
-    }
 
     // SSE headers — disable buffering at every proxy layer
-    res.setHeader('Content-Type',    'text/event-stream; charset=utf-8');
-    res.setHeader('Cache-Control',   'no-cache, no-transform');
-    res.setHeader('Connection',      'keep-alive');
+    res.setHeader('Content-Type',      'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control',     'no-cache, no-transform');
+    res.setHeader('Connection',        'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
     const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
 
-    let anthropicStream;
+    let ollamaStream;
     try {
       const response = await axios.post(
-        'https://api.anthropic.com/v1/messages',
+        `${OLLAMA_BASE_URL}/api/chat`,
         {
-          model:      'claude-haiku-4-5-20251001',
-          max_tokens: 650,
-          stream:     true,
-          system:     NEURO_SYSTEM_PROMPT,
-          messages:   [{ role: 'user', content: buildNeuroCopyUserContent({ name: name.trim(), description, rawDetails, variants }) }],
+          model:   OLLAMA_MODEL,
+          messages: [
+            { role: 'system', content: NEURO_SYSTEM_PROMPT },
+            { role: 'user',   content: buildNeuroCopyUserContent({ name: name.trim(), description, rawDetails, variants }) },
+          ],
+          stream:  true,
+          options: { num_predict: 650 },
         },
-        {
-          headers: {
-            'x-api-key':         process.env.ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01',
-            'content-type':      'application/json',
-          },
-          responseType: 'stream',
-          timeout:      35000,
-        },
+        { responseType: 'stream', timeout: 60000 }
       );
 
-      anthropicStream = response.data;
+      ollamaStream = response.data;
       let buffer = '';
 
-      anthropicStream.on('data', (chunk) => {
+      ollamaStream.on('data', (chunk) => {
         buffer += chunk.toString('utf8');
-        const lines  = buffer.split('\n');
-        buffer = lines.pop(); // hold incomplete last line across chunks
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // hold incomplete last line
 
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const raw = line.slice(6).trim();
-          if (!raw || raw === '[DONE]') continue;
+          if (!line.trim()) continue;
           try {
-            const evt = JSON.parse(raw);
-            if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta' && evt.delta.text) {
-              send({ text: evt.delta.text });
+            const evt = JSON.parse(line);
+            if (evt.message?.content) send({ text: evt.message.content });
+            if (evt.done) {
+              res.write('event: done\ndata: {}\n\n');
+              res.end();
+              console.log(`[NeuroAI] Stream completado para "${name.trim()}"`);
             }
-          } catch (_) { /* skip malformed SSE line */ }
+          } catch (_) { /* skip malformed NDJSON line */ }
         }
       });
 
-      anthropicStream.on('end', () => {
-        res.write('event: done\ndata: {}\n\n');
-        res.end();
-        console.log(`[NeuroAI] Stream completado para "${name.trim()}"`);
+      ollamaStream.on('end', () => {
+        if (!res.writableEnded) {
+          res.write('event: done\ndata: {}\n\n');
+          res.end();
+        }
       });
 
-      anthropicStream.on('error', (err) => {
-        console.error('[NeuroAI] Stream error:', err.message);
-        send({ error: 'Error en el stream de la IA.' });
-        res.end();
+      ollamaStream.on('error', (err) => {
+        console.error('[NeuroAI] Ollama stream error:', err.message);
+        if (!res.writableEnded) {
+          send({ error: 'OLLAMA_SERVICE_UNREACHABLE — verifica que Ollama esté corriendo.' });
+          res.end();
+        }
       });
 
     } catch (err) {
+      const isConnectionError = err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND';
+      const msg = isConnectionError
+        ? 'OLLAMA_SERVICE_UNREACHABLE — el servidor de IA local no responde.'
+        : `Error al conectar con Ollama: ${err.message}`;
       console.error('[NeuroAI] Error al iniciar stream:', err.message);
-      send({ error: 'Error al conectar con la IA. Intenta de nuevo.' });
-      res.end();
+      if (!res.writableEnded) { send({ error: msg }); res.end(); }
       return;
     }
 
-    // Abort the Anthropic stream if the client disconnects early
+    // Abort Ollama stream if the client disconnects early
     req.on('close', () => {
-      if (anthropicStream) anthropicStream.destroy();
+      if (ollamaStream && !ollamaStream.destroyed) ollamaStream.destroy();
     });
   },
 );
@@ -1278,9 +1282,6 @@ router.post(
       const { text } = req.body;
       if (!text || typeof text !== 'string' || text.trim().length < 5) {
         return res.status(400).json({ message: 'Body debe contener { text: "descripción del producto" }' });
-      }
-      if (!process.env.ANTHROPIC_API_KEY) {
-        return res.status(503).json({ message: 'ANTHROPIC_API_KEY no configurada en el servidor.' });
       }
       const optimized = await optimizeProductCopy(text.trim());
       if (!optimized) {
