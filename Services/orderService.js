@@ -7,6 +7,7 @@ const WalletService = require('./walletService');
 const { createOrderInDropi, fetchDropiOrderStatus } = require('../integrations/dropi/dropiAdapter');
 const { createOrderInEffi }  = require('../integrations/effi/effiAdapter');
 const { sendTelegramNotification } = require('../utils/telegramNotify');
+const { buildDispatchDescription } = require('../utils/variantAdapter');
 
 const { config } = require('./../config/config');
 // const nodemailer = require('nodemailer');
@@ -565,24 +566,28 @@ class OrderService {
         if (item.isBundle === true) {
           // BUNDLE: dispatch ALL components × order quantity.
           // E.g. customer orders 2× a bundle {A×1 + B×1} → dispatches A×2 + B×2.
+          const bundleDesc = buildDispatchDescription(item, null);
           for (const bundleItem of item.dropiItems) {
             if (!bundleItem.id) continue;
             byProvider.dropi.push({
-              externalId: String(bundleItem.id),
-              quantity:   (bundleItem.qty ?? 1) * item.OrderProduct.amount,
+              externalId:          String(bundleItem.id),
+              quantity:            (bundleItem.qty ?? 1) * item.OrderProduct.amount,
+              dispatchDescription: bundleDesc,
             });
           }
-          console.log(`[Dispatch] Bundle product ${item.id} expanded to ${item.dropiItems.length} Dropi items`);
+          console.log(`[Dispatch] Bundle "${bundleDesc}" expanded to ${item.dropiItems.length} Dropi items`);
         } else {
           // VARIANT: dispatch only the customer-selected dropi ID.
           // Falls back to the first variant if the selection was not stored.
           const selectedId = item.OrderProduct?.selectedDropiId || item.dropiItems[0]?.id;
           if (selectedId) {
+            const variantDesc = buildDispatchDescription(item, item.OrderProduct?.selectedDropiId ?? null);
             byProvider.dropi.push({
-              externalId: String(selectedId),
-              quantity:   item.OrderProduct.amount,
+              externalId:          String(selectedId),
+              quantity:            item.OrderProduct.amount,
+              dispatchDescription: variantDesc,
             });
-            console.log(`[Dispatch] Variant product ${item.id} → dropi_id=${selectedId}`);
+            console.log(`[Dispatch] Variant "${variantDesc}" → dropi_id=${selectedId}`);
           } else {
             console.warn(`[Dispatch] Variant product ${item.id} has no selectedDropiId and no fallback — skipped`);
           }
@@ -595,7 +600,11 @@ class OrderService {
       const dropiId = item.dropiProductId || (item.sourceProvider === 'dropi' ? item.externalId : null);
       if (dropiId) {
         if (!byProvider.dropi) byProvider.dropi = [];
-        byProvider.dropi.push({ externalId: dropiId, quantity: item.OrderProduct.amount });
+        byProvider.dropi.push({
+          externalId:          dropiId,
+          quantity:            item.OrderProduct.amount,
+          dispatchDescription: item.name || String(dropiId),
+        });
         continue;
       }
 
@@ -648,11 +657,14 @@ class OrderService {
         const customerName = order.customer
           ? `${order.customer.name ?? ''} ${order.customer.lastName ?? ''}`.trim()
           : 'Invitado';
+        const itemLines = byProvider.dropi
+          .map((d) => `  • ${d.dispatchDescription || d.externalId} ×${d.quantity}`)
+          .join('\n');
         await sendTelegramNotification(
           `✅ <b>Orden #${order.id} enviada a Dropi</b>\n` +
           `ID Dropi: <code>${dropiOrderId}</code>\n` +
           `Cliente: ${customerName}\n` +
-          `Productos: ${byProvider.dropi.length} ítem(s)`
+          `Productos:\n${itemLines}`
         );
       } catch (err) {
         errors.push(`dropi: ${err.message}`);
