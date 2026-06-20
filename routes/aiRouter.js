@@ -1232,11 +1232,12 @@ router.post(
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
-    // res.flush() forces Node to push buffered data through Railway's proxy immediately.
-    // Without this, chunks accumulate in the write buffer and arrive all at once on stream end.
+    // res.flush() is injected by the `compression` middleware. This server does NOT
+    // use compression, so this is a no-op — kept for future compatibility if
+    // compression is added. Railway's proxy buffering must be handled upstream.
     const flush = () => { if (typeof res.flush === 'function') res.flush(); };
 
-    // SSE comment ping — breaks Railway's proxy buffer before any real data arrives.
+    // SSE comment ping — may break proxy buffer before real data arrives.
     res.write(': connected\n\n');
     flush();
 
@@ -1263,11 +1264,17 @@ router.post(
         { signal: controller.signal }
       );
 
+      let chunkCount = 0;
       for await (const chunk of stream) {
         if (res.writableEnded) break;
         const text = chunk.choices[0]?.delta?.content ?? '';
-        if (text) send({ text });
+        if (text) {
+          chunkCount++;
+          console.log(`[NeuroAI] chunk #${chunkCount} (${text.length} chars) → ${JSON.stringify(text.slice(0, 30))}`);
+          send({ text });
+        }
       }
+      console.log(`[NeuroAI] Stream loop terminado — total chunks: ${chunkCount}`);
 
       if (!res.writableEnded) {
         res.write('event: done\ndata: {}\n\n');
