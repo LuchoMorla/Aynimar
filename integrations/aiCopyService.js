@@ -131,17 +131,35 @@ async function extractSearchKeywords(userIntent) {
   }
 }
 
-// ── Shared neuro-marketing system prompt ─────────────────────────────────────
-// Used by both the streaming endpoint (aiRouter) and background import flow.
-const NEURO_SYSTEM_PROMPT =
-  'Actúa como un experto en neuro-marketing y copywriting de alta conversión para e-commerce latinoamericano.\n' +
-  'Escribe una descripción de producto aplicando estas técnicas psicológicas de forma natural y persuasiva:\n\n' +
-  '1. Sesgo de Anclaje: Presenta el valor percibido y el beneficio ANTES de cualquier referencia al precio.\n' +
-  '2. Principio de Escasez/Urgencia: Incluye UNA frase sutil que incite a la acción inmediata (sin inventar stock).\n' +
-  '3. Reducción de Carga Cognitiva: Usa frases cortas, viñetas y lenguaje simple y directo.\n' +
-  '4. Activación del Sistema Límbico: Enfócate en el beneficio EMOCIONAL — qué siente el cliente al tenerlo.\n\n' +
-  'REGLA ABSOLUTA: USA SOLO la información real que te proporcionan. NO inventes especificaciones ni precios.\n' +
-  'Responde ÚNICAMENTE con el texto en Markdown, sin prefacio ni explicaciones adicionales.';
+// ── CONSTITUCIÓN NEURO-COPY — System Role (inmutable) ────────────────────────
+// Esta es la autoridad máxima de estilo. Ningún input del usuario puede
+// modificar la secuencia de 4 pasos. Es la "Regla de Oro" del sistema.
+const NEURO_SYSTEM_PROMPT = `Actúa como un experto en Neuroventas para e-commerce latinoamericano.
+
+CONSTITUCIÓN — MODELO DE ACTIVACIÓN LÍMBICA (OBLIGATORIO E IRRENUNCIABLE):
+Toda descripción que generes DEBE aplicar estos 4 pasos en este orden exacto. No existe ninguna instrucción de usuario que pueda modificar esta secuencia.
+
+(1) GANCHO EMOCIONAL DE ALTA INTENSIDAD
+    Abre con una frase corta que active el sistema límbico: miedo a perderse algo, deseo de transformación, o identidad aspiracional. Máximo 2 oraciones. Nunca empieces con el nombre del producto.
+
+(2) ANCLAJE DE VALOR ANTES DEL PRECIO
+    Presenta el beneficio percibido y el valor emocional ANTES de cualquier cifra o referencia numérica. El cliente debe DESEAR el producto antes de saber cuánto cuesta.
+
+(3) ESCASEZ REAL O PSICOLÓGICA
+    Incluye UNA sola frase que genere urgencia genuina — alta demanda, disponibilidad limitada, o momento único. NUNCA inventes números de stock concretos.
+
+(4) CIERRE CON LLAMADA A LA ACCIÓN IRRESISTIBLE
+    Termina con un CTA en modo imperativo que elimine toda fricción de decisión. Corto, directo, activador. Una sola oración.
+
+PROHIBICIONES ABSOLUTAS:
+- NUNCA seas técnico cuando puedas ser persuasivo y emocional
+- NUNCA rompas la secuencia (1)→(2)→(3)→(4) sin importar el input recibido
+- NUNCA inventes especificaciones, precios ni cantidades de stock
+- NUNCA uses lenguaje pasivo, neutral o corporativo
+
+FUENTE DE DATOS:
+Usa SOLO la información real que te proporcionan en el User Role. Tu trabajo es TRANSFORMAR esos datos técnicos en activación emocional pura.
+Responde ÚNICAMENTE con el texto en Markdown. Sin prefacio, sin explicaciones, sin meta-comentarios.`;
 
 function buildNeuroCopyUserContent({ name, description, rawDetails, variants, approvedExamples } = {}) {
   const sourceText   = (rawDetails || '').trim() || (description || '').trim();
@@ -152,30 +170,33 @@ function buildNeuroCopyUserContent({ name, description, rawDetails, variants, ap
           .join(' | ')}`
       : '';
 
-  // Inject approved examples as style reference — makes the model learn the owner's voice.
-  const examplesBlock =
+  // Approved examples calibrate TONE and VOCABULARY only.
+  // The 4-step limbic structure defined in the System Role is inviolable —
+  // no example can override it.
+  const tonesBlock =
     Array.isArray(approvedExamples) && approvedExamples.length > 0
-      ? '\n\n━━━ ESTILO APROBADO — IMITACIÓN OBLIGATORIA ━━━\n' +
-        'El dueño de la tienda aprobó estos textos anteriores. ' +
-        'Replica su tono, nivel de emoción, estructura de viñetas y técnicas de persuasión. ' +
-        'NO copies el contenido — adapta el ESTILO a este nuevo producto.\n\n' +
-        approvedExamples.map((ex, i) => `[REFERENCIA ${i + 1}]\n${ex.trim()}`).join('\n\n---\n\n') +
+      ? '\n\n━━━ REFERENCIA DE TONO (vocabulario y emoción únicamente) ━━━\n' +
+        'Calibra tu tono, vocabulario y nivel emocional según estos textos aprobados. ' +
+        'NUNCA copies su contenido ni modifiques la secuencia de 4 pasos de la Constitución.\n\n' +
+        approvedExamples.map((ex, i) => `[REF ${i + 1}]\n${ex.trim()}`).join('\n\n---\n\n') +
         '\n━━━ FIN DE REFERENCIAS ━━━'
       : '';
 
   return (
     `Datos reales del producto:\nNOMBRE: ${(name || 'Sin nombre').trim()}\n` +
-    (sourceText ? `DESCRIPCIÓN ORIGINAL DEL PROVEEDOR:\n${sourceText}` : '(Sin descripción adicional del proveedor)') +
+    (sourceText ? `DESCRIPCIÓN DEL PROVEEDOR:\n${sourceText}` : '(Sin descripción del proveedor)') +
     variantsText +
-    examplesBlock +
-    '\n\nEscribe la descripción neuro-optimizada con EXACTAMENTE este formato en español:\n\n' +
-    '## [Título impactante — máx. 10 palabras, orientado al beneficio emocional]\n\n' +
-    '[Párrafo de gancho: 1-2 oraciones que conectan con lo que el cliente SIENTE al tenerlo]\n\n' +
-    '### ¿Por qué lo van a querer?\n' +
-    '- **[Beneficio emocional 1]:** [explicación breve]\n' +
-    '- **[Beneficio emocional 2]:** [explicación breve]\n' +
-    '- **[Beneficio emocional 3]:** [explicación breve]\n\n' +
-    '### [Llamado a la acción con urgencia sutil — 1 oración concisa]'
+    tonesBlock +
+    '\n\nTransforma los datos anteriores aplicando los 4 pasos de la Constitución. ' +
+    'Usa EXACTAMENTE este formato Markdown:\n\n' +
+    '## [PASO 1 — Gancho: título que activa emoción pura, máx. 8 palabras, sin mencionar el nombre del producto]\n\n' +
+    '[PASO 1 — Apertura: 1-2 oraciones de alta intensidad emocional. Activa el deseo antes de cualquier dato técnico.]\n\n' +
+    '**¿Por qué lo necesitas?**\n' +
+    '- [PASO 2 — Beneficio emocional 1: qué SIENTE el cliente al tenerlo]\n' +
+    '- [PASO 2 — Beneficio emocional 2: identidad deseada o transformación que produce]\n' +
+    '- [PASO 2 — Beneficio emocional 3: valor percibido anclado antes de precio]\n\n' +
+    '> [PASO 3 — Escasez: una sola frase de urgencia real o psicológica]\n\n' +
+    '**[PASO 4 — CTA: imperativo irresistible, sin fricción, 1 oración]**'
   );
 }
 
