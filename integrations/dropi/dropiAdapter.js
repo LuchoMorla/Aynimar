@@ -83,7 +83,14 @@ function extractVariants(p) {
           const stock = typeof item === 'object' && item.stock != null
             ? parseInt(item.stock, 10)
             : null;
-          return { label, image, stock };
+          // Preserve the Dropi variant item ID — required for 1:1 dispatch via selectedDropiId.
+          // Dropi may use different keys; try all known candidates.
+          const dropiVariantId = typeof item === 'object'
+            ? (item.id ?? item.item_id ?? item.variant_id ?? item.product_id ?? null)
+            : null;
+          const entry = { label, image, stock };
+          if (dropiVariantId != null) entry.id = String(dropiVariantId);
+          return entry;
         })
         .filter((v) => v?.label);
 

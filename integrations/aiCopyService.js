@@ -56,7 +56,8 @@ async function generateProductCopy(name, rawDescription) {
         'Tu única fuente de verdad son los datos reales que te proporciona el proveedor Dropi.\n' +
         'REGLA ABSOLUTA: NO inventes especificaciones, dimensiones, materiales, garantías ni compatibilidades.\n' +
         'Tu trabajo es TRANSFORMAR esa data técnica usando las técnicas AIDA y PAS.\n' +
-        'Si un dato no está en la fuente, NO lo incluyas.',
+        'Si un dato no está en la fuente, NO lo incluyas.\n' +
+        'FORMATO OBLIGATORIO: usa Markdown — ## para encabezados, ** para negritas. El frontend renderiza Markdown directamente.',
     },
     {
       role: 'user',
@@ -101,7 +102,8 @@ async function optimizeProductCopy(rawText) {
       content:
         'Eres un Copywriter experto en Dropshipping y Ventas para e-commerce latinoamericano.\n' +
         'Transforma descripciones técnicas de proveedor en textos altamente persuasivos.\n' +
-        'REGLA: USA SOLO la información real del texto que te dan. NO inventes datos, dimensiones, garantías ni compatibilidades.',
+        'REGLA: USA SOLO la información real del texto que te dan. NO inventes datos, dimensiones, garantías ni compatibilidades.\n' +
+        'FORMATO OBLIGATORIO: usa Markdown — ## para encabezados, ** para negritas. El frontend renderiza Markdown directamente.',
     },
     {
       role: 'user',

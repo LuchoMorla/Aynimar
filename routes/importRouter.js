@@ -12,6 +12,7 @@ const { fetchProductsFromEffi } = require('../integrations/effi/effiAdapter');
 const { fetchDropiProductById }             = require('../integrations/dropi/dropiAdapter');
 const { searchByText, searchByAI, searchByImage } = require('../integrations/dropi/dropiSearchService');
 const { generateProductCopy }               = require('../integrations/aiCopyService');
+const { buildDropiItemsFromVariants }       = require('../utils/variantAdapter');
 const { models }           = require('../libs/sequelize');
 
 const router = express.Router();
@@ -390,7 +391,9 @@ router.post(
         const resolvedImages = req.body.imagesJson
           || (image ? JSON.stringify([image]) : null);
 
-        const defaultDropiItems = [{ id: String(externalId), qty: 1 }];
+        // Build per-variant dropiItems so each Dropi variant ID maps 1:1 to dispatch.
+        // Falls back to parent externalId for products without variant-level IDs.
+        const defaultDropiItems = buildDropiItemsFromVariants(req.body.variantsJson, externalId);
 
         const [product, created] = await models.Product.findOrCreate({
           where: { externalId, sourceProvider: 'dropi' },

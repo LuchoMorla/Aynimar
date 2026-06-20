@@ -101,7 +101,8 @@ function normalizeDropiVariants(rawInput) {
   if (typeof first.option !== 'undefined' && Array.isArray(first.values)) {
     return parsed.flatMap((group) =>
       group.values.map((v) => ({
-        id:    typeof v === 'string' ? v : v.label,
+        // Prefer explicit Dropi item ID over using the label as a fallback key.
+        id:    typeof v === 'string' ? v : (v.id != null ? String(v.id) : v.label),
         label: typeof v === 'string' ? v : v.label,
       }))
     );
@@ -110,4 +111,35 @@ function normalizeDropiVariants(rawInput) {
   return [];
 }
 
-module.exports = { parseVariantGroups, resolveVariantLabel, buildDispatchDescription, normalizeDropiVariants };
+/**
+ * Build the dropiItems JSONB payload for a product from its variants JSON.
+ * Each variant value that carries a Dropi item ID becomes one dispatch entry.
+ * Falls back to a single entry with the parent product externalId when no
+ * variant-level IDs are present (simple / bundle products).
+ *
+ * @param {string|null|undefined} variantsJson  Product.variants serialized TEXT
+ * @param {string|number}         parentExternalId  Dropi product externalId
+ * @returns {{ id: string, qty: number, value?: string, name?: string }[]}
+ */
+function buildDropiItemsFromVariants(variantsJson, parentExternalId) {
+  const groups = parseVariantGroups(variantsJson);
+  const items = groups.flatMap((g) =>
+    (g.values ?? [])
+      .filter((v) => v && v.id != null)
+      .map((v) => ({
+        id:    String(v.id),
+        qty:   1,
+        value: v.label || String(v.id),
+        name:  v.label || String(v.id),
+      }))
+  );
+  return items.length > 0 ? items : [{ id: String(parentExternalId), qty: 1 }];
+}
+
+module.exports = {
+  parseVariantGroups,
+  resolveVariantLabel,
+  buildDispatchDescription,
+  normalizeDropiVariants,
+  buildDropiItemsFromVariants,
+};
