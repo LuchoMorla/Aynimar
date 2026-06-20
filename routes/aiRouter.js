@@ -10,8 +10,6 @@ const {
   optimizeProductCopy,
   NEURO_SYSTEM_PROMPT,
   buildNeuroCopyUserContent,
-  OLLAMA_BASE_URL,
-  OLLAMA_MODEL,
 } = require('../integrations/aiCopyService');
 const { completeManual2FA }   = require('../integrations/dropi/dropiAuthService');
 const sequelize               = require('../libs/sequelize');
@@ -56,7 +54,7 @@ let detectedOwnerId = null;
 let ownerIdWarned   = false;
 
 function getGroqClient() {
-  const apiKey = process.env.GROQ_IA_KEY;
+  const apiKey = process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY;
   if (!apiKey) return null;
   return new OpenAI({ apiKey, baseURL: 'https://api.groq.com/openai/v1' });
 }
@@ -1200,75 +1198,50 @@ router.post(
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
+    const groq = getGroqClient();
+    if (!groq) {
+      return res.status(503).json({ message: 'GROQ_API_KEY no configurada — agrega la variable en Railway.' });
+    }
+
     const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
 
-    let ollamaStream;
+    const controller = new AbortController();
+    req.on('close', () => controller.abort());
+
     try {
-      const response = await axios.post(
-        `${OLLAMA_BASE_URL}/api/chat`,
+      const copyModel = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+      const stream = await groq.chat.completions.create(
         {
-          model:   OLLAMA_MODEL,
+          model:      copyModel,
           messages: [
             { role: 'system', content: NEURO_SYSTEM_PROMPT },
             { role: 'user',   content: buildNeuroCopyUserContent({ name: name.trim(), description, rawDetails, variants }) },
           ],
-          stream:  true,
-          options: { num_predict: 650 },
+          max_tokens: 650,
+          stream:     true,
         },
-        { responseType: 'stream', timeout: 60000 }
+        { signal: controller.signal }
       );
 
-      ollamaStream = response.data;
-      let buffer = '';
+      for await (const chunk of stream) {
+        if (res.writableEnded) break;
+        const text = chunk.choices[0]?.delta?.content ?? '';
+        if (text) send({ text });
+      }
 
-      ollamaStream.on('data', (chunk) => {
-        buffer += chunk.toString('utf8');
-        const lines = buffer.split('\n');
-        buffer = lines.pop(); // hold incomplete last line
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const evt = JSON.parse(line);
-            if (evt.message?.content) send({ text: evt.message.content });
-            if (evt.done) {
-              res.write('event: done\ndata: {}\n\n');
-              res.end();
-              console.log(`[NeuroAI] Stream completado para "${name.trim()}"`);
-            }
-          } catch (_) { /* skip malformed NDJSON line */ }
-        }
-      });
-
-      ollamaStream.on('end', () => {
-        if (!res.writableEnded) {
-          res.write('event: done\ndata: {}\n\n');
-          res.end();
-        }
-      });
-
-      ollamaStream.on('error', (err) => {
-        console.error('[NeuroAI] Ollama stream error:', err.message);
-        if (!res.writableEnded) {
-          send({ error: 'OLLAMA_SERVICE_UNREACHABLE — verifica que Ollama esté corriendo.' });
-          res.end();
-        }
-      });
-
+      if (!res.writableEnded) {
+        res.write('event: done\ndata: {}\n\n');
+        res.end();
+        console.log(`[NeuroAI] Stream completado para "${name.trim()}"`);
+      }
     } catch (err) {
-      const isConnectionError = err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND';
-      const msg = isConnectionError
-        ? 'OLLAMA_SERVICE_UNREACHABLE — el servidor de IA local no responde.'
-        : `Error al conectar con Ollama: ${err.message}`;
+      if (err.name === 'AbortError' || controller.signal.aborted) return;
       console.error('[NeuroAI] Error al iniciar stream:', err.message);
-      if (!res.writableEnded) { send({ error: msg }); res.end(); }
-      return;
+      if (!res.writableEnded) {
+        send({ error: `GROQ_SERVICE_ERROR — ${err.message}` });
+        res.end();
+      }
     }
-
-    // Abort Ollama stream if the client disconnects early
-    req.on('close', () => {
-      if (ollamaStream && !ollamaStream.destroyed) ollamaStream.destroy();
-    });
   },
 );
 

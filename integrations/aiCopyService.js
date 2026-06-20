@@ -1,23 +1,23 @@
 'use strict';
 
-const axios = require('axios');
+const OpenAI = require('openai');
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-const OLLAMA_MODEL    = process.env.OLLAMA_MODEL    || 'llama3';
+// GROQ_API_KEY is the dedicated key for copy/import endpoints.
+// Falls back to GROQ_IA_KEY so NutrIA and aiCopyService share one key if preferred.
+const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY;
+const GROQ_MODEL   = process.env.GROQ_MODEL   || 'llama-3.1-8b-instant';
 
-// ── Internal Ollama chat helper (non-streaming) ───────────────────────────────
-async function ollamaChat(messages, { max_tokens = 600, timeout = 30000 } = {}) {
-  const { data } = await axios.post(
-    `${OLLAMA_BASE_URL}/api/chat`,
-    {
-      model:   OLLAMA_MODEL,
-      messages,
-      stream:  false,
-      options: { num_predict: max_tokens },
-    },
-    { timeout }
-  );
-  return data?.message?.content ?? null;
+function getGroqClient() {
+  if (!GROQ_API_KEY) return null;
+  return new OpenAI({ apiKey: GROQ_API_KEY, baseURL: 'https://api.groq.com/openai/v1' });
+}
+
+// ── Internal Groq chat helper (non-streaming) ─────────────────────────────────
+async function groqChat(messages, { max_tokens = 600 } = {}) {
+  const groq = getGroqClient();
+  if (!groq) throw new Error('GROQ_API_KEY no configurada en Railway');
+  const completion = await groq.chat.completions.create({ model: GROQ_MODEL, messages, max_tokens });
+  return completion.choices[0]?.message?.content ?? null;
 }
 
 // ── generateProductCopy ───────────────────────────────────────────────────────
@@ -41,22 +41,22 @@ async function generateProductCopy(name, rawDescription) {
       content:
         `Datos reales del producto de Dropi:\nNOMBRE: ${name}\n` +
         (hasRealData ? `DESCRIPCIÓN ORIGINAL DEL PROVEEDOR:\n${rawDescription}` : '(Sin descripción adicional del proveedor)') +
-        `\n\nReescribe en Markdown con EXACTAMENTE estos 4 bloques, usando SOLO la información real:\n\n` +
-        `## [Título comercial persuasivo]\n\n` +
-        `[Párrafo corto de gancho basado en la utilidad real]\n\n` +
-        `### ✅ Beneficios Clave\n` +
-        `- **[Característica real 1]:** [Beneficio orientado al cliente]\n` +
-        `- **[Característica real 2]:** [Beneficio orientado al cliente]\n` +
-        `- **[Característica real 3]:** [Beneficio orientado al cliente]\n\n` +
-        `### ❓ Preguntas Frecuentes\n\n` +
-        `**¿[Pregunta lógica]?**\n[Respuesta con datos reales]\n\n` +
-        `**¿[Pregunta de uso]?**\n[Respuesta honesta]\n\n` +
-        `IMPORTANTE: omite bloques si no tienes datos suficientes. Responde SOLO con el Markdown.`,
+        '\n\nReescribe en Markdown con EXACTAMENTE estos 4 bloques, usando SOLO la información real:\n\n' +
+        '## [Título comercial persuasivo]\n\n' +
+        '[Párrafo corto de gancho basado en la utilidad real]\n\n' +
+        '### ✅ Beneficios Clave\n' +
+        '- **[Característica real 1]:** [Beneficio orientado al cliente]\n' +
+        '- **[Característica real 2]:** [Beneficio orientado al cliente]\n' +
+        '- **[Característica real 3]:** [Beneficio orientado al cliente]\n\n' +
+        '### ❓ Preguntas Frecuentes\n\n' +
+        '**¿[Pregunta lógica]?**\n[Respuesta con datos reales]\n\n' +
+        '**¿[Pregunta de uso]?**\n[Respuesta honesta]\n\n' +
+        'IMPORTANTE: omite bloques si no tienes datos suficientes. Responde SOLO con el Markdown.',
     },
   ];
 
   try {
-    const text = await ollamaChat(messages, { max_tokens: 600 });
+    const text = await groqChat(messages, { max_tokens: 600 });
     console.log(`[AI Copy] Generado para "${name}" (${text?.length ?? 0} chars)`);
     return text;
   } catch (err) {
@@ -80,21 +80,21 @@ async function optimizeProductCopy(rawText) {
       role: 'user',
       content:
         `Transforma esta descripción técnica en un texto comercial persuasivo en Markdown:\n\n${rawText}\n\n` +
-        `Estructura el resultado EXACTAMENTE así:\n` +
-        `## [Título comercial atractivo]\n\n` +
-        `[Párrafo corto de gancho — beneficio principal]\n\n` +
-        `### ✅ Beneficios Clave\n` +
-        `- **[Beneficio 1 basado en datos reales]**\n` +
-        `- **[Beneficio 2 basado en datos reales]**\n` +
-        `- **[Beneficio 3 basado en datos reales]**\n\n` +
-        `### 🎯 ¿Por qué elegirlo?\n` +
-        `[Una o dos oraciones con llamado a la acción]\n\n` +
-        `Responde SOLO con el Markdown, sin texto adicional.`,
+        'Estructura el resultado EXACTAMENTE así:\n' +
+        '## [Título comercial atractivo]\n\n' +
+        '[Párrafo corto de gancho — beneficio principal]\n\n' +
+        '### ✅ Beneficios Clave\n' +
+        '- **[Beneficio 1 basado en datos reales]**\n' +
+        '- **[Beneficio 2 basado en datos reales]**\n' +
+        '- **[Beneficio 3 basado en datos reales]**\n\n' +
+        '### 🎯 ¿Por qué elegirlo?\n' +
+        '[Una o dos oraciones con llamado a la acción]\n\n' +
+        'Responde SOLO con el Markdown, sin texto adicional.',
     },
   ];
 
   try {
-    return await ollamaChat(messages, { max_tokens: 500 });
+    return await groqChat(messages, { max_tokens: 500 });
   } catch (err) {
     console.warn(`[AI Copy] optimizeProductCopy falló: ${err.message}`);
     return null;
@@ -116,7 +116,7 @@ async function extractSearchKeywords(userIntent) {
   ];
 
   try {
-    const keywords = (await ollamaChat(messages, { max_tokens: 60, timeout: 10000 }))?.trim() ?? userIntent;
+    const keywords = (await groqChat(messages, { max_tokens: 60 }))?.trim() ?? userIntent;
     console.log(`[AI Keywords] "${userIntent}" → "${keywords}"`);
     return keywords;
   } catch (err) {
@@ -150,20 +150,20 @@ function buildNeuroCopyUserContent({ name, description, rawDetails, variants } =
     `Datos reales del producto:\nNOMBRE: ${(name || 'Sin nombre').trim()}\n` +
     (sourceText ? `DESCRIPCIÓN ORIGINAL DEL PROVEEDOR:\n${sourceText}` : '(Sin descripción adicional del proveedor)') +
     variantsText +
-    `\n\nEscribe la descripción neuro-optimizada con EXACTAMENTE este formato en español:\n\n` +
-    `## [Título impactante — máx. 10 palabras, orientado al beneficio emocional]\n\n` +
-    `[Párrafo de gancho: 1-2 oraciones que conectan con lo que el cliente SIENTE al tenerlo]\n\n` +
-    `### ¿Por qué lo van a querer?\n` +
-    `- **[Beneficio emocional 1]:** [explicación breve]\n` +
-    `- **[Beneficio emocional 2]:** [explicación breve]\n` +
-    `- **[Beneficio emocional 3]:** [explicación breve]\n\n` +
-    `### [Llamado a la acción con urgencia sutil — 1 oración concisa]`
+    '\n\nEscribe la descripción neuro-optimizada con EXACTAMENTE este formato en español:\n\n' +
+    '## [Título impactante — máx. 10 palabras, orientado al beneficio emocional]\n\n' +
+    '[Párrafo de gancho: 1-2 oraciones que conectan con lo que el cliente SIENTE al tenerlo]\n\n' +
+    '### ¿Por qué lo van a querer?\n' +
+    '- **[Beneficio emocional 1]:** [explicación breve]\n' +
+    '- **[Beneficio emocional 2]:** [explicación breve]\n' +
+    '- **[Beneficio emocional 3]:** [explicación breve]\n\n' +
+    '### [Llamado a la acción con urgencia sutil — 1 oración concisa]'
   );
 }
 
 // ── neuroCopyProduct ──────────────────────────────────────────────────────────
 // Non-streaming version used in background import flow.
-// The streaming version lives in aiRouter.js.
+// The streaming version lives in aiRouter.js (POST /api/v1/ai/neuro-copy).
 async function neuroCopyProduct(productData) {
   const messages = [
     { role: 'system', content: NEURO_SYSTEM_PROMPT },
@@ -171,7 +171,7 @@ async function neuroCopyProduct(productData) {
   ];
 
   try {
-    const text = await ollamaChat(messages, { max_tokens: 600 });
+    const text = await groqChat(messages, { max_tokens: 600 });
     console.log(`[NeuroAI] Copy para "${productData?.name}" (${text?.length ?? 0} chars)`);
     return text;
   } catch (err) {
@@ -187,6 +187,6 @@ module.exports = {
   extractSearchKeywords,
   NEURO_SYSTEM_PROMPT,
   buildNeuroCopyUserContent,
-  OLLAMA_BASE_URL,
-  OLLAMA_MODEL,
+  GROQ_MODEL,
+  getGroqClient,
 };
