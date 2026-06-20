@@ -143,7 +143,7 @@ const NEURO_SYSTEM_PROMPT =
   'REGLA ABSOLUTA: USA SOLO la información real que te proporcionan. NO inventes especificaciones ni precios.\n' +
   'Responde ÚNICAMENTE con el texto en Markdown, sin prefacio ni explicaciones adicionales.';
 
-function buildNeuroCopyUserContent({ name, description, rawDetails, variants } = {}) {
+function buildNeuroCopyUserContent({ name, description, rawDetails, variants, approvedExamples } = {}) {
   const sourceText   = (rawDetails || '').trim() || (description || '').trim();
   const variantsText =
     Array.isArray(variants) && variants.length > 0
@@ -152,10 +152,22 @@ function buildNeuroCopyUserContent({ name, description, rawDetails, variants } =
           .join(' | ')}`
       : '';
 
+  // Inject approved examples as style reference — makes the model learn the owner's voice.
+  const examplesBlock =
+    Array.isArray(approvedExamples) && approvedExamples.length > 0
+      ? '\n\n━━━ ESTILO APROBADO — IMITACIÓN OBLIGATORIA ━━━\n' +
+        'El dueño de la tienda aprobó estos textos anteriores. ' +
+        'Replica su tono, nivel de emoción, estructura de viñetas y técnicas de persuasión. ' +
+        'NO copies el contenido — adapta el ESTILO a este nuevo producto.\n\n' +
+        approvedExamples.map((ex, i) => `[REFERENCIA ${i + 1}]\n${ex.trim()}`).join('\n\n---\n\n') +
+        '\n━━━ FIN DE REFERENCIAS ━━━'
+      : '';
+
   return (
     `Datos reales del producto:\nNOMBRE: ${(name || 'Sin nombre').trim()}\n` +
     (sourceText ? `DESCRIPCIÓN ORIGINAL DEL PROVEEDOR:\n${sourceText}` : '(Sin descripción adicional del proveedor)') +
     variantsText +
+    examplesBlock +
     '\n\nEscribe la descripción neuro-optimizada con EXACTAMENTE este formato en español:\n\n' +
     '## [Título impactante — máx. 10 palabras, orientado al beneficio emocional]\n\n' +
     '[Párrafo de gancho: 1-2 oraciones que conectan con lo que el cliente SIENTE al tenerlo]\n\n' +

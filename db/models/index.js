@@ -19,6 +19,7 @@ const { AppSetting, AppSettingSchema } = require('./appSettingModel');
 const { Review, ReviewSchema } = require('./reviewModel');
 const { Coupon, CouponSchema } = require('./couponModel');
 const { SalesPerformance, SalesPerformanceSchema } = require('./salesPerformanceModel');
+const { AiCopyFeedback, AiCopyFeedbackSchema } = require('./aiCopyFeedbackModel');
 
 
 function setupModels(sequelize) {
@@ -42,6 +43,7 @@ function setupModels(sequelize) {
   Review.init(ReviewSchema, Review.config(sequelize));
   Coupon.init(CouponSchema, Coupon.config(sequelize));
   SalesPerformance.init(SalesPerformanceSchema, SalesPerformance.config(sequelize));
+  AiCopyFeedback.init(AiCopyFeedbackSchema, AiCopyFeedback.config(sequelize));
 
   User.associate(sequelize.models);
   Customer.associate(sequelize.models);

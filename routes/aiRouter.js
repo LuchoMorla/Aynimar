@@ -1175,20 +1175,96 @@ router.post('/nutria/session-close', async (req, res) => {
   }
 });
 
+// ── POST /api/v1/ai/save-feedback ────────────────────────────────────────────
+// Saves an approved/edited copy text as a style reference for future generations.
+// Called automatically after product creation if AI copy was used.
+// Body: { productId?, productName, categoryId?, approvedText }
+router.post(
+  '/save-feedback',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  async (req, res) => {
+    try {
+      const { productId, productName, categoryId, approvedText } = req.body ?? {};
+
+      if (!approvedText || typeof approvedText !== 'string' || approvedText.trim().length < 20) {
+        return res.status(400).json({ message: '"approvedText" debe tener al menos 20 caracteres.' });
+      }
+
+      const { models } = sequelize;
+
+      // If productId is given but productName wasn't passed, fetch it from the DB.
+      let resolvedName   = productName ?? null;
+      let resolvedCatId  = categoryId  != null ? parseInt(categoryId, 10)  : null;
+
+      if (productId && !resolvedName) {
+        const product = await models.Product.findByPk(parseInt(productId, 10), {
+          attributes: ['name', 'categoryId'],
+        }).catch(() => null);
+        if (product) {
+          resolvedName  = product.name;
+          resolvedCatId = resolvedCatId ?? product.categoryId ?? null;
+        }
+      }
+
+      const row = await models.AiCopyFeedback.create({
+        productId:    productId ? parseInt(productId, 10) : null,
+        productName:  resolvedName,
+        categoryId:   resolvedCatId,
+        approvedText: approvedText.trim(),
+      });
+
+      console.log(`[NeuroAI] Feedback guardado id=${row.id} producto="${resolvedName}" cat=${resolvedCatId}`);
+      return res.json({ ok: true, feedbackId: row.id });
+    } catch (err) {
+      console.error('[NeuroAI:save-feedback]', err.message);
+      return res.status(500).json({ message: 'Error al guardar el feedback.' });
+    }
+  }
+);
+
 // ── POST /api/v1/ai/neuro-copy ────────────────────────────────────────────────
 // SSE streaming endpoint — returns text/event-stream chunks so the dashboard
 // can render the description word-by-word as the model generates it.
-// Body: { name, description?, rawDetails?, variants? }
+// Body: { name, description?, rawDetails?, variants?, productId?, categoryId? }
 // Events: data: {"text":"chunk"}\n\n  →  event: done\ndata: {}\n\n
 router.post(
   '/neuro-copy',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'business_owner'),
   async (req, res) => {
-    const { name, description, rawDetails, variants } = req.body ?? {};
+    const { name, description, rawDetails, variants, productId, categoryId } = req.body ?? {};
 
     if (!name || typeof name !== 'string' || name.trim().length < 2) {
       return res.status(400).json({ message: 'Se requiere "name" con el nombre del producto.' });
+    }
+
+    // ── Fetch approved style examples from the feedback table ─────────────────
+    // Priority: exact productId match → productName iLike → categoryId fallback.
+    // Limit 2 examples to stay within prompt budget (~600 tokens for examples).
+    let approvedExamples = [];
+    try {
+      const { models } = sequelize;
+      const { Op: SeqOp } = require('sequelize');
+      const whereOr = [];
+      if (productId) whereOr.push({ productId: parseInt(productId, 10) });
+      if (name.trim()) whereOr.push({ productName: { [SeqOp.iLike]: `%${name.trim()}%` } });
+      if (categoryId) whereOr.push({ categoryId: parseInt(categoryId, 10) });
+
+      if (whereOr.length > 0) {
+        const rows = await models.AiCopyFeedback.findAll({
+          where: { [SeqOp.or]: whereOr },
+          order: [['createdAt', 'DESC']],
+          limit: 2,
+          attributes: ['approvedText'],
+        });
+        approvedExamples = rows.map((r) => r.approvedText);
+        if (approvedExamples.length > 0) {
+          console.log(`[NeuroAI] ${approvedExamples.length} ejemplo(s) aprobado(s) inyectado(s) al prompt`);
+        }
+      }
+    } catch (fbErr) {
+      console.warn('[NeuroAI] No se pudo consultar feedback:', fbErr.message);
     }
 
     // Check Groq client BEFORE flushing SSE headers — once 200 is committed we can't send HTTP errors.
@@ -1211,7 +1287,7 @@ router.post(
           model:      copyModel,
           messages: [
             { role: 'system', content: NEURO_SYSTEM_PROMPT },
-            { role: 'user',   content: buildNeuroCopyUserContent({ name: name.trim(), description, rawDetails, variants }) },
+            { role: 'user',   content: buildNeuroCopyUserContent({ name: name.trim(), description, rawDetails, variants, approvedExamples }) },
           ],
           max_tokens: 650,
         });
@@ -1256,7 +1332,7 @@ router.post(
           model:      copyModel,
           messages: [
             { role: 'system', content: NEURO_SYSTEM_PROMPT },
-            { role: 'user',   content: buildNeuroCopyUserContent({ name: name.trim(), description, rawDetails, variants }) },
+            { role: 'user',   content: buildNeuroCopyUserContent({ name: name.trim(), description, rawDetails, variants, approvedExamples }) },
           ],
           max_tokens: 650,
           stream:     true,
