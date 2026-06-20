@@ -1191,17 +1191,20 @@ router.post(
       return res.status(400).json({ message: 'Se requiere "name" con el nombre del producto.' });
     }
 
+    // Check Groq client BEFORE flushing SSE headers — once 200 is committed we can't send HTTP errors.
+    const groq = getGroqClient();
+    if (!groq) {
+      const keyState = process.env.GROQ_API_KEY ? 'GROQ_API_KEY presente' : (process.env.GROQ_IA_KEY ? 'GROQ_IA_KEY presente' : 'NINGUNA KEY');
+      console.error(`[NeuroAI] getGroqClient() retornó null — estado de keys: ${keyState}`);
+      return res.status(503).json({ message: 'GROQ_API_KEY no configurada — agrega la variable en Railway.' });
+    }
+
     // SSE headers — disable buffering at every proxy layer
     res.setHeader('Content-Type',      'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control',     'no-cache, no-transform');
     res.setHeader('Connection',        'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
-
-    const groq = getGroqClient();
-    if (!groq) {
-      return res.status(503).json({ message: 'GROQ_API_KEY no configurada — agrega la variable en Railway.' });
-    }
 
     const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
 
@@ -1210,6 +1213,8 @@ router.post(
 
     try {
       const copyModel = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+      const keySource = process.env.GROQ_API_KEY ? 'GROQ_API_KEY' : 'GROQ_IA_KEY(fallback)';
+      console.log(`[NeuroAI] Stream iniciado — producto: "${name.trim()}" | modelo: ${copyModel} | key: ${keySource}`);
       const stream = await groq.chat.completions.create(
         {
           model:      copyModel,

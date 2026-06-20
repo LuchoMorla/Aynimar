@@ -7,6 +7,12 @@ const OpenAI = require('openai');
 const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY;
 const GROQ_MODEL   = process.env.GROQ_MODEL   || 'llama-3.1-8b-instant';
 
+// Startup diagnostic — visible in Railway logs on every deploy/restart.
+const _keySource = process.env.GROQ_API_KEY
+  ? 'GROQ_API_KEY ✓'
+  : (process.env.GROQ_IA_KEY ? 'GROQ_IA_KEY (fallback) ✓' : 'NO CONFIGURADA ✗');
+console.log(`[aiCopyService] Groq key: ${_keySource} | model: ${GROQ_MODEL}`);
+
 function getGroqClient() {
   if (!GROQ_API_KEY) return null;
   return new OpenAI({ apiKey: GROQ_API_KEY, baseURL: 'https://api.groq.com/openai/v1' });
