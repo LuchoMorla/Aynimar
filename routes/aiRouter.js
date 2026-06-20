@@ -1199,21 +1199,56 @@ router.post(
       return res.status(503).json({ message: 'GROQ_API_KEY no configurada — agrega la variable en Railway.' });
     }
 
-    // SSE headers — disable buffering at every proxy layer
+    const copyModel = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+    const keySource = process.env.GROQ_API_KEY ? 'GROQ_API_KEY' : 'GROQ_IA_KEY(fallback)';
+
+    // ── ?stream=0 — non-streaming fallback (prueba de fuego) ─────────────────
+    // If text appears in the JSON response, the backend works and the problem is buffering.
+    if (req.query.stream === '0') {
+      try {
+        console.log(`[NeuroAI] NON-STREAM mode — producto: "${name.trim()}" | modelo: ${copyModel} | key: ${keySource}`);
+        const completion = await groq.chat.completions.create({
+          model:      copyModel,
+          messages: [
+            { role: 'system', content: NEURO_SYSTEM_PROMPT },
+            { role: 'user',   content: buildNeuroCopyUserContent({ name: name.trim(), description, rawDetails, variants }) },
+          ],
+          max_tokens: 650,
+        });
+        const text = completion.choices[0]?.message?.content ?? null;
+        console.log(`[NeuroAI] NON-STREAM completado — ${text?.length ?? 0} chars`);
+        if (!text) return res.status(502).json({ message: 'Groq no devolvió contenido.' });
+        return res.json({ text });
+      } catch (err) {
+        console.error('[NeuroAI] NON-STREAM error:', err.message);
+        return res.status(502).json({ message: `Error Groq: ${err.message}` });
+      }
+    }
+
+    // ── SSE streaming path ────────────────────────────────────────────────────
     res.setHeader('Content-Type',      'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control',     'no-cache, no-transform');
     res.setHeader('Connection',        'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
-    const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    // res.flush() forces Node to push buffered data through Railway's proxy immediately.
+    // Without this, chunks accumulate in the write buffer and arrive all at once on stream end.
+    const flush = () => { if (typeof res.flush === 'function') res.flush(); };
+
+    // SSE comment ping — breaks Railway's proxy buffer before any real data arrives.
+    res.write(': connected\n\n');
+    flush();
+
+    const send = (payload) => {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      flush();
+    };
 
     const controller = new AbortController();
     req.on('close', () => controller.abort());
 
     try {
-      const copyModel = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
-      const keySource = process.env.GROQ_API_KEY ? 'GROQ_API_KEY' : 'GROQ_IA_KEY(fallback)';
       console.log(`[NeuroAI] Stream iniciado — producto: "${name.trim()}" | modelo: ${copyModel} | key: ${keySource}`);
       const stream = await groq.chat.completions.create(
         {
@@ -1236,6 +1271,7 @@ router.post(
 
       if (!res.writableEnded) {
         res.write('event: done\ndata: {}\n\n');
+        flush();
         res.end();
         console.log(`[NeuroAI] Stream completado para "${name.trim()}"`);
       }
