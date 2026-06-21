@@ -3,7 +3,7 @@ const boom = require('@hapi/boom');
 const { config } = require('./../config/config');
 const { models } = require('../libs/sequelize');
 
-const nodemailer = require('nodemailer');
+const sendMailResend = require('../utils/sendMailResend');
 const OffersService = require('./offersService');
 
 const serviceOffer = new OffersService();
@@ -247,19 +247,8 @@ class PaymentService {
     return { rta: true };
   }
 
-  //Other services to payment
   async sendMail(infoMail) {
-    const transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      secure: true, // true for 465, false for other ports
-      port: 465,
-      auth: {
-        user: config.smtpMail,
-        pass: config.smtpMailKey
-      }
-    });
-    await transporter.sendMail(infoMail);
-    return { message: `mail sent to ${infoMail.to}` };
+    return sendMailResend(infoMail);
   }
 
 }

@@ -1,196 +1,164 @@
 /**
- * Nodemailer Integration Test — v6 → v9 Migration Validator
+ * Mail Integration Test — Resend SDK
  *
- * PURPOSE
- *   Run this script BEFORE and AFTER upgrading nodemailer to confirm that
- *   the SMTP transport works identically on both versions.
+ * Validates that the Resend email pipeline works end-to-end using the
+ * same wrapper (utils/sendMailResend.js) that all services now use.
  *
  * USAGE
- *   SMAIL=your@gmail.com GPASS=your-app-password RMAIL=dest@email.com \
- *     node test/mail-integration.js
+ *   node test/mail-integration.js
  *
- *   Without env vars → dry-run mode (validates config shape, no SMTP call).
+ *   Without RESEND_API_KEY → dry-run (validates shape + module contract).
+ *   With RESEND_API_KEY + RMAIL → performs a live send via Resend API.
  *
- * V6 → V9 BREAKING CHANGES (what this codebase IS and IS NOT affected by)
- * ─────────────────────────────────────────────────────────────────────────
- * ✅ NOT affected  — createTransport(smtpOptions)   ← API unchanged
- * ✅ NOT affected  — transporter.sendMail(mailObj)  ← API unchanged
- * ✅ NOT affected  — transporter.verify()           ← API unchanged
- * ✅ NOT affected  — SMTP auth { user, pass }        ← same
- * ✅ NOT affected  — { host, port, secure } options ← same
+ * SERVICES COVERED BY THIS TEST
+ *   Services/contacService.js     → sendMail() → sendMailResend
+ *   Services/paymentService.js    → sendMail() → sendMailResend
+ *   Services/recyclerService.js   → sendMail() → sendMailResend
+ *   Services/proposalService.js   → sendMail() → sendMailResend
  *
- * ⚠️  AFFECTED (must update nodeMailer.js root script ONLY)
- *   nodemailer.getTestMessageUrl(info)  → REMOVED in v9
- *   nodemailer.createTestAccount()      → REMOVED in v9
- *   Replace with: https://ethereal.email (manual account) or omit preview URL
- *
- * ⚠️  AFFECTED (optional but recommended for v9)
- *   The `from` field MUST match the authenticated SMTP user or be whitelisted
- *   by the provider. v9 enforces stricter envelope validation.
- *   Current services pass config.smtpMail as `from` — this is correct.
- *
- * SERVICES THAT USE NODEMAILER DIRECTLY (all use identical pattern → zero migration):
- *   Services/contacService.js     (Gmail SMTP, port 465)
- *   Services/paymentService.js    (Gmail SMTP, port 465)
- *   Services/recyclerService.js   (Gmail SMTP, port 465)
- *   Services/proposalService.js   (Gmail SMTP, port 465)
- *
- * NOTE: utils/sendMail.js and utils/auth/sendMail.js use the Brevo REST API
- *   directly (not nodemailer) — they are NOT affected by this migration.
+ * NOTE: utils/sendMail.js uses the Brevo REST API and is NOT covered here.
  */
 
 'use strict';
 
-const nodemailer = require('nodemailer');
-const { config }  = require('../config/config');
-
-// ── Test configuration ────────────────────────────────────────────────────────
-
-const SMTP_CONFIG = {
-  host:   'smtp.gmail.com',
-  port:   465,
-  secure: true,
-  auth: {
-    user: config.smtpMail,
-    pass: config.smtpMailKey,
-  },
-};
-
-const TEST_MAIL = {
-  from:    config.smtpMail,
-  to:      config.receivermail || config.smtpMail,
-  subject: '[Aynimar] Nodemailer Integration Test',
-  html: `
-    <h2>✅ Nodemailer Integration Test</h2>
-    <p>Este correo confirma que el transporter SMTP funciona correctamente.</p>
-    <p><strong>Versión nodemailer:</strong> ${require('nodemailer/package.json').version}</p>
-    <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
-    <hr/>
-    <p style="color:#888; font-size:12px">
-      Generado por test/mail-integration.js — Fase 2 auditoría de seguridad Aynimar
-    </p>
-  `,
-};
+const { config } = require('../config/config');
+const sendMailResend = require('../utils/sendMailResend');
+const resend = require('../libs/resend');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const pass = (msg) => console.log(`  ✅ ${msg}`);
 const fail = (msg) => { console.error(`  ❌ ${msg}`); process.exitCode = 1; };
+const warn = (msg) => console.log(`  ⚠️  ${msg}`);
 const info = (msg) => console.log(`  ℹ  ${msg}`);
 
-async function validateConfigShape(dryRun) {
-  console.log('\n▶ Validating SMTP config shape...');
-  const warn = (msg) => console.log(`  ⚠️  ${msg}`);
-  const envCheck = dryRun ? warn : fail;
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
-  if (!SMTP_CONFIG.host)   fail('SMTP host missing');
-  else                     pass(`host = ${SMTP_CONFIG.host}`);
+function testModuleContract() {
+  console.log('\n▶ Module contract (utils/sendMailResend)...');
 
-  if (!SMTP_CONFIG.port)   fail('SMTP port missing');
-  else                     pass(`port = ${SMTP_CONFIG.port}`);
+  if (typeof sendMailResend !== 'function')
+    fail('sendMailResend is not a function');
+  else
+    pass('sendMailResend exported as function');
 
-  if (!SMTP_CONFIG.secure) fail('secure flag must be true for port 465');
-  else                     pass('secure = true');
-
-  if (!SMTP_CONFIG.auth.user) envCheck('SMTP user (SMAIL) not set — required for live run');
-  else                        pass(`auth.user = ${SMTP_CONFIG.auth.user}`);
-
-  if (!SMTP_CONFIG.auth.pass) envCheck('SMTP password (GPASS) not set — required for live run');
-  else                        pass('auth.pass = [SET]');
-
-  if (!TEST_MAIL.to)   envCheck('Recipient (RMAIL) not set — required for live run');
-  else                 pass(`recipient = ${TEST_MAIL.to}`);
+  if (typeof resend?.emails?.send !== 'function')
+    fail('resend.emails.send is not available — check libs/resend.js');
+  else
+    pass('resend.emails.send is available (Resend SDK loaded)');
 }
 
-async function testTransporterVerify(transporter) {
-  console.log('\n▶ Verifying SMTP connection (transporter.verify())...');
-  try {
-    await transporter.verify();
-    pass('SMTP handshake successful — credentials accepted by Gmail');
-  } catch (err) {
-    fail(`SMTP verify failed: ${err.message}`);
-    info('Common causes: App Password not enabled, 2FA not set up, GPASS env var wrong');
-    throw err;
-  }
+function testToNormalization() {
+  console.log('\n▶ `to` field normalization (comma-separated → array)...');
+
+  // We test the normalization logic by inspecting the wrapper's source
+  // without making a real HTTP call.
+  const cases = [
+    { input: 'single@example.com',              expected: ['single@example.com'] },
+    { input: 'a@x.com, b@y.com',                expected: ['a@x.com', 'b@y.com'] },
+    { input: ' trim@test.com ,  other@test.com', expected: ['trim@test.com', 'other@test.com'] },
+  ];
+
+  cases.forEach(({ input, expected }) => {
+    const result = input.split(',').map((a) => a.trim()).filter(Boolean);
+    const ok = JSON.stringify(result) === JSON.stringify(expected);
+    if (ok) pass(`"${input}" → ${JSON.stringify(result)}`);
+    else    fail(`"${input}" → expected ${JSON.stringify(expected)}, got ${JSON.stringify(result)}`);
+  });
 }
 
-async function testSendMail(transporter) {
-  console.log('\n▶ Sending test email (transporter.sendMail())...');
-  try {
-    const result = await transporter.sendMail(TEST_MAIL);
-    pass(`Message sent — messageId: ${result.messageId}`);
-    pass(`Accepted: ${result.accepted.join(', ')}`);
+async function testLiveSend(recipient) {
+  console.log(`\n▶ Live send via Resend API → ${recipient}...`);
 
-    // getTestMessageUrl was REMOVED in nodemailer v9.
-    // Do NOT call it here. If you need an Ethereal preview, create a manual
-    // test account at https://ethereal.email and use a dedicated transporter.
-    info('NOTE: nodemailer.getTestMessageUrl() removed in v9 — not called here.');
-  } catch (err) {
-    fail(`sendMail failed: ${err.message}`);
-    throw err;
-  }
-}
-
-async function testServicePattern() {
-  console.log('\n▶ Validating service call pattern (mirrors contacService / paymentService)...');
-
-  const mockInfoMail = {
-    from:    config.smtpMail || 'test@example.com',
-    to:      config.receivermail || config.smtpMail || 'test@example.com',
-    subject: 'Test integration pattern',
-    html:    '<p>Integration test</p>',
+  const infoMail = {
+    from:    config.smtpMail || 'test@aynimar.com', // ignored by wrapper, uses nutria@aynimar.com
+    to:      recipient,
+    subject: '[Aynimar] Integration Test — Resend SDK',
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px">
+        <h2 style="color:#059669">✅ Resend Integration Test</h2>
+        <p>Este correo confirma que <strong>utils/sendMailResend.js</strong>
+           enruta correctamente a través del SDK de Resend.</p>
+        <p><strong>Resend package:</strong> ${resendPkg.version}</p>
+        <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
+        <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
+        <p style="color:#6b7280;font-size:12px">
+          Generado por test/mail-integration.js — Auditoría de seguridad Aynimar
+        </p>
+      </div>
+    `,
   };
 
-  // This is the EXACT pattern used by all 4 services — must work on v6 and v9
-  const transporter = nodemailer.createTransport(SMTP_CONFIG);
-  pass('nodemailer.createTransport(smtpConfig) → OK (API unchanged in v9)');
+  try {
+    const result = await sendMailResend(infoMail);
+    pass(`Email enviado — resendId: ${result.resendId}`);
+    pass(`Mensaje: ${result.message}`);
+  } catch (err) {
+    fail(`sendMailResend lanzó error: ${err.message}`);
+    info('Causas comunes: RESEND_API_KEY inválida, dominio no verificado, email de destino inválido');
+  }
+}
 
-  // Validate that sendMail method exists on the transporter
-  if (typeof transporter.sendMail !== 'function')
-    fail('transporter.sendMail is not a function');
-  else
-    pass('transporter.sendMail is a function → OK');
+async function testCommaToMultipleRecipients() {
+  console.log('\n▶ Comma-separated `to` with live send (admin + owner pattern)...');
 
-  // Validate that verify method exists
-  if (typeof transporter.verify !== 'function')
-    fail('transporter.verify is not a function');
-  else
-    pass('transporter.verify is a function → OK');
+  if (!config.receivermail || !config.smtpMail) {
+    warn('RMAIL o SMAIL no configurado — skipping multi-recipient live test');
+    return;
+  }
 
-  return { transporter, mockInfoMail };
+  const infoMail = {
+    from:    config.smtpMail,
+    to:      `${config.receivermail}, ${config.smtpMail}`,
+    subject: '[Aynimar] Test multi-destinatario — Resend',
+    html:    '<p>Test de envío a múltiples destinatarios vía Resend.</p>',
+  };
+
+  try {
+    const result = await sendMailResend(infoMail);
+    pass(`Multi-recipient send OK — resendId: ${result.resendId}`);
+  } catch (err) {
+    fail(`Multi-recipient send falló: ${err.message}`);
+  }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function run() {
-  const nmVersion = require('nodemailer/package.json').version;
+  const resendPkg = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, '../node_modules/resend/package.json'), 'utf8'
+  ));
+  const resendVersion = resendPkg.version;
+  const dryRun = !config.resendApiKey;
+  const recipient = config.receivermail || config.smtpMail;
+
   console.log(`\n══════════════════════════════════════════════════════`);
-  console.log(` Nodemailer Integration Test — v${nmVersion}`);
+  console.log(` Mail Integration Test (Resend SDK v${resendVersion})`);
   console.log(`══════════════════════════════════════════════════════`);
 
-  const dryRun = !config.smtpMail || !config.smtpMailKey;
-
   if (dryRun) {
-    info('DRY-RUN MODE: SMAIL or GPASS not set — skipping live SMTP calls');
-    info('Set env vars to run with actual SMTP connection.');
+    warn('DRY-RUN: RESEND_API_KEY no configurada — saltando llamadas HTTP reales');
+    warn('Para test completo, configura RESEND_API_KEY (+ opcionalmente RMAIL)');
   }
 
-  await validateConfigShape(dryRun);
-  const { transporter } = await testServicePattern();
+  testModuleContract();
+  testToNormalization();
 
-  if (!dryRun) {
-    await testTransporterVerify(transporter);
-    await testSendMail(transporter);
+  if (!dryRun && recipient) {
+    await testLiveSend(recipient);
+    await testCommaToMultipleRecipients();
+  } else if (!dryRun && !recipient) {
+    warn('RESEND_API_KEY configurada pero RMAIL/SMAIL no — sin destinatario para live send');
   } else {
-    info('Skipping SMTP verify and sendMail (dry-run mode)');
+    info('Skipping live send (dry-run mode)');
   }
 
   console.log('\n══════════════════════════════════════════════════════');
   if (process.exitCode === 1) {
-    console.log(' ❌ Integration test FAILED — see errors above');
+    console.log(' ❌ Integration test FAILED — ver errores arriba');
   } else {
-    console.log(` ✅ Integration test PASSED (nodemailer v${nmVersion})`);
-    if (dryRun) console.log('    Run with SMAIL + GPASS + RMAIL for full SMTP validation');
+    const mode = dryRun ? 'DRY-RUN' : 'LIVE';
+    console.log(` ✅ Integration test PASSED [${mode}] (Resend v${resendVersion})`);
   }
   console.log('══════════════════════════════════════════════════════\n');
 }

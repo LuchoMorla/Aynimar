@@ -3,7 +3,7 @@ const bcrypt = require('bcrypt');
 const { models } = require('../libs/sequelize');
 const { config } = require('./../config/config');
 
-const nodemailer = require('nodemailer');
+const sendMailResend = require('../utils/sendMailResend');
 const jwt = require('jsonwebtoken');
 
 const AuthService = require('./authService');
@@ -118,19 +118,8 @@ class RecyclerService {
     return { rta: true };
   }
 
-  //Other services to costumers
   async sendMail(infoMail) {
-    const transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      secure: true, // true for 465, false for other ports
-      port: 465,
-      auth: {
-        user: config.smtpMail,
-        pass: config.smtpMailKey
-      }
-    });
-    await transporter.sendMail(infoMail);
-    return { message: `mail sent to ${infoMail.to}` };
+    return sendMailResend(infoMail);
   }
 
 }
