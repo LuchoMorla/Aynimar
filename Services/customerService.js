@@ -14,7 +14,6 @@ const authService = new AuthService();
 const userService = new UserService();
 
 
-// const nodemailer = require('nodemailer');
 
 class CustomerService {
 

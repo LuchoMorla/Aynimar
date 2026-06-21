@@ -2,7 +2,6 @@ const { models } = require('../libs/sequelize');
 const boom = require('@hapi/boom');
 const bcrypt = require('bcrypt');
 
-// const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 
 const sendMail = require('../utils/sendMail')

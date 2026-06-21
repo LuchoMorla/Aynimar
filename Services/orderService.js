@@ -10,7 +10,6 @@ const { sendTelegramNotification } = require('../utils/telegramNotify');
 const { buildDispatchDescription } = require('../utils/variantAdapter');
 
 const { config } = require('./../config/config');
-// const nodemailer = require('nodemailer');
 const sendMail = require('../utils/sendMail');
 const { cartRecoveryQueue } = require('../libs/cartRecoveryQueue');
 

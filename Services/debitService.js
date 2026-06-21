@@ -2,7 +2,6 @@ const boom = require('@hapi/boom');
 const { config } = require('./../config/config');
 const { models } = require('../libs/sequelize');
 
-// const nodemailer = require('nodemailer');
 const sendMail = require('../utils/sendMail')
 
 class DebitService {
