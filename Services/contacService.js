@@ -1,5 +1,5 @@
 const boom = require('@hapi/boom');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const { config } = require('./../config/config');
 const sendMailResend = require('../utils/sendMailResend');
 

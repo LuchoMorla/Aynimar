@@ -1,6 +1,6 @@
 const { models } = require('../libs/sequelize');
 const boom = require('@hapi/boom');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 
 const jwt = require('jsonwebtoken');
 
