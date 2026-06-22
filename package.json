@@ -23,24 +23,24 @@
   "author": "Luis Morla",
   "license": "CC-BY-4.0",
   "devDependencies": {
+    "@railway/cli": "^1.8.3",
     "eslint": "^8.0.0",
     "eslint-config-prettier": "^8.3.0",
     "eslint-plugin-prettier": "^4.0.0",
-    "nodemon": "^1.4.1",
+    "nodemon": "^3.1.14",
     "prettier": "^2.4.1"
   },
   "dependencies": {
     "@hapi/boom": "^9.1.4",
-    "@railway/cli": "^1.8.3",
     "axios": "^1.7.2",
     "bcrypt": "^5.0.1",
     "bullmq": "^5.78.1",
     "cors": "^2.8.5",
     "dotenv": "^16.0.1",
-    "express": "^4.17.1",
+    "express": "^4.22.2",
     "express-fileupload": "^1.5.0",
     "faker": "^5.5.3",
-    "form-data": "^4.0.0",
+    "form-data": "^4.0.1",
     "joi": "^17.4.2",
     "jsonwebtoken": "^9.0.0",
     "multer": "^1.4.5-lts.1",
@@ -53,7 +53,7 @@
     "pg-hstore": "^2.3.4",
     "resend": "^6.12.4",
     "semver": "^7.6.2",
-    "sequelize": "^6.21.2",
+    "sequelize": "^6.37.8",
     "sequelize-cli": "^6.4.1"
   },
   "engines": {
