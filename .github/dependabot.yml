@@ -1,0 +1,52 @@
+# Dependabot configuration for Aynimar (Express / Railway)
+#
+# npm audit currently reports 0 vulnerabilities on this repo.
+# The 50 alerts visible in GitHub's Security tab come from GitHub's Advisory Database,
+# which tracks transitive and indirect dependencies beyond npm audit's scope.
+#
+# To dismiss false positives in the Security tab:
+#   github.com/LuchoMorla/Aynimar → Security → Dependabot alerts
+#   → review each alert → Dismiss → "Not exploitable" or "Tolerable risk"
+#
+# This file enables weekly auto-update PRs which will naturally reduce the
+# alert count as transitive dependencies receive patches.
+
+version: 2
+
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Bogota"
+
+    groups:
+      all-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+      security-updates:
+        applies-to: security-updates
+        update-types:
+          - "minor"
+          - "patch"
+
+    open-pull-requests-limit: 5
+
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+
+    labels:
+      - "dependencies"
+
+  # Also track GitHub Actions versions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "chore(ci)"
