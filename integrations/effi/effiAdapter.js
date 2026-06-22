@@ -10,9 +10,24 @@
  * Toggle mock mode with EFFI_MOCK=true or by omitting EFFI_API_KEY.
  */
 
-const axios = require('axios');
-
 const EFFI_BASE_URL = process.env.EFFI_BASE_URL || 'https://api.effi.co/api/v1';
+
+async function fetchJson(url, { method = 'GET', headers = {}, body, timeout = 15000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const res = await fetch(url, { method, headers, body, signal: controller.signal });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => null);
+      const err = new Error(`HTTP ${res.status}`);
+      err.response = { status: res.status, data: errData };
+      throw err;
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
 const EFFI_API_KEY  = process.env.EFFI_API_KEY  || 'MOCK_KEY';
 const IS_MOCK       = !process.env.EFFI_API_KEY || process.env.EFFI_MOCK === 'true';
 
@@ -102,15 +117,19 @@ const MOCK_PRODUCTS = [
 // ── HTTP client factory ───────────────────────────────────────────────────────
 
 function createHttpClient() {
-  return axios.create({
-    baseURL: EFFI_BASE_URL,
-    timeout: 15000,
-    headers: {
-      'Authorization': `Bearer ${EFFI_API_KEY}`,
-      'Content-Type':  'application/json',
-      'Accept':        'application/json',
+  const headers = {
+    'Authorization': `Bearer ${EFFI_API_KEY}`,
+    'Content-Type':  'application/json',
+    'Accept':        'application/json',
+  };
+  return {
+    get: (path, { params } = {}) => {
+      const url = new URL(EFFI_BASE_URL + path);
+      if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, String(v)));
+      return fetchJson(url.toString(), { method: 'GET', headers, timeout: 15000 });
     },
-  });
+    post: (path, body) => fetchJson(EFFI_BASE_URL + path, { method: 'POST', headers, body: JSON.stringify(body), timeout: 15000 }),
+  };
 }
 
 // ── Public adapter functions ──────────────────────────────────────────────────
@@ -142,11 +161,11 @@ async function fetchProductsFromEffi({ page = 1, limit = 50, productType = null 
   if (productType) queryParams.product_type = productType;
 
   // Effi follows Shopify's REST pagination: /products.json?page=N&per_page=N
-  const response = await client.get('/products.json', { params: queryParams });
+  const data = await client.get('/products.json', { params: queryParams });
 
   return {
-    products: response.data.products ?? [],
-    total:    response.data.count ?? 0,
+    products: data.products ?? [],
+    total:    data.count ?? 0,
     page,
   };
 }
@@ -166,10 +185,10 @@ async function fetchStockFromEffi(externalId) {
   }
 
   const client = createHttpClient();
-  const response = await client.get(`/products/${externalId}/inventory.json`);
+  const data = await client.get(`/products/${externalId}/inventory.json`);
   return {
     externalId,
-    stock: response.data.inventory_quantity ?? 0,
+    stock: data.inventory_quantity ?? 0,
   };
 }
 
@@ -202,7 +221,7 @@ async function createOrderInEffi(payload) {
   const [firstName = '', ...rest] = (payload.shippingAddress.name ?? '').split(' ');
   const lastName = rest.join(' ');
 
-  const response = await client.post('/orders.json', {
+  const data = await client.post('/orders.json', {
     order: {
       line_items: payload.items.map((item) => ({
         sku:      item.externalId,
@@ -223,7 +242,7 @@ async function createOrderInEffi(payload) {
     },
   });
 
-  const externalOrderId = response.data?.order?.id ?? null;
+  const externalOrderId = data?.order?.id ?? null;
   return { externalOrderId };
 }
 
@@ -242,8 +261,8 @@ async function fetchProductByIdFromEffi(externalId) {
   }
 
   const client = createHttpClient();
-  const response = await client.get(`/products/${externalId}.json`);
-  return response.data.product;
+  const data = await client.get(`/products/${externalId}.json`);
+  return data.product;
 }
 
 module.exports = { fetchProductsFromEffi, fetchStockFromEffi, fetchProductByIdFromEffi, createOrderInEffi };

@@ -1,8 +1,23 @@
 'use strict';
 
-const axios    = require('axios');
-const FormData = require('form-data');
 const { getToken, invalidateToken, autoRefreshToken } = require('./dropiAuthService');
+
+async function fetchJson(url, { method = 'GET', headers = {}, body, timeout = 15000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const res = await fetch(url, { method, headers, body, signal: controller.signal });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => null);
+      const err = new Error(`HTTP ${res.status}`);
+      err.response = { status: res.status, data: errData };
+      throw err;
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // Bearer JWT for Dropi's order/fulfillment API (api.dropi.co).
 // Use DROPI_ORDER_TOKEN in Railway. WOO_CONSUMER_SECRET is kept as a
@@ -17,30 +32,30 @@ const IS_MOCK = process.env.DROPI_MOCK === 'true';
 
 async function makeCatalogClient() {
   const token = await getToken();
-  return axios.create({
-    baseURL: DROPI_API_BASE,
-    timeout: 20000,
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type':  'application/json',
-      'Accept':        'application/json',
-      'Origin':        'https://app.dropi.ec',
-      'Referer':       'https://app.dropi.ec/dashboard/products',
-      'User-Agent':    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    },
-  });
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type':  'application/json',
+    'Accept':        'application/json',
+    'Origin':        'https://app.dropi.ec',
+    'Referer':       'https://app.dropi.ec/dashboard/products',
+    'User-Agent':    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+  };
+  return {
+    post: (path, body) => fetchJson(`${DROPI_API_BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body), timeout: 20000 }),
+    get:  (path)       => fetchJson(`${DROPI_API_BASE}${path}`, { headers, timeout: 20000 }),
+  };
 }
 
 function createOrderClient() {
-  return axios.create({
-    baseURL: 'https://api.dropi.co/api/v1',
-    timeout: 15000,
-    headers: {
-      'Authorization': `Bearer ${DROPI_ORDER_TOKEN}`,
-      'Content-Type':  'application/json',
-      'Accept':        'application/json',
-    },
-  });
+  const headers = {
+    'Authorization': `Bearer ${DROPI_ORDER_TOKEN}`,
+    'Content-Type':  'application/json',
+    'Accept':        'application/json',
+  };
+  return {
+    post: (path, body) => fetchJson(`https://api.dropi.co/api/v1${path}`, { method: 'POST', headers, body: JSON.stringify(body), timeout: 15000 }),
+    get:  (path)       => fetchJson(`https://api.dropi.co/api/v1${path}`, { headers, timeout: 15000 }),
+  };
 }
 
 const DROPI_CDN = 'https://d39ru7awumhhs2.cloudfront.net';
@@ -234,7 +249,7 @@ async function doFetch(page, limit, keyword, categoryId, priceMin, priceMax, use
   const client = await makeCatalogClient();
   const body   = buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax, userVerified, userPremium);
 
-  const { data } = await client.post('/api/products/v4/index', body);
+  const data = await client.post('/api/products/v4/index', body);
 
   if (!data || typeof data !== 'object') {
     throw new Error('Dropi devolvió una respuesta inesperada (no JSON).');
@@ -257,19 +272,12 @@ async function doFetchViaWorker(page, limit, keyword, categoryId, priceMin, pric
   const token = rawToken.startsWith('Bearer ') ? rawToken.slice(7) : rawToken;
   const payload = buildCatalogPayload(page, limit, keyword, categoryId, priceMin, priceMax, userVerified, userPremium);
 
-  const { data } = await axios.post(
-    process.env.DROPI_WORKER_URL,
-    {
-      dropiToken: token,
-      path:       '/api/products/v4/index',
-      method:     'POST',
-      payload,
-    },
-    {
-      headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY },
-      timeout: 30000,
-    }
-  );
+  const data = await fetchJson(process.env.DROPI_WORKER_URL, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Worker-Key': process.env.DROPI_WORKER_KEY },
+    body:    JSON.stringify({ dropiToken: token, path: '/api/products/v4/index', method: 'POST', payload }),
+    timeout: 30000,
+  });
 
   if (!data || typeof data !== 'object') {
     throw new Error('Worker Dropi devolvió respuesta inesperada (no JSON).');
@@ -396,9 +404,9 @@ async function createOrderInDropi(payload) {
   if (payload.codAmount) body.valor_a_cobrar = payload.codAmount;
   if (payload.warehouse) body.bodega         = payload.warehouse;
 
-  const response = await client.post('/orders', body);
+  const data = await client.post('/orders', body);
 
-  const externalOrderId = response.data.id_orden ?? response.data.id ?? null;
+  const externalOrderId = data.id_orden ?? data.id ?? null;
   return { externalOrderId };
 }
 
@@ -412,7 +420,7 @@ async function fetchDropiOrderStatus(dropiOrderId) {
 
   try {
     const client = createOrderClient();
-    const { data } = await client.get(`/orders/${dropiOrderId}`);
+    const data = await client.get(`/orders/${dropiOrderId}`);
     return (
       data.estado        ??
       data.status        ??
@@ -437,7 +445,7 @@ async function _doFetchById(id) {
 
   // Strategy 1: direct endpoint
   try {
-    const { data } = await client.get(`/api/products/${id}`);
+    const data = await client.get(`/api/products/${id}`);
     const raw     = data?.objects ?? data;
     const product = Array.isArray(raw) ? raw[0] : raw;
     if (product && (product.id || product.name)) {
@@ -458,7 +466,7 @@ async function _doFetchById(id) {
 
   // Strategy 2: keyword search fallback
   const body = buildCatalogPayload(1, 10, id, null, null, null);
-  const { data } = await client.post('/api/products/v4/index', body); // throws on 401 — propagated
+  const data = await client.post('/api/products/v4/index', body); // throws on 401 — propagated
   const { list } = extractList(data);
   const match = list.find((p) => String(p.id) === id || String(p.sku) === id) ?? list[0];
   if (!match) throw new Error(`Producto ${id} no encontrado en Dropi.`);
@@ -561,11 +569,12 @@ async function _fetchByIdViaWorker(id) {
 
   // Try GET first via Worker
   try {
-    const { data } = await axios.post(
-      process.env.DROPI_WORKER_URL,
-      { dropiToken: token, path: `/api/products/${id}`, method: 'GET', payload: {} },
-      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 30000 },
-    );
+    const data = await fetchJson(process.env.DROPI_WORKER_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Worker-Key': process.env.DROPI_WORKER_KEY },
+      body:    JSON.stringify({ dropiToken: token, path: `/api/products/${id}`, method: 'GET', payload: {} }),
+      timeout: 30000,
+    });
     _assertWorkerAuthOk(data, `GET /api/products/${id}`);
     const raw = data?.objects ?? data;
     const product = Array.isArray(raw) ? raw[0] : raw;
@@ -589,12 +598,12 @@ async function _fetchByIdViaWorker(id) {
   const payload = buildCatalogPayload(1, 10, id, null, null, null);
   let searchData;
   try {
-    const { data: d } = await axios.post(
-      process.env.DROPI_WORKER_URL,
-      { dropiToken: token, path: '/api/products/v4/index', method: 'POST', payload },
-      { headers: { 'X-Worker-Key': process.env.DROPI_WORKER_KEY }, timeout: 30000 },
-    );
-    searchData = d;
+    searchData = await fetchJson(process.env.DROPI_WORKER_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Worker-Key': process.env.DROPI_WORKER_KEY },
+      body:    JSON.stringify({ dropiToken: token, path: '/api/products/v4/index', method: 'POST', payload }),
+      timeout: 30000,
+    });
   } catch (err) {
     if (err.response?.status === 401 || err.response?.status === 403) {
       const e = new Error('Token de Dropi expirado o inválido. Actualiza el token desde el Importador de Dropi.');
@@ -638,8 +647,9 @@ async function searchDropiByImage({ imageBase64, page = 1, limit = 20 }) {
   const filename  = isJpeg ? 'search.jpg'  : 'search.png';
 
   // Build multipart/form-data — mirrors the browser client exactly
+  // Native FormData (Node 20 global) — no npm package needed
   const form = new FormData();
-  form.append('image',            buffer, { filename, contentType: mediaType });
+  form.append('image',            new Blob([buffer], { type: mediaType }), filename);
   form.append('pageSize',         String(limit));
   form.append('startData',        String((page - 1) * limit));
   form.append('privated_product', 'false');
@@ -653,22 +663,32 @@ async function searchDropiByImage({ imageBase64, page = 1, limit = 20 }) {
   form.append('with_collection',  'true');
   if (whiteBrandId) form.append('white_brand_id', String(whiteBrandId));
 
+  const imgController = new AbortController();
+  const imgTimer = setTimeout(() => imgController.abort(), 35000);
   try {
-    const { data } = await axios.post(
-      `${DROPI_API_BASE}/api/products/v4/index`,
-      form,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Origin:        'https://app.dropi.ec',
-          Referer:       'https://app.dropi.ec/dashboard/products',
-          'User-Agent':  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          ...form.getHeaders(), // sets Content-Type: multipart/form-data; boundary=...
-        },
-        timeout:          35000,
-        maxContentLength: 20 * 1024 * 1024,
-      }
-    );
+    // Native fetch sets Content-Type: multipart/form-data; boundary=... automatically when body is FormData
+    const res = await fetch(`${DROPI_API_BASE}/api/products/v4/index`, {
+      method:  'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Origin:        'https://app.dropi.ec',
+        Referer:       'https://app.dropi.ec/dashboard/products',
+        'User-Agent':  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+      body:   form,
+      signal: imgController.signal,
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => null);
+      const err = new Error(errData?.message ?? errData?.error ?? `HTTP ${res.status}`);
+      err.dropiStatus = errData?.status ?? res.status;
+      err.response    = { status: res.status, data: errData };
+      console.error('[Dropi Image Search] Error HTTP:', err.dropiStatus, err.message);
+      throw err;
+    }
+
+    const data = await res.json();
 
     if (data?.isSuccess === false) {
       const err       = new Error(data.message ?? 'Dropi image-search falló (isSuccess=false)');
@@ -679,18 +699,11 @@ async function searchDropiByImage({ imageBase64, page = 1, limit = 20 }) {
     const { list, total } = extractList(data);
     console.log(`[Dropi Image Search] ${list.length}/${total} resultados para búsqueda visual.`);
     return { products: list.map(normalizeProduct).filter(Boolean), total, page };
-  } catch (axiosErr) {
-    // If the axios call failed with an HTTP response, enrich the error with Dropi's body.
-    if (axiosErr.response?.data && !axiosErr.dropiStatus) {
-      const dropiBody = axiosErr.response.data;
-      const enriched  = new Error(dropiBody.message ?? dropiBody.error ?? axiosErr.message);
-      enriched.dropiStatus = dropiBody.status ?? axiosErr.response.status;
-      enriched.response    = axiosErr.response;
-      console.error('[Dropi Image Search] Error HTTP:', enriched.dropiStatus, enriched.message);
-      throw enriched;
-    }
-    console.error('[Dropi Image Search] Error:', axiosErr.message);
-    throw axiosErr;
+  } catch (err) {
+    console.error('[Dropi Image Search] Error:', err.message);
+    throw err;
+  } finally {
+    clearTimeout(imgTimer);
   }
 }
 

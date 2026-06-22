@@ -1,8 +1,24 @@
 'use strict';
 
 const crypto = require('crypto');
-const axios  = require('axios');
 const { getTokenFromDB, saveTokenToDB, set2FAStatus } = require('./dropiTokenService');
+
+async function fetchJson(url, { method = 'POST', headers = {}, body, timeout = 15000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const res = await fetch(url, { method, headers, body, signal: controller.signal });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => null);
+      const err = new Error(errData?.message ?? `HTTP ${res.status}`);
+      err.response = { status: res.status, data: errData };
+      throw err;
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // ── In-memory token cache ─────────────────────────────────────────────────────
 
@@ -88,11 +104,11 @@ const _sendTelegram = async (text) => {
     return;
   }
   try {
-    await axios.post(
-      `https://api.telegram.org/bot${token}/sendMessage`,
-      { chat_id: chatId, text, parse_mode: 'HTML' },
-      { timeout: 10000 }
-    );
+    await fetchJson(`https://api.telegram.org/bot${token}/sendMessage`, {
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
+      timeout: 10000,
+    });
   } catch (err) {
     console.error('[Dropi Auth] Error enviando mensaje Telegram:', err.message);
   }
@@ -112,11 +128,11 @@ const _dropiLoginDirect = async (payload) => {
     // Primary path: route through Worker to bypass WAF (Dropi blocks Railway IPs).
     const placeholder = process.env.DROPI_SESSION_TOKEN || 'dropi-login-bypass';
     try {
-      const { data } = await axios.post(
-        WORKER_URL,
-        { dropiToken: placeholder, path: '/api/login', method: 'POST', payload },
-        { headers: { 'X-Worker-Key': WORKER_KEY }, timeout: 30000 }
-      );
+      const data = await fetchJson(WORKER_URL, {
+        headers: { 'Content-Type': 'application/json', 'X-Worker-Key': WORKER_KEY },
+        body:    JSON.stringify({ dropiToken: placeholder, path: '/api/login', method: 'POST', payload }),
+        timeout: 30000,
+      });
       // Pre-auth state: credentials OK but Dropi requires 2FA completion via a separate step.
       // This token is NOT valid for catalog/orders — throw so caller handles it explicitly.
       if (data.message === '2fa') {
@@ -141,7 +157,7 @@ const _dropiLoginDirect = async (payload) => {
 
   // Fallback: direct call (may be blocked by WAF on Railway).
   const dropiBase = process.env.DROPI_API_URL || 'https://api.dropi.ec';
-  const { data } = await axios.post(`${dropiBase}/api/login`, payload, {
+  const data = await fetchJson(`${dropiBase}/api/login`, {
     headers: {
       'Content-Type': 'application/json',
       'Accept':       'application/json',
@@ -149,6 +165,7 @@ const _dropiLoginDirect = async (payload) => {
       'Referer':      'https://app.dropi.ec/login',
       'User-Agent':   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     },
+    body:    JSON.stringify(payload),
     timeout: 30000,
   });
   console.log('[Dropi Auth] Login directo exitoso.');

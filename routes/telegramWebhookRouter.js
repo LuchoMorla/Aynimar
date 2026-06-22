@@ -23,7 +23,6 @@
  */
 
 const express = require('express');
-const axios   = require('axios');
 const { completeManual2FA }     = require('../integrations/dropi/dropiAuthService');
 const { set2FAStatus }          = require('../integrations/dropi/dropiTokenService');
 
@@ -32,14 +31,19 @@ const router = express.Router();
 const _reply = async (chatId, text) => {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
   try {
-    await axios.post(
-      `https://api.telegram.org/bot${token}/sendMessage`,
-      { chat_id: chatId, text, parse_mode: 'HTML' },
-      { timeout: 10000 }
-    );
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
+      signal:  controller.signal,
+    });
   } catch (err) {
     console.error('[Telegram Webhook] Error enviando respuesta:', err.message);
+  } finally {
+    clearTimeout(timer);
   }
 };
 

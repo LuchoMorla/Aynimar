@@ -28,7 +28,6 @@
  */
 
 const express = require('express');
-const axios   = require('axios');
 
 const router = express.Router();
 
@@ -97,17 +96,21 @@ router.get('/authorize', async (req, res) => {
   console.log(`[WC OAuth] POSTing credentials to Dropi: ${callback_url}`);
   console.log(`[WC OAuth] shop_id="${incomingShopId}" user_id="${user_id}" scope="${scope}"`);
 
+  const wcController = new AbortController();
+  const wcTimer = setTimeout(() => wcController.abort(), 15000);
   try {
-    const cbRes = await axios.post(callback_url, callbackPayload, {
+    const cbRes = await fetch(callback_url, {
+      method:  'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      timeout: 15000,
+      body:    JSON.stringify(callbackPayload),
+      signal:  wcController.signal,
     });
     console.log(`[WC OAuth] Dropi callback accepted — HTTP ${cbRes.status} ✓`);
   } catch (err) {
-    const status = err.response?.status ?? 'network error';
-    console.error(`[WC OAuth] Dropi callback failed — HTTP ${status}: ${err.message}`);
+    console.error(`[WC OAuth] Dropi callback failed — HTTP ${err.status ?? 'network error'}: ${err.message}`);
     // Do not block — redirect anyway so the admin is not left on a broken page.
-    // Dropi may have already persisted the credentials on their side.
+  } finally {
+    clearTimeout(wcTimer);
   }
 
   // ── 7. Redirect browser → Dropi success page ─────────────────────────────
