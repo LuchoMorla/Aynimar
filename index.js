@@ -1,14 +1,16 @@
 /* eslint-disable no-console */
-// Catch unhandled promise rejections before they crash the process in Node 15+
-// (Sequelize pool events, DB reconnects, and background tasks can emit these)
+// Sentry must be initialized before any other module so it can instrument them.
+const Sentry = require('./libs/sentry');
+const log = require('./libs/logger');
+
 process.on('unhandledRejection', (reason) => {
-  console.error('[unhandledRejection] NOT crashing:', reason?.message ?? reason);
+  Sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)));
+  log.error('unhandledRejection', { err_message: reason?.message ?? String(reason) });
 });
 
-// Catch synchronous throws + EventEmitter 'error' events not handled by listeners
-// (pg pool emits 'error' events that without this handler crash the process)
 process.on('uncaughtException', (err) => {
-  console.error('[uncaughtException] NOT crashing:', err?.message ?? err);
+  Sentry.captureException(err);
+  log.error('uncaughtException', { err_message: err?.message ?? String(err) });
 });
 
 const expressModule = require('express');
@@ -19,6 +21,7 @@ require('./workers/dropiRetryWorker');
 const routerApi = require('./routes');
 const cors = require('cors');
 const { checkApiKey } = require('./middlewares/authHandler');
+const { generalLimiter } = require('./middlewares/rateLimiter');
 
 //Los middlewares del tipo error se deben crear despues de establecer el routing de nuestra aplicacion
 const {
@@ -29,6 +32,9 @@ const {
 } = require('./middlewares/errorsHandler');
 
 const app = expressModule();
+
+// Railway sits behind a reverse proxy — trust first hop so req.ip resolves from X-Forwarded-For
+app.set('trust proxy', 1);
 
 const puerto = process.env.PORT || 8080;
 
@@ -105,6 +111,26 @@ app.get('/nueva-ruta', checkApiKey, (req, res) => {
   res.send('hola, soy tu nueva ruta');
 });
 
+// Global rate limit — 100 req/15 min per IP (health excluded)
+app.use(generalLimiter);
+
+// Structured HTTP access log — captured by Railway log aggregation
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const ms    = Date.now() - start;
+    const level = res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info';
+    log[level]('http', {
+      method: req.method,
+      path:   req.path,
+      status: res.statusCode,
+      ms,
+      ip: (req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket?.remoteAddress,
+    });
+  });
+  next();
+});
+
 routerApi(app);
 
 // Create app_settings table if it doesn't exist (safe — does not alter existing tables)
@@ -112,6 +138,12 @@ const { AppSetting } = require('./db/models/appSettingModel');
 AppSetting.sync({ force: false }).catch((err) =>
   console.error('[AppSetting] Error creando tabla app_settings:', err.message)
 );
+
+// Sentry error handler must come BEFORE our own error handlers but AFTER routes.
+// It captures 5xx errors and attaches request context to the Sentry event.
+if (process.env.SENTRY_DSN) {
+  Sentry.setupExpressErrorHandler(app);
+}
 
 //Vamos a adicionar los middlewares de correccion de errores, hay que tener mucha delicadeza con el orden de definicion de los errores, el momento en que se los ejecuta, como una cadena
 app.use(logErrors);

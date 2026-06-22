@@ -4,6 +4,7 @@ const express = require('express'),
   service = new AuthService(),
   router = express.Router(),
   { checkRoles } = require('../middlewares/authHandler'),
+  { authLimiter } = require('../middlewares/rateLimiter'),
   validatorHandler = require('../middlewares/validatorHandler'),
   {
     loginAuthSchema,
@@ -14,6 +15,7 @@ const express = require('express'),
 
 router.post(
   '/login',
+  authLimiter,
   passport.authenticate('local', { session: false }),
   checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(loginAuthSchema, 'body'),
@@ -44,6 +46,7 @@ router.get(
 
 router.post(
   '/recovery',
+  authLimiter,
   validatorHandler(recoveryAuthSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -58,6 +61,7 @@ router.post(
 
 router.post(
   '/change-password',
+  authLimiter,
   validatorHandler(changePasswordAuthSchema, 'body'),
   async (req, res, next) => {
     try {

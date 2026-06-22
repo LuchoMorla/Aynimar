@@ -1,0 +1,22 @@
+# railway.toml — Aynimar Backend (Express + BullMQ)
+# Deployment and process configuration for Railway.
+# Resource limits (memory/CPU) are set in Railway dashboard → Service → Settings.
+# This file controls build behavior, process restart policy, and health check.
+
+[build]
+builder = "nixpacks"
+# nixpacks.toml drives the build phases (setup + npm ci --omit=dev + npm start).
+# No override needed here — Railway reads nixpacks.toml automatically.
+
+[deploy]
+startCommand = "npm start"
+numReplicas = 1
+
+# Railway uses this endpoint to determine if the deployment is healthy before
+# routing traffic. The /health route returns 200 with a JSON status object.
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+
+# Restart on crash but not indefinitely — Railway will alert after 5 failures.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

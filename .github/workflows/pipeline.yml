@@ -1,0 +1,77 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Gate 1: Smoke Tests ───────────────────────────────────────────────────────
+  # Zero network calls. Validates critical business logic (dispatch, copy, variants).
+  # Failure here blocks both lint and deploy — nothing proceeds.
+  smoke-test:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --omit=dev
+
+      - name: Run smoke tests
+        run: node scripts/smoke-test.js
+
+  # ── Gate 2: ESLint ───────────────────────────────────────────────────────────
+  # Style and static-analysis gate. Runs in parallel with smoke tests.
+  # Failure here blocks deploy even if smoke tests pass.
+  lint:
+    name: ESLint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --omit=dev
+
+      - name: Run ESLint
+        run: npm run lint -- --max-warnings=0
+
+  # ── Gate 3: Deploy to Railway ─────────────────────────────────────────────────
+  # Only runs on push to main (not on PRs) and only if BOTH gates above pass.
+  #
+  # PREREQUISITE — disable Railway auto-deploy from GitHub before enabling this:
+  #   Railway dashboard → Service → Settings → Source → uncheck "Auto Deploy"
+  # Then set these GitHub secrets (Settings → Secrets → Actions):
+  #   RAILWAY_TOKEN    → Railway dashboard → Account → Tokens → New Token
+  #   RAILWAY_SERVICE  → Railway dashboard → Service → Settings → Service ID
+  #
+  # How it works: `railway up --detach` pushes the current source to Railway and
+  # returns immediately. Railway then builds and deploys using nixpacks.toml +
+  # railway.toml. The actual deploy status is visible in the Railway dashboard.
+  deploy:
+    name: Deploy to Railway
+    needs: [smoke-test, lint]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy
+        run: railway up --service ${{ secrets.RAILWAY_SERVICE }} --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
