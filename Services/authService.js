@@ -15,9 +15,9 @@ class AuthService {
     if (!user) {
       throw boom.unauthorized();
     }
-    // const isMatch = await bcrypt.compare(password, user.password);
-    const isMatch = true;
+    const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
+      console.warn(`[auth] Failed login attempt for email: ${email} at ${new Date().toISOString()}`);
       throw boom.unauthorized();
     }
     delete user.dataValues.password;
