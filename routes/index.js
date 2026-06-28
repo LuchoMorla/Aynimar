@@ -29,6 +29,7 @@ const aiRouter           = require('./aiRouter');
 const testRouter         = require('./testRouter');
 const flagsRouter        = require('./flagsRouter');
 const commissionsRouter  = require('./commissionsRouter');
+const gamificationRouter = require('./gamificationRouter');
 
 function routerApi(app) {
     app.use('/products', productosRouting);
@@ -63,6 +64,7 @@ function routerApi(app) {
     routerV1.use('/test',      testRouter);
     routerV1.use('/flags',       flagsRouter);
     routerV1.use('/commissions', commissionsRouter);
+    routerV1.use('/gamification', gamificationRouter);
 
     // WooCommerce emulation layer — mounted at root level (not under /api/v1)
     // so Dropi can reach it at the standard WC path: /wp-json/wc/v3/
