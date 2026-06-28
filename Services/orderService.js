@@ -133,9 +133,11 @@ class OrderService {
       throw boom.notFound('Order not found');
     }
 
-    // Medida de seguridad: Si la orden ya tiene un cliente, no la devolvemos por esta vía.
+    // La orden ya fue asociada a un cliente — ya no es un carrito guest.
+    // Respondemos 404 (no 403) para que el frontend limpie el oi en localStorage
+    // y no reintente indefinidamente con un ID de orden ya vinculado.
     if (order.customerId) {
-      throw boom.forbidden('This is not a guest order.');
+      throw boom.notFound('Order not found');
     }
 
     return order;
