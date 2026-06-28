@@ -48,6 +48,8 @@ const PaymentWasteSchema = {
 class PaymentWaste extends Model {
 
   static associate(models) {
+    this.belongsTo(models.Payment, { as: 'payment', foreignKey: 'paymentId' });
+    this.belongsTo(models.Waste,   { as: 'waste',   foreignKey: 'wasteId'   });
   }
 
   static config(sequelize) {

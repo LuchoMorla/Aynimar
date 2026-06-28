@@ -74,7 +74,7 @@ router.post(
         const newRecycler = await recyclerService.createRecyclerByCustomer(
           findCostumer
         );
-        return newRecycler;
+        return res.status(201).json(newRecycler);
       }
       const newPayment = await service.create(body);
       res.status(201).json(newPayment);

@@ -58,6 +58,7 @@ class Wallet extends Model {
   static associate(models) {
     this.belongsTo(models.User,     { as: 'user',     foreignKey: 'userId' });
     this.belongsTo(models.Recycler, { as: 'recycler', foreignKey: 'recyclerId' });
+    this.hasMany(models.WalletTransaction, { as: 'transactions', foreignKey: 'walletId' });
   }
 
   static config(sequelize) {
