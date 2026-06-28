@@ -128,6 +128,12 @@ const ProductSchema = {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
   },
+  // Supplier/Dropi cost price — stored at import time to compute margin without re-fetching Dropi.
+  costPrice: {
+    field: 'cost_price',
+    allowNull: true,
+    type: DataTypes.FLOAT,
+  },
 };
 
 class Product extends Model {

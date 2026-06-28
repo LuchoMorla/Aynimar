@@ -404,6 +404,7 @@ router.post(
             images:         resolvedImages,
             variants:       req.body.variantsJson ?? null,
             price:          resolvedPrice,
+            costPrice:      price ?? null,
             stock:          stock   ?? null,
             categoryId:     catId,
             businessId:     businessId ?? null,
@@ -423,6 +424,7 @@ router.post(
             lastSyncAt: new Date(),
           };
           if (pvpOverride != null)   update.price = pvpOverride;
+          if (price != null && !product.costPrice) update.costPrice = price;
           if (image)                 update.image = image;
           if (resolvedImages)        update.images = resolvedImages;
           if (req.body.variantsJson) update.variants = req.body.variantsJson;
