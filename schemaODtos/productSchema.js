@@ -35,6 +35,7 @@ const dropiItems = Joi.array()
   }))
   .allow(null);
 const isBundle = Joi.boolean().allow(null);
+const costPrice = Joi.number().min(0).allow(null);
 
 //recibiremos un limit y un offset
 const limit = Joi.number().integer();
@@ -81,6 +82,7 @@ const updateProductSchema = Joi.object({
   attributes,
   dropiItems,
   isBundle,
+  costPrice,
 });
 
 const getProductSchema = Joi.object({
