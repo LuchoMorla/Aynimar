@@ -113,4 +113,25 @@ router.delete(
   }
 );
 
+// ponytail: gated by env var — no-op if GOOGLE_MERCHANT_ID not set
+router.post(
+  '/:id/sync-merchant',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  validatorHandler(getProductSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      if (!process.env.GOOGLE_MERCHANT_ID) {
+        return res.status(503).json({ message: 'Google Merchant integration not configured' });
+      }
+      const { syncProductToMerchant } = require('../libs/google-merchant');
+      const product = await service.findOne(req.params.id);
+      const result = await syncProductToMerchant(product);
+      res.json({ synced: true, merchantId: result.id });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 module.exports = router;
