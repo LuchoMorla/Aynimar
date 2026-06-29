@@ -133,6 +133,23 @@ router.delete(
   }
 );
 
+// ── POST /products/:id/validate-sync — full agent: validate + Telegram report ─
+router.post(
+  '/:id/validate-sync',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  validatorHandler(getProductSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      const { validateProductSync } = require('../Services/merchantSyncService');
+      const result = await validateProductSync(Number(req.params.id));
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 // ── GET /products/:id/merchant-preview — validate without sending ─────────────
 router.get(
   '/:id/merchant-preview',
