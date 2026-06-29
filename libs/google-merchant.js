@@ -132,4 +132,95 @@ async function syncProductToMerchant(product) {
   return body;
 }
 
-module.exports = { syncProductToMerchant };
+/**
+ * Lightweight auth check — fetches the merchant account metadata.
+ * No product data involved. Returns { merchantId, websiteUrl, name } on success.
+ */
+async function pingMerchant() {
+  const merchantId = process.env.GOOGLE_MERCHANT_ID;
+  if (!merchantId) throw new Error('[GoogleMerchant] GOOGLE_MERCHANT_ID not configured');
+
+  const token = await getAccessToken();
+  const res = await fetch(`${CONTENT_API}/${merchantId}/accounts/${merchantId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  const body = await res.json();
+  if (!res.ok) {
+    throw new Error(`[GoogleMerchant] ping failed ${res.status}: ${body?.error?.message}`);
+  }
+
+  return {
+    merchantId:  body.id,
+    name:        body.name,
+    websiteUrl:  body.websiteUrl,
+    adultContent: body.adultContent,
+  };
+}
+
+/**
+ * Validates one product against Google Merchant Center requirements
+ * WITHOUT sending it. Returns a detailed pre-flight report.
+ *
+ * Google Content API v2.1 required fields reference:
+ * https://support.google.com/merchants/answer/7052112
+ */
+function validateProductForMerchant(product) {
+  const payload = mapProductToMerchant(product);
+  const issues   = [];
+  const warnings = [];
+
+  // ── Required fields ────────────────────────────────────────────────────────
+  if (!payload.offerId)
+    issues.push({ field: 'offerId', reason: 'Missing product ID' });
+
+  if (!payload.title || payload.title.length < 1)
+    issues.push({ field: 'title', reason: 'Title is required' });
+  else if (payload.title.length > 150)
+    issues.push({ field: 'title', reason: `Title too long (${payload.title.length}/150 chars)` });
+  else if (payload.title.length < 10)
+    warnings.push({ field: 'title', reason: 'Title under 10 chars — low relevance in Shopping' });
+
+  if (!payload.description || payload.description.length < 1)
+    issues.push({ field: 'description', reason: 'Description is required' });
+  else if (payload.description.length > 5000)
+    issues.push({ field: 'description', reason: 'Description exceeds 5000 chars' });
+  else if (payload.description.length < 20)
+    warnings.push({ field: 'description', reason: 'Description very short — add product details' });
+
+  if (!payload.link || !payload.link.startsWith('http'))
+    issues.push({ field: 'link', reason: 'Product URL must start with http/https' });
+
+  if (!payload.imageLink)
+    issues.push({ field: 'imageLink', reason: 'At least one image is required' });
+  else if (!payload.imageLink.startsWith('https'))
+    issues.push({ field: 'imageLink', reason: 'Image URL must use HTTPS (Google requirement)' });
+
+  const priceNum = parseFloat(payload.price?.value);
+  if (!priceNum || priceNum <= 0)
+    issues.push({ field: 'price', reason: 'Price must be > 0' });
+  else if (priceNum < 1000)
+    warnings.push({ field: 'price', reason: `Price ${payload.price.currency} ${payload.price.value} — confirm currency is correct (expected COP)` });
+
+  if (!['in stock', 'out of stock', 'preorder', 'backorder'].includes(payload.availability))
+    issues.push({ field: 'availability', reason: `Invalid availability value: "${payload.availability}"` });
+
+  // ── Recommended fields ─────────────────────────────────────────────────────
+  if (!payload.brand)
+    warnings.push({ field: 'brand', reason: 'brand not set — required for most categories in Google Shopping' });
+
+  if (!payload.condition)
+    warnings.push({ field: 'condition', reason: 'condition not set — Google defaults to "new"; add if refurbished' });
+
+  return {
+    valid:    issues.length === 0,
+    issues,
+    warnings,
+    payload,
+    summary: issues.length === 0
+      ? `✅ Product #${product.id} passes all required validations${warnings.length ? ` (${warnings.length} warning${warnings.length > 1 ? 's' : ''})` : ''}`
+      : `❌ Product #${product.id} has ${issues.length} blocking issue${issues.length > 1 ? 's' : ''} — fix before syncing`,
+  };
+}
+
+module.exports = { syncProductToMerchant, pingMerchant, validateProductForMerchant };

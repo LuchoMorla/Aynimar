@@ -29,6 +29,26 @@ router.get(
   }
 );
 
+// ── GET /products/merchant-status — ping Google auth, no product needed ──────
+// Must be registered BEFORE /:id to avoid the wildcard swallowing 'merchant-status'.
+router.get(
+  '/merchant-status',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  async (req, res, next) => {
+    try {
+      if (!process.env.GOOGLE_MERCHANT_ID) {
+        return res.status(503).json({ status: 'not_configured', message: 'GOOGLE_MERCHANT_ID not set' });
+      }
+      const { pingMerchant } = require('../libs/google-merchant');
+      const account = await pingMerchant();
+      res.json({ status: 'live', account });
+    } catch (error) {
+      res.status(502).json({ status: 'error', message: error.message });
+    }
+  }
+);
+
 router.get(
   '/:id',
   validatorHandler(getProductSchema, 'params'),
@@ -113,7 +133,25 @@ router.delete(
   }
 );
 
-// ponytail: gated by env var — no-op if GOOGLE_MERCHANT_ID not set
+// ── GET /products/:id/merchant-preview — validate without sending ─────────────
+router.get(
+  '/:id/merchant-preview',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  validatorHandler(getProductSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      const { validateProductForMerchant } = require('../libs/google-merchant');
+      const product = await service.findOne(req.params.id);
+      const report  = validateProductForMerchant(product);
+      res.json(report);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ── POST /products/:id/sync-merchant — send to Google (gated by env var) ─────
 router.post(
   '/:id/sync-merchant',
   passport.authenticate('jwt', { session: false }),
@@ -126,7 +164,7 @@ router.post(
       }
       const { syncProductToMerchant } = require('../libs/google-merchant');
       const product = await service.findOne(req.params.id);
-      const result = await syncProductToMerchant(product);
+      const result  = await syncProductToMerchant(product);
       res.json({ synced: true, merchantId: result.id });
     } catch (error) {
       next(error);
