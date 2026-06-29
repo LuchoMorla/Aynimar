@@ -62,8 +62,21 @@ const DROPI_CDN = 'https://d39ru7awumhhs2.cloudfront.net';
 
 function toFullImageUrl(raw) {
   if (!raw) return null;
-  if (raw.startsWith('http')) return raw;
-  return `${DROPI_CDN}/${raw.replace(/^\//, '')}`;
+  const url = raw.startsWith('http') ? raw : `${DROPI_CDN}/${raw.replace(/^\//, '')}`;
+  try {
+    new URL(url);
+    return url;
+  } catch {
+    try {
+      const encoded = encodeURI(url);
+      new URL(encoded);
+      console.log('[Dropi] encoded invalid URI:', url, '→', encoded);
+      return encoded;
+    } catch {
+      console.log('[Dropi] unparseable image URL, skipping:', url);
+      return null;
+    }
+  }
 }
 
 /**
