@@ -33,7 +33,7 @@
     "prettier": "^2.4.1"
   },
   "dependencies": {
-    "@hapi/boom": "^9.1.4",
+    "@hapi/boom": "^10.0.1",
     "@sentry/node": "^10.59.0",
     "bcryptjs": "^3.0.3",
     "bullmq": "^5.78.1",
