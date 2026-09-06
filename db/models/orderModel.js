@@ -122,19 +122,37 @@ const OrderSchema = {
     type:         DataTypes.INTEGER,
     defaultValue: 0,
   },
-  total: {
-    type: DataTypes.VIRTUAL,
+  // Fase A — A5: totales persistidos (antes `total` era un VIRTUAL frágil).
+  // Se escriben en checkout() y confirmCod(). Getter → number (Sequelize
+  // devuelve DECIMAL como string).
+  subtotal: {
+    field: 'subtotal',
+    allowNull: false,
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: 0,
     get() {
-      //Reviso si tenemos productos para que sea el default value
-      if (this.items) {
-        console.log('existen items en la orden');
-        if (this.items.length > 0) {
-          return this.items.reduce((total, item) => {
-            return total + item.price * item.OrderProduct.amount;
-          }, 0);
-        }
-        return 0;
-      }
+      const v = this.getDataValue('subtotal');
+      return v == null ? 0 : parseFloat(v);
+    },
+  },
+  tax: {
+    field: 'tax',
+    allowNull: false,
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: 0,
+    get() {
+      const v = this.getDataValue('tax');
+      return v == null ? 0 : parseFloat(v);
+    },
+  },
+  total: {
+    field: 'total',
+    allowNull: false,
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: 0,
+    get() {
+      const v = this.getDataValue('total');
+      return v == null ? 0 : parseFloat(v);
     },
   },
 };

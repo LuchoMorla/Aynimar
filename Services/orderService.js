@@ -940,8 +940,22 @@ class OrderService {
           ? 'credits_partial'
           : null;
 
+      // Estado de pago: cubierto 100% con créditos → 'paid'; si queda saldo
+      // externo por pagar, sigue 'pending'.
+      const paymentStatus = amountToPay === 0 ? 'paid' : 'pending';
+
+      // A5: totales persistidos. tax=0 por ahora (el backend no aplica IVA en
+      // el cobro con créditos). TODO Fase B: unificar IVA 15% front/back.
       await order.update(
-        { state: 'comprada', stateOrder: newStateOrder, paymentMethod },
+        {
+          state: 'comprada',
+          stateOrder: newStateOrder,
+          paymentMethod,
+          paymentStatus,
+          subtotal,
+          tax: 0,
+          total: subtotal,
+        },
         { transaction: t }
       );
 
@@ -952,6 +966,7 @@ class OrderService {
         creditsApplied: creditsUsed,
         amountToPay,
         stateOrder: newStateOrder,
+        paymentStatus,
         paymentMethod,
         itemCount: order.items.length,
       };
