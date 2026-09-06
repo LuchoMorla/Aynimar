@@ -551,18 +551,33 @@ class OrderService {
     return { rta: true };
   }
 
-  // ── Totales de la orden desde precios autoritativos ────────────────────────
-  // `order.items` (belongsToMany a través de OrderProduct) trae el precio ACTUAL
-  // del producto, no el cacheado en el carrito. tax=0 por ahora (ver A5 / TODO
-  // Fase B: unificar IVA 15%).
-  _computeOrderTotals(items) {
+  _round2(n) {
+    return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+  }
+
+  // ── ÚNICA fórmula de totales/IVA del sistema — Fase B (B2) ─────────────────
+  //
+  // DECISIÓN DE NEGOCIO PENDIENTE (no resuelta en Fase B):
+  //   El dashboard llama a `products.price` "PVP / Precio de Venta" (convención
+  //   Ecuador ⇒ IVA incluido). El checkout de la tienda lo trata como "sin IVA"
+  //   y muestra "+ IVA 15%". Con el proyecto solo NO se puede confirmar cuál es
+  //   el real. Hasta que negocio lo confirme NO separamos IVA aquí: tax=0,
+  //   total=subtotal, para no alterar lo que el cliente ve/paga.
+  //   Ver docs/PAYMENTS.md §IVA.
+  //
+  // Cuando se resuelva, este es el ÚNICO lugar del backend a tocar. El frontend
+  // sólo debe MOSTRAR `order.total`, nunca recalcularlo.
+  //
+  // @param {Array<{price:number, qty:number}>} lineItems
+  _computeOrderTotals(lineItems) {
     let subtotal = 0;
-    for (const item of items) {
-      const qty = item.OrderProduct?.amount ?? 0;
-      subtotal += Number(item.price) * qty;
+    for (const li of lineItems) {
+      subtotal += Number(li.price) * Number(li.qty);
     }
-    subtotal = parseFloat(subtotal.toFixed(2));
-    return { subtotal, tax: 0, total: subtotal };
+    subtotal = this._round2(subtotal);
+    const tax = 0; // ← pendiente decisión de negocio (ver arriba)
+    const total = this._round2(subtotal + tax);
+    return { subtotal, tax, total };
   }
 
   // ── Confirmar pedido Contra Entrega — Fase A (A2) ──────────────────────────
@@ -974,9 +989,8 @@ class OrderService {
 
       const productMap = new Map(products.map((p) => [p.id, p]));
 
-      // ── 6. Validate stock and calculate subtotal ───────────────────────────
-      let subtotal = 0;
-
+      // ── 6. Validate stock and calculate totals ────────────────────────────
+      const lineItems = [];
       for (const item of order.items) {
         const product = productMap.get(item.id);
         const quantity = item.OrderProduct.amount;
@@ -989,11 +1003,11 @@ class OrderService {
           );
         }
 
-        subtotal += product.price * quantity;
+        lineItems.push({ price: product.price, qty: quantity });
       }
 
-      // Round to 2 decimal places to avoid float drift (e.g. 10.999999...)
-      subtotal = parseFloat(subtotal.toFixed(2));
+      // Fórmula única de totales/IVA (ver _computeOrderTotals).
+      const { subtotal, tax, total } = this._computeOrderTotals(lineItems);
 
       // ── 7. Calculate credit discount ───────────────────────────────────────
       // Cap credits at floor(subtotal): credits are integers, so we cannot
@@ -1026,8 +1040,6 @@ class OrderService {
       // externo por pagar, sigue 'pending'.
       const paymentStatus = amountToPay === 0 ? 'paid' : 'pending';
 
-      // A5: totales persistidos. tax=0 por ahora (el backend no aplica IVA en
-      // el cobro con créditos). TODO Fase B: unificar IVA 15% front/back.
       await order.update(
         {
           state: 'comprada',
@@ -1035,8 +1047,8 @@ class OrderService {
           paymentMethod,
           paymentStatus,
           subtotal,
-          tax: 0,
-          total: subtotal,
+          tax,
+          total,
         },
         { transaction: t }
       );
