@@ -2,7 +2,7 @@ const express = require('express');
 
 const passport = require('passport');
 
-const { checkRoles } = require('../middlewares/authHandler');
+const { checkRoles, optionalAuth } = require('../middlewares/authHandler');
 
 const OrderService = require('../Services/orderService');
 const CustomerService = require('../Services/customerService');
@@ -126,16 +126,34 @@ router.get(
   }
 );
 
-// --- NUEVA RUTA PÚBLICA (La que añadimos) ---
-router.delete(
-  '/item-guest/:id', // Usamos una nueva URL para no chocar con la protegida
-  validatorHandler(getItemSchema, 'params'), // Reutilizamos el mismo validador
+// --- Items de carrito (invitado o cliente) — Fase A (A3) ---
+// optionalAuth: adjunta req.user si hay JWT; la autorización real (carrito guest
+// vs carrito de un cliente + orden en 'carrito') la resuelve el servicio.
+router.patch(
+  '/item-guest/:id',
+  optionalAuth,
+  validatorHandler(getItemSchema, 'params'),
+  validatorHandler(updateItemSchema, 'body'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      // ¡Aquí está la magia! Llamamos al mismo método de servicio.
-      const deleteItem = await service.deleteItem(id); 
-      res.status(200).json(deleteItem);
+      const updated = await service.updateCartItem(id, req.body, req.user?.sub ?? null);
+      res.status(200).json(updated);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.delete(
+  '/item-guest/:id',
+  optionalAuth,
+  validatorHandler(getItemSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const deleted = await service.deleteCartItem(id, req.user?.sub ?? null);
+      res.status(200).json(deleted);
     } catch (error) {
       next(error);
     }
@@ -439,18 +457,19 @@ router.post(
   }
 );
 
+// Fase A (A3): antes sin autenticación (auth comentada) → cualquiera podía
+// modificar/borrar items de cualquier orden. Ahora pasa por optionalAuth +
+// autorización en el servicio (misma regla que /item-guest/:id).
 router.patch(
   '/add-item/:id',
-  // passport.authenticate('jwt', { session: false }),
-  // checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  optionalAuth,
   validatorHandler(getItemSchema, 'params'),
   validatorHandler(updateItemSchema, 'body'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const body = req.body;
-      const updateItem = await service.updateItem(id, body);
-      res.status(201).json(updateItem);
+      const updated = await service.updateCartItem(id, req.body, req.user?.sub ?? null);
+      res.status(200).json(updated);
     } catch (error) {
       next(error);
     }
@@ -459,14 +478,13 @@ router.patch(
 
 router.delete(
   '/add-item/:id',
-  // passport.authenticate('jwt', { session: false }),
-  // checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  optionalAuth,
   validatorHandler(getItemSchema, 'params'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const deleteItem = await service.deleteItem(id);
-      res.status(201).json(deleteItem);
+      const deleted = await service.deleteCartItem(id, req.user?.sub ?? null);
+      res.status(200).json(deleted);
     } catch (error) {
       next(error);
     }

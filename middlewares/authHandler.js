@@ -1,5 +1,19 @@
 const boom = require('@hapi/boom');
+const passport = require('passport');
 const { config } = require('./../config/config');
+
+// Fase A (A3): autenticación OPCIONAL.
+// Adjunta req.user si viene un JWT válido, pero NO rechaza la petición cuando
+// falta o es inválido. Se usa en rutas que sirven a la vez a invitados (carrito
+// guest, sin token) y a usuarios logueados, donde la autorización real se
+// resuelve en el servicio según sea carrito guest o de un cliente.
+function optionalAuth(req, res, next) {
+  passport.authenticate('jwt', { session: false }, (err, user) => {
+    if (err) return next(err);
+    if (user) req.user = user;
+    return next();
+  })(req, res, next);
+}
 
 function checkApiKey(req, res, next) {
   const apiKey = req.headers['api'];
@@ -33,4 +47,4 @@ function checkRoles(...roles) {
 
 
 
-module.exports = { checkApiKey, checkAdminRole, checkRoles }
+module.exports = { checkApiKey, checkAdminRole, checkRoles, optionalAuth }

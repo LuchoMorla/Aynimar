@@ -487,6 +487,51 @@ class OrderService {
     return { rta: true };
   }
 
+  // ── Mutación de items de carrito con autorización — Fase A (A3) ──────────────
+  // Reemplaza el uso directo de updateItem/deleteItem desde las rutas públicas.
+  // Reglas:
+  //   - la orden debe estar en state 'carrito' (no se toca una orden en pago/envío)
+  //   - carrito guest (customerId null): cualquiera con el id del item (igual que
+  //     el resto del flujo guest, que se apoya en el id de orden en localStorage)
+  //   - carrito de un cliente: sólo ese cliente, con JWT válido
+  async _loadItemOrder(itemId) {
+    const item = await models.OrderProduct.findByPk(itemId);
+    if (!item) throw boom.notFound('Item de carrito no encontrado');
+    const order = await models.Order.findByPk(item.orderId, {
+      include: [{ association: 'customer', attributes: ['id', 'userId'] }],
+    });
+    if (!order) throw boom.notFound('Orden no encontrada');
+    return { item, order };
+  }
+
+  _assertCartMutable(order, userId) {
+    if (order.state !== 'carrito') {
+      throw boom.conflict('Esta orden ya no es un carrito editable');
+    }
+    if (order.customerId) {
+      if (!userId || !order.customer || order.customer.userId !== userId) {
+        throw boom.forbidden('No puedes modificar el carrito de otro usuario');
+      }
+    }
+  }
+
+  async updateCartItem(itemId, changes, userId = null) {
+    if (changes.amount == null) {
+      throw boom.badRequest('Falta "amount" para actualizar el item');
+    }
+    const { item, order } = await this._loadItemOrder(itemId);
+    this._assertCartMutable(order, userId);
+    await item.update({ amount: changes.amount }); // sólo cantidad — nunca orderId/productId
+    return { id: itemId, amount: item.amount, rta: true };
+  }
+
+  async deleteCartItem(itemId, userId = null) {
+    const { item, order } = await this._loadItemOrder(itemId);
+    this._assertCartMutable(order, userId);
+    await item.destroy();
+    return { rta: true };
+  }
+
   /**
    * Pre-flight validation for dropi_items before any API call is made.
    * Runs synchronously — no network, no DB. Throws on the first batch of errors
