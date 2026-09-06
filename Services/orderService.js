@@ -328,41 +328,54 @@ class OrderService {
   async _finalizeAndDispatch(orderId, { userId } = {}) {
     // ── FASE 1: transacción DB (rápida, sin llamadas externas) ─────────────
     await sequelize.transaction(async (t) => {
+      // Lock SÓLO la fila de la orden — `SELECT ... FROM orders WHERE id=? FOR
+      // UPDATE`, sin joins. Serializa confirmaciones concurrentes: la 2ª
+      // petición bloquea aquí hasta el commit de la 1ª y luego ve el estado ya
+      // avanzado.
       const ord = await models.Order.findByPk(orderId, {
-        include: [
-          { association: 'customer', include: ['user'] },
-          { association: 'items' },
-        ],
         lock: t.LOCK.UPDATE,
         transaction: t,
       });
       if (!ord) throw boom.notFound('Orden no encontrada');
 
-      if (userId != null && (!ord.customer || ord.customer.userId !== userId)) {
-        throw boom.forbidden('Esta orden no te pertenece');
-      }
-
-      // Transición atómica: sólo un 'carrito' se confirma (el lock serializa
-      // peticiones concurrentes).
+      // Transición atómica: sólo un 'carrito' se confirma.
       if (ord.state !== 'carrito') {
         throw boom.conflict(`La orden ya fue confirmada (estado: ${ord.state})`);
       }
-      if (!ord.items || ord.items.length === 0) {
+
+      // Propiedad (dentro de la txn, tras el lock).
+      if (userId != null) {
+        const customer = ord.customerId
+          ? await models.Customer.findByPk(ord.customerId, {
+              attributes: ['id', 'userId'],
+              transaction: t,
+            })
+          : null;
+        if (!customer || customer.userId !== userId) {
+          throw boom.forbidden('Esta orden no te pertenece');
+        }
+      }
+
+      const items = await models.OrderProduct.findAll({
+        where: { orderId: ord.id },
+        transaction: t,
+      });
+      if (items.length === 0) {
         throw boom.badRequest('No puedes confirmar un carrito vacío');
       }
 
       // Stock: re-leer cada producto CON lock, verificar y descontar dentro de
       // la transacción (cierra la ventana TOCTOU y evita stock negativo).
       const lineItems = [];
-      for (const item of ord.items) {
-        const product = await models.Product.findByPk(item.id, {
+      for (const it of items) {
+        const product = await models.Product.findByPk(it.productId, {
           lock: t.LOCK.UPDATE,
           transaction: t,
         });
         if (!product || product.isDeleted) {
-          throw boom.conflict(`El producto "${item.name}" ya no está disponible.`);
+          throw boom.conflict('Un producto de la orden ya no está disponible.');
         }
-        const qty = item.OrderProduct.amount;
+        const qty = it.amount;
         if (product.stock !== null) {
           if (product.stock < qty) {
             throw boom.conflict(
