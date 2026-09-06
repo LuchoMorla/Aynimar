@@ -3,6 +3,36 @@ const { CUSTOMER_TABLE } = require('./customerModel');
 
 const ORDER_TABLE = 'orders';
 
+// Fase A: valores válidos de cada máquina de estados, exportados para reuso
+// en los schemas Joi y en el servicio (evita strings sueltos duplicados).
+const ORDER_STATE_VALUES = ['carrito', 'comprada', 'pagada', 'pendiente_envio'];
+
+const ORDER_STATE_ORDER_VALUES = [
+  'comprado_pendiente_pago',
+  'comprado_pendiente_negocio',
+  'aprobado',
+  'en_preparacion',
+  'necesita_edicion',
+  'enviado',
+  'entregado',
+  'cancelado',
+  'en_controversia',
+  'controversia_escalada',
+  'controversia_resuelta',
+  'por_devolver',
+  'devuelto',
+  'error_api_proveedor',
+  'en_transito',
+];
+
+const ORDER_PAYMENT_STATUS_VALUES = [
+  'pending',
+  'pending_verification',
+  'paid',
+  'failed',
+  'refunded',
+];
+
 const OrderSchema = {
   id: {
     allowNull: false,
@@ -30,23 +60,7 @@ const OrderSchema = {
   stateOrder: {
     field: 'state_order',
     allowNull: false,
-    type: DataTypes.ENUM(
-      'comprado_pendiente_pago',
-      'comprado_pendiente_negocio',
-      'aprobado',
-      'en_preparacion',
-      'necesita_edicion',
-      'enviado',
-      'entregado',
-      'cancelado',
-      'en_controversia',
-      'controversia_escalada',
-      'controversia_resuelta',
-      'por_devolver',
-      'devuelto',
-      'error_api_proveedor',
-      'en_transito'
-    ),
+    type: DataTypes.ENUM(...ORDER_STATE_ORDER_VALUES),
     defaultValue: 'comprado_pendiente_pago',
   },
   trackingNumber: {
@@ -69,6 +83,14 @@ const OrderSchema = {
     field: 'payment_method',
     allowNull: true,
     type: DataTypes.STRING,
+  },
+  // Fase A — A1: estado del PAGO, separado del estado de la orden/envío (stateOrder).
+  // Ver db/migrations/20260905000001-add-payment-status-to-orders.js
+  paymentStatus: {
+    field: 'payment_status',
+    allowNull: false,
+    type: DataTypes.ENUM(...ORDER_PAYMENT_STATUS_VALUES),
+    defaultValue: 'pending',
   },
   // ── Dropi fulfillment tracking ───────────────────────────────────────────────
   dropiOrderId: {
@@ -141,4 +163,11 @@ class Order extends Model {
   }
 }
 
-module.exports = { Order, OrderSchema, ORDER_TABLE };
+module.exports = {
+  Order,
+  OrderSchema,
+  ORDER_TABLE,
+  ORDER_STATE_VALUES,
+  ORDER_STATE_ORDER_VALUES,
+  ORDER_PAYMENT_STATUS_VALUES,
+};
