@@ -338,9 +338,17 @@ class OrderService {
       });
       if (!ord) throw boom.notFound('Orden no encontrada');
 
-      // Transición atómica: sólo un 'carrito' se confirma.
-      if (ord.state !== 'carrito') {
-        throw boom.conflict(`La orden ya fue confirmada (estado: ${ord.state})`);
+      // Transición atómica. Estados de entrada válidos:
+      //   - 'carrito'                              → COD directo
+      //   - 'comprada' + 'comprado_pendiente_pago' → créditos parciales ya
+      //     aplicados por checkout() (que NO descuenta stock ni despacha);
+      //     el cliente completa el saldo con COD. No se re-tocan los créditos.
+      const fromPartialCredit =
+        ord.state === 'comprada' && ord.stateOrder === 'comprado_pendiente_pago';
+      if (ord.state !== 'carrito' && !fromPartialCredit) {
+        throw boom.conflict(
+          `La orden no se puede confirmar (estado: ${ord.state} / ${ord.stateOrder})`
+        );
       }
 
       // Propiedad (dentro de la txn, tras el lock).
@@ -387,16 +395,18 @@ class OrderService {
         lineItems.push({ price: product.price, qty });
       }
 
-      const { subtotal, tax, total } = computeOrderTotals(lineItems);
+      // Totales: para créditos parciales, checkout() ya los fijó — no se
+      // recalculan (perderíamos el contexto del crédito aplicado).
+      const totals = fromPartialCredit
+        ? {}
+        : computeOrderTotals(lineItems);
 
       await ord.update(
         {
           state:                 'pendiente_envio',
           paymentMethod:         'cod',
-          paymentStatus:         'pending', // COD: se cobra al entregar
-          subtotal,
-          tax,
-          total,
+          paymentStatus:         'pending', // COD: se cobra el saldo al entregar
+          ...totals,
           fulfillmentStatus:     'PENDING_DISPATCH',
           fulfillmentRetryCount: 0,
         },
