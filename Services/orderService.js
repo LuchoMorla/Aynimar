@@ -4,6 +4,7 @@ const sequelize = require('../libs/sequelize');
 const { models } = sequelize;
 const { Op } = require('sequelize');
 const WalletService = require('./walletService');
+const { computeOrderTotals, round2, isTerminalStateOrder } = require('./orderTotals');
 const { createOrderInDropi, fetchDropiOrderStatus } = require('../integrations/dropi/dropiAdapter');
 const { createOrderInEffi }  = require('../integrations/effi/effiAdapter');
 const { sendTelegramNotification } = require('../utils/telegramNotify');
@@ -288,74 +289,160 @@ class OrderService {
   // puede moverlos (evita que un business_owner "des-entregue" o "des-cancele").
   _assertStateOrderTransition(current, next, userRole) {
     if (!next || current === next) return;
-    const TERMINAL = ['entregado', 'cancelado', 'devuelto', 'controversia_resuelta'];
-    if (TERMINAL.includes(current) && userRole !== 'admin') {
+    if (isTerminalStateOrder(current) && userRole !== 'admin') {
       throw boom.forbidden(
         `La orden está en estado "${current}" (terminal); sólo un admin puede cambiarlo.`
       );
     }
   }
 
+  // Fase B (B4): update() ya NO descuenta stock ni despacha. Eso vive ahora en
+  // _finalizeAndDispatch() (transacción) + _dispatchOrder() (post-commit).
+  // update() sólo aplica cambios de campos con el guard de transición.
   async update(id, changes, userRole = null) {
     const order = await this.findOne(id);
     if (changes.stateOrder) {
       this._assertStateOrderTransition(order.stateOrder, changes.stateOrder, userRole);
     }
     const rta = await order.update(changes);
-    if (changes.state === 'pagada'|| changes.state === 'pendiente_envio') {
-      const orderItems = await models.OrderProduct.findAll({
-        where: {
-          orderId: id,
-        },
+    return { id, changes, rta };
+  }
+
+  // ── _finalizeAndDispatch — Fase B (B3/B4) ──────────────────────────────────
+  // Confirma una orden (COD hoy; comprobante aprobado en Fase C):
+  //   FASE 1 (transacción DB): lock de orden → transición atómica desde
+  //     'carrito' → verificar+descontar stock (guard anti-negativo/TOCTOU) →
+  //     persistir totales/estado → commit.
+  //   FASE 2 (post-commit, sin txn): despacho externo a proveedores + emails.
+  //     Un fallo aquí NUNCA revierte la orden — queda para el worker de retry.
+  //
+  // Idempotente: dos peticiones concurrentes → la 2ª bloquea en el lock, luego
+  // ve state != 'carrito' → 409. No hay doble despacho.
+  //
+  // @param {number} orderId
+  // @param {{ userId?: number }} opts  userId presente ⇒ se valida propiedad
+  async _finalizeAndDispatch(orderId, { userId } = {}) {
+    const order = await sequelize.transaction(async (t) => {
+      const ord = await models.Order.findByPk(orderId, {
+        include: [
+          { association: 'customer', include: ['user'] },
+          { association: 'items' },
+        ],
+        lock: t.LOCK.UPDATE,
+        transaction: t,
       });
-      for (let i = 0; i < orderItems.length; i++) {
-        const product = await models.Product.findByPk(orderItems[i].productId);
-        await product.update({
-          stock: product.stock - orderItems[i].amount,
+      if (!ord) throw boom.notFound('Orden no encontrada');
+
+      if (userId != null && (!ord.customer || ord.customer.userId !== userId)) {
+        throw boom.forbidden('Esta orden no te pertenece');
+      }
+
+      // Transición atómica: sólo un 'carrito' se confirma (el lock serializa
+      // peticiones concurrentes).
+      if (ord.state !== 'carrito') {
+        throw boom.conflict(`La orden ya fue confirmada (estado: ${ord.state})`);
+      }
+      if (!ord.items || ord.items.length === 0) {
+        throw boom.badRequest('No puedes confirmar un carrito vacío');
+      }
+
+      // Stock: re-leer cada producto CON lock, verificar y descontar dentro de
+      // la transacción (cierra la ventana TOCTOU y evita stock negativo).
+      const lineItems = [];
+      for (const item of ord.items) {
+        const product = await models.Product.findByPk(item.id, {
+          lock: t.LOCK.UPDATE,
+          transaction: t,
         });
+        if (!product || product.isDeleted) {
+          throw boom.conflict(`El producto "${item.name}" ya no está disponible.`);
+        }
+        const qty = item.OrderProduct.amount;
+        if (product.stock !== null) {
+          if (product.stock < qty) {
+            throw boom.conflict(
+              `Stock insuficiente para "${product.name}". Disponible: ${product.stock}, pedido: ${qty}`
+            );
+          }
+          await product.update({ stock: product.stock - qty }, { transaction: t });
+        }
+        lineItems.push({ price: product.price, qty });
       }
 
-      // ── Dropshipping dispatch ────────────────────────────────────────────
-      // Stock is already decremented — order confirmed on our side.
-      // Fulfillment errors must NOT reverse the customer's payment: we catch
-      // them, log them, and save the error so the merchant can retry from
-      // the dashboard via POST /orders/:id/retry-fulfillment.
-      try {
-        const dispatchResult = await this.dispatchToProviders(order);
-        if (dispatchResult?.dropiOrderId) {
-          // Dropi items found and dispatched successfully
-          await order.update({
-            dropiOrderId:      dispatchResult.dropiOrderId,
-            fulfillmentStatus: 'DISPATCHED',
-            fulfillmentError:  null,
-          });
-        } else if (dispatchResult === undefined) {
-          // No items had dropi_product_id — flag for manual warehouse logistics
-          await order.update({
-            fulfillmentStatus: 'MANUAL_LOGISTICS',
-            fulfillmentError:  null,
-          });
-          console.log(`[OrderService] Order ${id} has no Dropi items — marked MANUAL_LOGISTICS`);
-        }
-      } catch (dispatchError) {
-        console.error(
-          `[OrderService] Provider dispatch failed for order ${id}: ${dispatchError.message}`
-        );
-        try {
-          await order.update({
-            stateOrder:        'error_api_proveedor',
-            fulfillmentStatus: 'PENDING_DROPI_FULFILLMENT',
-            fulfillmentError:  dispatchError.message.slice(0, 1000),
-          });
-        } catch (markError) {
-          console.error(
-            `[OrderService] Could not mark order ${id} as error_api_proveedor: ${markError.message}`
-          );
-        }
+      const { subtotal, tax, total } = computeOrderTotals(lineItems);
+
+      await ord.update(
+        {
+          state:             'pendiente_envio',
+          paymentMethod:     'cod',
+          paymentStatus:     'pending', // COD: se cobra al entregar
+          subtotal,
+          tax,
+          total,
+          fulfillmentStatus: 'PENDING_DISPATCH',
+        },
+        { transaction: t }
+      );
+      return ord;
+    });
+
+    // ── FASE 2: post-commit ────────────────────────────────────────────────
+    await this._dispatchOrder(order);
+    this._notifyOrderConfirmed(order).catch((e) =>
+      console.error(`[OrderService] notify order ${orderId} failed: ${e.message}`)
+    );
+
+    return {
+      orderId: Number(orderId),
+      paymentMethod: 'cod',
+      paymentStatus: 'pending',
+      subtotal: order.subtotal,
+      total: order.total,
+      state: 'pendiente_envio',
+      stateOrder: order.stateOrder,
+      fulfillmentStatus: order.fulfillmentStatus,
+    };
+  }
+
+  // Despacho externo — SIEMPRE fuera de transacción. Un fallo no revierte la
+  // orden: se marca PENDING_DROPI_FULFILLMENT para el dropiRetryWorker.
+  async _dispatchOrder(order) {
+    if (order.dropiOrderId) {
+      console.log(`[OrderService] Order ${order.id} ya despachada (dropiOrderId: ${order.dropiOrderId}) — dispatch omitido`);
+      if (order.fulfillmentStatus !== 'DISPATCHED') {
+        await order.update({ fulfillmentStatus: 'DISPATCHED', fulfillmentError: null }).catch(() => {});
       }
+      return;
     }
+    try {
+      const dispatchResult = await this.dispatchToProviders(order);
+      if (dispatchResult?.dropiOrderId) {
+        await order.update({
+          dropiOrderId:      dispatchResult.dropiOrderId,
+          fulfillmentStatus: 'DISPATCHED',
+          fulfillmentError:  null,
+          stateOrder:        'en_preparacion',
+        });
+      } else if (dispatchResult === undefined) {
+        await order.update({ fulfillmentStatus: 'MANUAL_LOGISTICS', fulfillmentError: null });
+        console.log(`[OrderService] Order ${order.id} sin ítems Dropi — MANUAL_LOGISTICS`);
+      }
+    } catch (dispatchError) {
+      console.error(`[OrderService] dispatch falló para orden ${order.id}: ${dispatchError.message}`);
+      await order.update({
+        stateOrder:        'error_api_proveedor',
+        fulfillmentStatus: 'PENDING_DROPI_FULFILLMENT',
+        fulfillmentError:  dispatchError.message.slice(0, 1000),
+      }).catch((e) =>
+        console.error(`[OrderService] no se pudo marcar error en orden ${order.id}: ${e.message}`)
+      );
+    }
+  }
 
-    if (changes.state === 'pendiente_envio') {
+  // Emails de confirmación (cliente + dueños de negocio). Best-effort.
+  async _notifyOrderConfirmed(order) {
+    const id = order.id;
+    {
       const customerEmail = order.customer.user.email;
       const customerName = order.customer.name;
       const mailCustomer = {
@@ -468,14 +555,8 @@ class OrderService {
           console.error('Failed to send welcome email:', emailError);
         }
       }
-      console.log('Emails enviados a los dueños de negocios:', Object.keys(ownersData)); 
+      console.log('Emails enviados a los dueños de negocios:', Object.keys(ownersData));
     }
-
-    return {
-      id,
-      changes,
-      rta,
-    };
   }
   async delete(id) {
     const model = await this.findOne(id);
@@ -551,82 +632,12 @@ class OrderService {
     return { rta: true };
   }
 
-  _round2(n) {
-    return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-  }
-
-  // ── ÚNICA fórmula de totales/IVA del sistema — Fase B (B2) ─────────────────
-  //
-  // DECISIÓN DE NEGOCIO PENDIENTE (no resuelta en Fase B):
-  //   El dashboard llama a `products.price` "PVP / Precio de Venta" (convención
-  //   Ecuador ⇒ IVA incluido). El checkout de la tienda lo trata como "sin IVA"
-  //   y muestra "+ IVA 15%". Con el proyecto solo NO se puede confirmar cuál es
-  //   el real. Hasta que negocio lo confirme NO separamos IVA aquí: tax=0,
-  //   total=subtotal, para no alterar lo que el cliente ve/paga.
-  //   Ver docs/PAYMENTS.md §IVA.
-  //
-  // Cuando se resuelva, este es el ÚNICO lugar del backend a tocar. El frontend
-  // sólo debe MOSTRAR `order.total`, nunca recalcularlo.
-  //
-  // @param {Array<{price:number, qty:number}>} lineItems
-  _computeOrderTotals(lineItems) {
-    let subtotal = 0;
-    for (const li of lineItems) {
-      subtotal += Number(li.price) * Number(li.qty);
-    }
-    subtotal = this._round2(subtotal);
-    const tax = 0; // ← pendiente decisión de negocio (ver arriba)
-    const total = this._round2(subtotal + tax);
-    return { subtotal, tax, total };
-  }
-
-  // ── Confirmar pedido Contra Entrega — Fase A (A2) ──────────────────────────
-  // Reemplaza el antiguo PATCH /orders/:id {state:'pendiente_envio'} que la
-  // tienda ejecutaba sin ninguna validación de propiedad ni de carrito.
+  // ── Confirmar pedido Contra Entrega — Fase A (A2) / Fase B (B3/B4) ─────────
+  // Reemplaza el antiguo PATCH /orders/:id {state:'pendiente_envio'}.
+  // Toda la lógica (transacción + stock + despacho idempotente) vive en
+  // _finalizeAndDispatch.
   async confirmCod(orderId, userId) {
-    const order = await this.findOne(orderId);
-    if (!order) throw boom.notFound('Orden no encontrada');
-    if (!order.customer || order.customer.userId !== userId) {
-      throw boom.forbidden('Esta orden no te pertenece');
-    }
-    if (order.state !== 'carrito') {
-      throw boom.conflict(`La orden ya fue confirmada (estado: ${order.state})`);
-    }
-    if (!order.items || order.items.length === 0) {
-      throw boom.badRequest('No puedes confirmar un carrito vacío');
-    }
-
-    // Revalidar stock con datos actuales.
-    for (const item of order.items) {
-      const qty = item.OrderProduct.amount;
-      if (item.stock !== null && item.stock < qty) {
-        throw boom.conflict(
-          `Stock insuficiente para "${item.name}". Disponible: ${item.stock}, pedido: ${qty}`
-        );
-      }
-    }
-
-    const { subtotal, tax, total } = this._computeOrderTotals(order.items);
-
-    await order.update({
-      paymentMethod: 'cod',
-      paymentStatus: 'pending', // COD: se cobra al entregar
-      subtotal,
-      tax,
-      total,
-    });
-
-    // Reusa el pipeline existente (decremento de stock + despacho + emails).
-    await this.update(orderId, { state: 'pendiente_envio' });
-
-    return {
-      orderId: Number(orderId),
-      paymentMethod: 'cod',
-      paymentStatus: 'pending',
-      subtotal,
-      total,
-      state: 'pendiente_envio',
-    };
+    return this._finalizeAndDispatch(orderId, { userId });
   }
 
   /**
@@ -695,6 +706,12 @@ class OrderService {
    * @param {Order} order  Sequelize Order instance with `items` and `customer` preloaded
    */
   async dispatchToProviders(order) {
+    // ── Idempotencia (Fase B / B3): si ya hay orden en Dropi, no recrear ────
+    if (order.dropiOrderId) {
+      console.log(`[Dispatch] Order ${order.id} ya tiene dropiOrderId ${order.dropiOrderId} — no se recrea`);
+      return { dropiOrderId: order.dropiOrderId };
+    }
+
     // ── 0. Pre-flight: validate dropi_items structure before any API call ────
     this._validateDispatchItems(order.items);
 
@@ -847,6 +864,15 @@ class OrderService {
   async retryFulfillment(id) {
     const order = await this.findOne(id);
     if (!order) throw boom.notFound('Order not found');
+
+    // Idempotencia (Fase B / B3): si ya existe en Dropi, sólo reconciliar el
+    // estado local (p.ej. si el update posterior al 1er despacho falló).
+    if (order.dropiOrderId) {
+      if (order.fulfillmentStatus !== 'DISPATCHED') {
+        await order.update({ fulfillmentStatus: 'DISPATCHED', fulfillmentError: null });
+      }
+      return { success: true, dropiOrderId: order.dropiOrderId, orderId: id, reconciled: true };
+    }
 
     if (order.fulfillmentStatus === 'DISPATCHED') {
       throw boom.conflict(
@@ -1006,15 +1032,15 @@ class OrderService {
         lineItems.push({ price: product.price, qty: quantity });
       }
 
-      // Fórmula única de totales/IVA (ver _computeOrderTotals).
-      const { subtotal, tax, total } = this._computeOrderTotals(lineItems);
+      // Fórmula única de totales/IVA (Services/orderTotals.js).
+      const { subtotal, tax, total } = computeOrderTotals(lineItems);
 
       // ── 7. Calculate credit discount ───────────────────────────────────────
       // Cap credits at floor(subtotal): credits are integers, so we cannot
       // apply 5 credits against a $4.99 item (that would be a 1¢ gain).
       const maxCredits = Math.floor(subtotal);
       const creditsUsed = Math.min(creditsToApply, maxCredits);
-      const amountToPay = parseFloat((subtotal - creditsUsed).toFixed(2));
+      const amountToPay = round2(subtotal - creditsUsed);
 
       // ── 8. Redeem credits — inside the same transaction ────────────────────
       // If the wallet has insufficient balance, redeemCredits throws a

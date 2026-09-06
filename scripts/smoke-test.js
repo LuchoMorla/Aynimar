@@ -172,7 +172,31 @@ suite('buildNeuroCopyUserContent — output contract', () => {
   assert('output does not contain unfilled brackets', !out.includes('[placeholder]'));
 });
 
-// ── 6. Environment variable presence (warn-only) ─────────────────────────────
+// ── 6. Order totals / IVA policy (Fase B — B2) ──────────────────────────────
+suite('Order totals — _computeOrderTotals / round2', () => {
+  const { computeOrderTotals, round2, isTerminalStateOrder } = require('../Services/orderTotals');
+
+  assert('round2 corrige deriva de float (10.999999 → 11)', round2(10.999999) === 11);
+  assert('round2(0.1 + 0.2) === 0.3', round2(0.1 + 0.2) === 0.3);
+  assert('round2 redondea a 2 decimales (2.005 → 2.01 aprox)', round2(2.005) === 2.01 || round2(2.005) === 2);
+
+  const t1 = computeOrderTotals([{ price: 2.5, qty: 3 }, { price: '4.99', qty: 1 }]);
+  assert('subtotal = Σ(price×qty) = 12.49', t1.subtotal === 12.49, JSON.stringify(t1));
+  assert('tax = 0 (decisión de negocio pendiente)', t1.tax === 0);
+  assert('total = subtotal mientras tax=0', t1.total === t1.subtotal);
+
+  const t2 = computeOrderTotals([{ price: 19.99, qty: 2 }]);
+  assert('19.99 × 2 = 39.98 (sin deriva)', t2.total === 39.98, JSON.stringify(t2));
+
+  assert('carrito vacío → totales en 0', computeOrderTotals([]).total === 0);
+  assert('lineItems null → totales en 0 (no lanza)', computeOrderTotals(null).total === 0);
+
+  assert('isTerminalStateOrder(entregado) === true', isTerminalStateOrder('entregado') === true);
+  assert('isTerminalStateOrder(cancelado) === true', isTerminalStateOrder('cancelado') === true);
+  assert('isTerminalStateOrder(en_preparacion) === false', isTerminalStateOrder('en_preparacion') === false);
+});
+
+// ── 7. Environment variable presence (warn-only) ─────────────────────────────
 suite('Environment variable presence (warnings only)', () => {
   const vars = {
     GROQ_API_KEY:      process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY,
