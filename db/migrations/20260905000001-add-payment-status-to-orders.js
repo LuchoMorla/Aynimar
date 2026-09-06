@@ -64,6 +64,9 @@ module.exports = {
   },
 
   async down(queryInterface) {
+    // Nota: down() NO revierte la normalización payment_method='cod' del UPDATE #2
+    // (no se puede reconstruir el valor original NULL vs 'contra_entrega'; es
+    // cosmético). El efecto del UPDATE #1 desaparece al quitar la columna.
     await queryInterface.removeColumn(ORDER_TABLE, 'payment_status');
     await queryInterface.sequelize
       .query('DROP TYPE IF EXISTS "enum_orders_payment_status";')
