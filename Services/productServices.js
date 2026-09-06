@@ -12,7 +12,14 @@ class ProductsService {
   }
 
   async create(data) {
-    const newProduct = await models.Product.create(data);
+    // Autoridad de precio: si el caller fija `price` explícitamente, este es
+    // por definición un camino manual (ProductsService solo se invoca desde
+    // routes/productosRouting.js — ningún sync de Dropi/Effi pasa por aquí,
+    // ver scripts/smoke-test.js). No se muta `data` del caller.
+    const payload = (data && data.price !== undefined && data.price !== null)
+      ? { ...data, pricingSource: 'manual' }
+      : data;
+    const newProduct = await models.Product.create(payload);
     return newProduct;
   }
 
@@ -83,7 +90,15 @@ class ProductsService {
                 };
                 return this.products[index]; */
     const product = await this.findOne(id);
-    const rta = await product.update(changes);
+    // Igual que en create(): solo una escritura explícita de `price` marca
+    // pricingSource='manual'. Una actualización que no toca `price` (stock,
+    // showShop, description, ...) deja pricingSource exactamente como estaba
+    // — no se reescribe. `changes` (el valor devuelto al caller) no se altera;
+    // el campo extra solo viaja en el payload que se persiste.
+    const payload = (changes && changes.price !== undefined && changes.price !== null)
+      ? { ...changes, pricingSource: 'manual' }
+      : changes;
+    const rta = await product.update(payload);
     return {
       id,
       changes,

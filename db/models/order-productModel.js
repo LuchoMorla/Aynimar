@@ -53,6 +53,22 @@ const OrderProductSchema =  {
     type: DataTypes.STRING(64),
     defaultValue: null,
   },
+  // Pricing Engine (docs/PRICING_ENGINE_SPEC.md, sección C) — snapshot
+  // histórico e inmutable. NULL = no capturado / desconocido en ese momento,
+  // NUNCA 0. No se escribe ni se lee en ningún flujo todavía (Paso 1 solo
+  // declara el campo; el wiring de checkout es un paso posterior).
+  unitPriceGross: {
+    field: 'unit_price_gross',
+    allowNull: true,
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: null,
+  },
+  unitCostSnapshot: {
+    field: 'unit_cost_snapshot',
+    allowNull: true,
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: null,
+  },
 }
 
 class OrderProduct extends Model {

@@ -16,6 +16,7 @@ const { models } = require('../libs/sequelize');
 
 const { fetchProductsFromEffi, fetchStockFromEffi, fetchProductByIdFromEffi } = require('./effi/effiAdapter');
 const { transformProduct: transformEffiOne, transformProducts: transformEffi } = require('./effi/effiTransformer');
+const { canAutoSyncOverwritePrice } = require('../Services/pricingAuthority');
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -28,7 +29,14 @@ async function upsertProduct(normalizedProduct) {
   });
 
   if (!created) {
-    await product.update({ price, stock, image, images, lastSyncAt });
+    const updateFields = { stock, image, images, lastSyncAt };
+    // Protección de sincronización (Paso 9): un pricingSource 'manual' o
+    // 'engine' nunca se sobrescribe automáticamente — ver
+    // Services/pricingAuthority.js (única fuente de esta regla).
+    if (canAutoSyncOverwritePrice(product.pricingSource)) {
+      updateFields.price = price;
+    }
+    await product.update(updateFields);
   }
 
   return { action: created ? 'created' : 'updated', product };

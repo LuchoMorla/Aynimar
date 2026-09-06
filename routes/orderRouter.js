@@ -23,6 +23,13 @@ const {
   getVerifyProductIsInOrderActive,
   checkoutSchema,
 } = require('../schemaODtos/orderSchema');
+const {
+  getOrderIdSchema,
+  getOrderAndProofIdSchema,
+  uploadProofSchema,
+  reviewProofSchema,
+} = require('../schemaODtos/paymentProofSchema');
+const paymentProofService = require('../Services/paymentProofService');
 
 const router = express.Router();
 const service = new OrderService();
@@ -394,6 +401,102 @@ router.post(
       const { id } = req.params;
       const result = await service.confirmCod(id, req.user.sub);
       res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ── DeUna QR + comprobante — Paso 11 ─────────────────────────────────────────
+// Flujo: checkout() ya fijó el total autoritativo → GET .../payment/deuna
+// (solo lectura, info del QR/link estático) → POST .../payment-proof (el
+// cliente sube evidencia, NUNCA confirma el pago) → GET .../payment-proof
+// (dueño o staff revisan lo subido) → POST .../approve o .../reject (SOLO
+// admin/business_owner — el cliente no puede aprobarse a sí mismo).
+
+// GET /orders/:id/payment/deuna — info del QR/link DeUna. Solo lectura.
+router.get(
+  '/:id/payment/deuna',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  validatorHandler(getOrderIdSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const info = await paymentProofService.getDeunaPaymentInfo(id, req.user.sub, req.user.role);
+      res.json(info);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// POST /orders/:id/payment-proof — sube un comprobante de pago DeUna.
+router.post(
+  '/:id/payment-proof',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  validatorHandler(getOrderIdSchema, 'params'),
+  validatorHandler(uploadProofSchema, 'body'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const proof = await paymentProofService.uploadProof(id, req.body, req.user.sub, req.user.role);
+      res.status(201).json(proof);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// GET /orders/:id/payment-proof — lista los comprobantes subidos (dueño o staff).
+router.get(
+  '/:id/payment-proof',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  validatorHandler(getOrderIdSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const proofs = await paymentProofService.listProofs(id, req.user.sub, req.user.role);
+      res.json(proofs);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// POST /orders/:id/payment-proof/:proofId/approve — SOLO admin/business_owner.
+// Único camino que confirma el pago y dispara el despacho (vía
+// OrderService.confirmPaymentProof → _finalizeAndDispatch, idempotente).
+router.post(
+  '/:id/payment-proof/:proofId/approve',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  validatorHandler(getOrderAndProofIdSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      const { id, proofId } = req.params;
+      const result = await paymentProofService.approveProof(id, proofId, req.user.sub);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// POST /orders/:id/payment-proof/:proofId/reject — SOLO admin/business_owner.
+router.post(
+  '/:id/payment-proof/:proofId/reject',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  validatorHandler(getOrderAndProofIdSchema, 'params'),
+  validatorHandler(reviewProofSchema, 'body'),
+  async (req, res, next) => {
+    try {
+      const { id, proofId } = req.params;
+      const result = await paymentProofService.rejectProof(id, proofId, req.user.sub, req.body.reason);
+      res.json(result);
     } catch (error) {
       next(error);
     }

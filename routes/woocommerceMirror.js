@@ -23,10 +23,21 @@
 
 const express = require('express');
 const { models } = require('../libs/sequelize');
+const { canAutoSyncOverwritePrice } = require('../Services/pricingAuthority');
 
 const router = express.Router();
 
 const STORE_URL = process.env.NEXT_PUBLIC_FRONTEND_URL ?? 'https://www.aynimar.com';
+
+// Margin applied on top of Dropi's cost price to compute our sale price.
+// Set DROPI_MARGIN_PERCENT=30 in Railway to apply a 30% markup.
+// Default 0 = pass-through (backward-compatible with existing prices).
+const DROPI_MARGIN = parseFloat(process.env.DROPI_MARGIN_PERCENT ?? '0') / 100;
+
+function applyMargin(costPrice) {
+  if (DROPI_MARGIN <= 0 || !costPrice) return costPrice;
+  return Math.round(costPrice * (1 + DROPI_MARGIN) * 100) / 100;
+}
 
 // ── Basic Auth guard ──────────────────────────────────────────────────────────
 // Dropi sends:  Authorization: Basic base64(consumerKey:consumerSecret)
@@ -201,12 +212,14 @@ router.post('/products', async (req, res, next) => {
       ? wc.images.map((img) => img.src).filter(Boolean)
       : [];
 
-    const price    = parseFloat(wc.regular_price ?? wc.price ?? 0);
-    const stockQty = Number.isInteger(wc.stock_quantity) ? wc.stock_quantity : 0;
+    const costPrice = parseFloat(wc.regular_price ?? wc.price ?? 0);
+    const salePrice = applyMargin(costPrice);
+    const stockQty  = Number.isInteger(wc.stock_quantity) ? wc.stock_quantity : 0;
 
     const productData = {
       name:           String(wc.name ?? '').slice(0, 50).trim(),
-      price,
+      price:          salePrice,
+      costPrice,
       description:    wc.description || wc.short_description || '',
       image:          images[0] ?? null,
       images:         JSON.stringify(images),
@@ -226,9 +239,18 @@ router.post('/products', async (req, res, next) => {
     });
 
     if (!created) {
+      const costChanged = product.costPrice !== costPrice;
+      // Protección de sincronización (Paso 9): un pricingSource 'manual' o
+      // 'engine' nunca se sobrescribe automáticamente, sin importar si el
+      // costo de Dropi cambió — ver Services/pricingAuthority.js (única
+      // fuente de esta regla, no reimplementada aquí).
+      const priceOverwriteAllowed = canAutoSyncOverwritePrice(product.pricingSource);
       const updateFields = {
         businessId: req.wooBusinessId,
-        price,
+        costPrice,
+        // Solo recalcula el precio de venta cuando cambió el costo de Dropi
+        // Y la sincronización automática tiene autoridad sobre el precio.
+        ...(costChanged && priceOverwriteAllowed && { price: salePrice }),
         stock:      stockQty,
         image:      productData.image,
         images:     productData.images,

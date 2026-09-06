@@ -169,6 +169,8 @@ class Order extends Model {
       onDelete: 'CASCADE',
       otherKey: 'productId',
     });
+    // Paso 11 — DeUna QR + comprobante. Comprobantes de pago subidos para esta orden.
+    this.hasMany(models.PaymentProof, { as: 'paymentProofs', foreignKey: 'orderId' });
   }
 
   static config(sequelize) {

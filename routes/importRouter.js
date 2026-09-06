@@ -404,6 +404,10 @@ router.post(
             images:         resolvedImages,
             variants:       req.body.variantsJson ?? null,
             price:          resolvedPrice,
+            // pvpOverride explícito = decisión humana del admin (Paso 9,
+            // Services/pricingAuthority.js). Sin pvpOverride, se deja NULL —
+            // sin evidencia de decisión manual (Decisión Paso 8/9, sin backfill).
+            ...(pvpOverride != null && { pricingSource: 'manual' }),
             costPrice:      price ?? null,
             stock:          stock   ?? null,
             categoryId:     catId,
@@ -423,7 +427,7 @@ router.post(
             isDeleted:  false,
             lastSyncAt: new Date(),
           };
-          if (pvpOverride != null)   update.price = pvpOverride;
+          if (pvpOverride != null) { update.price = pvpOverride; update.pricingSource = 'manual'; }
           if (price != null && !product.costPrice) update.costPrice = price;
           if (image)                 update.image = image;
           if (resolvedImages)        update.images = resolvedImages;

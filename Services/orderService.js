@@ -4,7 +4,7 @@ const sequelize = require('../libs/sequelize');
 const { models } = sequelize;
 const { Op } = require('sequelize');
 const WalletService = require('./walletService');
-const { computeOrderTotals, round2, isTerminalStateOrder } = require('./orderTotals');
+const { computeOrderTotals, computeCreditRedemption, isTerminalStateOrder } = require('./orderTotals');
 const { createOrderInDropi, fetchDropiOrderStatus } = require('../integrations/dropi/dropiAdapter');
 const { createOrderInEffi }  = require('../integrations/effi/effiAdapter');
 const { sendTelegramNotification } = require('../utils/telegramNotify');
@@ -324,8 +324,14 @@ class OrderService {
   // ve state != 'carrito' → 409. No hay doble despacho.
   //
   // @param {number} orderId
-  // @param {{ userId?: number }} opts  userId presente ⇒ se valida propiedad
-  async _finalizeAndDispatch(orderId, { userId } = {}) {
+  // @param {{ userId?: number, paymentMethod?: string, paymentStatus?: string }} opts
+  //   userId presente ⇒ se valida propiedad (acción del cliente, ej. confirmCod).
+  //   userId ausente ⇒ sin chequeo de propiedad (acción de staff ya autorizada
+  //   por el guard de rol en la ruta, ej. aprobación de comprobante DeUna).
+  //   paymentMethod/paymentStatus — Paso 11 (DeUna): default 'cod'/'pending'
+  //   preserva EXACTAMENTE el comportamiento previo de confirmCod. Quien
+  //   confirma un comprobante aprobado pasa 'deuna'/'paid' explícitamente.
+  async _finalizeAndDispatch(orderId, { userId, paymentMethod = 'cod', paymentStatus = 'pending' } = {}) {
     // ── FASE 1: transacción DB (rápida, sin llamadas externas) ─────────────
     await sequelize.transaction(async (t) => {
       // Lock SÓLO la fila de la orden — `SELECT ... FROM orders WHERE id=? FOR
@@ -405,8 +411,8 @@ class OrderService {
       await ord.update(
         {
           state:                 'pendiente_envio',
-          paymentMethod:         'cod',
-          paymentStatus:         'pending', // COD: se cobra el saldo al entregar
+          paymentMethod,
+          paymentStatus,
           ...totals,
           fulfillmentStatus:     'PENDING_DISPATCH',
           fulfillmentRetryCount: 0,
@@ -716,6 +722,17 @@ class OrderService {
   // _finalizeAndDispatch.
   async confirmCod(orderId, userId) {
     return this._finalizeAndDispatch(orderId, { userId });
+  }
+
+  // ── Confirmar pago DeUna aprobado — Paso 11 ────────────────────────────────
+  // Llamado ÚNICAMENTE por PaymentProofService.approveProof(), después de que
+  // un admin/business_owner aprueba explícitamente un comprobante — nunca
+  // automáticamente. Reutiliza el mismo _finalizeAndDispatch (lock + guard de
+  // transición de estado + stock + despacho idempotente) que confirmCod, sin
+  // chequeo de propiedad (userId ausente: acción de staff, ya autorizada por
+  // el guard de rol en la ruta) y con paymentMethod/paymentStatus explícitos.
+  async confirmPaymentProof(orderId, { paymentMethod, paymentStatus }) {
+    return this._finalizeAndDispatch(orderId, { paymentMethod, paymentStatus });
   }
 
   /**
@@ -1103,15 +1120,17 @@ class OrderService {
         lineItems.push({ price: product.price, qty: quantity });
       }
 
-      // Fórmula única de totales/IVA (Services/orderTotals.js).
-      const { subtotal, tax, total } = computeOrderTotals(lineItems);
+      // Fórmula única de totales/IVA (Services/orderTotals.js). `subtotal` ya
+      // incluye IVA (product.price = PVP final); `tax` es el desglose
+      // informativo extraído hacia atrás, nunca se vuelve a sumar.
+      const { subtotal, tax } = computeOrderTotals(lineItems);
 
       // ── 7. Calculate credit discount ───────────────────────────────────────
       // Cap credits at floor(subtotal): credits are integers, so we cannot
-      // apply 5 credits against a $4.99 item (that would be a 1¢ gain).
-      const maxCredits = Math.floor(subtotal);
-      const creditsUsed = Math.min(creditsToApply, maxCredits);
-      const amountToPay = round2(subtotal - creditsUsed);
+      // apply 5 credits against a $4.99 item (that would be a 1¢ gain). El
+      // crédito descuenta directamente del subtotal (que ya incluye IVA) —
+      // no genera un nuevo cálculo de impuesto sobre el saldo.
+      const { creditsUsed, amountToPay } = computeCreditRedemption(subtotal, creditsToApply);
 
       // ── 8. Redeem credits — inside the same transaction ────────────────────
       // If the wallet has insufficient balance, redeemCredits throws a
@@ -1145,7 +1164,9 @@ class OrderService {
           paymentStatus,
           subtotal,
           tax,
-          total,
+          // `total` = monto neto adeudado (post-créditos), no el bruto — es
+          // lo que efectivamente debe cobrarse (COD hoy, futuras pasarelas).
+          total: amountToPay,
         },
         { transaction: t }
       );

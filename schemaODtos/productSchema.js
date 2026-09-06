@@ -1,5 +1,9 @@
 const Joi = require('joi');
 
+// Único lugar donde se conoce el conjunto de estrategias válidas — importado
+// desde pricingEngine.js, nunca redeclarado (Paso 10, apply-engine).
+const { VALID_GROSS_ROUNDING_STRATEGIES } = require('../Services/pricingEngine');
+
 /*  ya no lo necesitamos, ahora que nos vamos a conectar a la base de datos y tenemos id id con la regla de autoincremental... ya podemos ignorar el uuid y utilizarlo como un
 integer
 const id = Joi.string().uuid(); */
@@ -102,9 +106,28 @@ const queryProductSchema = Joi.object({
   name: Joi.string()
 });
 
+// ── Pricing Engine — apply-engine (Paso 10) ──────────────────────────────────
+// allowBelowFloor/overrideReason NO forman parte del contrato v1 a propósito
+// — no se declaran aquí, así que Joi los rechaza con 400 (unknown key) si
+// llegan en el body, en vez de ignorarlos en silencio.
+const previewPricingSchema = Joi.object({
+  targetContributionMargin: Joi.number().min(0).required(),
+  strategyName:             Joi.string().valid(...VALID_GROSS_ROUNDING_STRATEGIES),
+  allowZeroCost:             Joi.boolean(),
+  manualNetPrice:            Joi.number().min(0),
+  rationale:                 Joi.string().allow('', null),
+  referencePrice:            Joi.number().positive(),
+});
+
+const applyEnginePricingSchema = previewPricingSchema.keys({
+  expectedFinalGrossPrice: Joi.number().min(0),
+});
+
 module.exports = {
   createProductSchema,
   updateProductSchema,
   getProductSchema,
   queryProductSchema,
+  previewPricingSchema,
+  applyEnginePricingSchema,
 };

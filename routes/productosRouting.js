@@ -11,7 +11,10 @@ const {
   updateProductSchema,
   getProductSchema,
   queryProductSchema,
+  previewPricingSchema,
+  applyEnginePricingSchema,
 } = require('../schemaODtos/productSchema');
+const { previewEnginePrice, applyEnginePrice, APPLY_STATUS } = require('../Services/productPricingApplyService');
 
 const router = express.Router();
 const service = new ProductsService();
@@ -93,6 +96,67 @@ router.patch(
       }
       const result = await service.update(id, { price });
       res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ── POST /api/v1/products/:id/pricing/preview — cálculo del Pricing Engine, ──
+// 100% read-only. Nunca escribe product.price ni ningún otro campo.
+router.post(
+  '/:id/pricing/preview',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  validatorHandler(getProductSchema, 'params'),
+  validatorHandler(previewPricingSchema, 'body'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const { notFound, result } = await previewEnginePrice(id, req.body);
+      if (notFound) {
+        return res.status(404).json({ message: `Producto ${id} no encontrado.` });
+      }
+      res.json({ applied: false, result });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ── POST /api/v1/products/:id/pricing/apply-engine — única vía autorizada ────
+// de pricingSource='engine'. Acción humana explícita — nunca automática.
+router.post(
+  '/:id/pricing/apply-engine',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'business_owner'),
+  validatorHandler(getProductSchema, 'params'),
+  validatorHandler(applyEnginePricingSchema, 'body'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const { notFound, applied, status, result } = await applyEnginePrice(id, req.body);
+
+      if (notFound) {
+        return res.status(404).json({ message: `Producto ${id} no encontrado.` });
+      }
+      if (status === APPLY_STATUS.PRICE_DRIFTED) {
+        return res.status(409).json({
+          applied: false,
+          status,
+          message: 'El precio cambió desde el preview — revisa el resultado y vuelve a intentar.',
+          result,
+        });
+      }
+      if (!applied) {
+        return res.status(422).json({
+          applied: false,
+          status,
+          message: 'No se pudo calcular un precio económicamente válido para este producto.',
+          result,
+        });
+      }
+      res.json({ applied: true, status, result });
     } catch (error) {
       next(error);
     }

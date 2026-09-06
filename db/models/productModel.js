@@ -134,6 +134,47 @@ const ProductSchema = {
     allowNull: true,
     type: DataTypes.FLOAT,
   },
+
+  // ── Pricing authority tracking (Pricing Engine — integración progresiva) ──
+  // Quién/qué decidió el `price` vigente. Valores conceptuales:
+  //   'legacy_sync' — el último escritor fue un sync automático de proveedor.
+  //   'manual'      — un admin escribió `price` directamente.
+  //   'engine'      — un admin aprobó explícitamente un PVP calculado por el
+  //                    Pricing Engine (nunca se escribe automáticamente).
+  //   NULL          — sin evidencia de origen (productos previos a esta
+  //                    columna). NO se infiere aquí — la interpretación
+  //                    operacional de NULL vive en la capa de aplicación.
+  // Ningún proceso automático (Dropi/Effi) escribe este campo — solo lo lee.
+  pricingSource: {
+    field: 'pricing_source',
+    allowNull: true,
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+  // Costo usado la última vez que se aplicó un precio vía el Pricing Engine.
+  // NO es el costo actual del producto (ver costPrice) — es un snapshot
+  // histórico e inmutable de esa aplicación puntual. Solo tiene sentido
+  // cuando pricingSource='engine'; en cualquier otro caso permanece NULL.
+  pricingCostSnapshot: {
+    field: 'pricing_cost_snapshot',
+    allowNull: true,
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: null,
+  },
+  // PVP calculado/aprobado en esa misma aplicación del Pricing Engine.
+  pricingCalculatedPrice: {
+    field: 'pricing_calculated_price',
+    allowNull: true,
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: null,
+  },
+  // Fecha en que se aplicó ese precio calculado por el Pricing Engine.
+  pricingAppliedAt: {
+    field: 'pricing_applied_at',
+    allowNull: true,
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
 };
 
 class Product extends Model {
