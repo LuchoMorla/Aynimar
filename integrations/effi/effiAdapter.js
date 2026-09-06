@@ -31,6 +31,26 @@ async function fetchJson(url, { method = 'GET', headers = {}, body, timeout = 15
 const EFFI_API_KEY  = process.env.EFFI_API_KEY  || 'MOCK_KEY';
 const IS_MOCK       = !process.env.EFFI_API_KEY || process.env.EFFI_MOCK === 'true';
 
+// Fase A (A6): en producción, correr en MOCK equivale a "despachar" órdenes que
+// nunca llegan a Effi. Se exige opt-in explícito EFFI_ALLOW_MOCK=true.
+const MOCK_ALLOWED_IN_PROD = process.env.EFFI_ALLOW_MOCK === 'true';
+
+function assertMockIsSafe(context) {
+  if (IS_MOCK && process.env.NODE_ENV === 'production' && !MOCK_ALLOWED_IN_PROD) {
+    throw new Error(
+      `[Effi] MOCK activo en producción (${context}). Configura EFFI_API_KEY ` +
+      'para despachos reales, o EFFI_ALLOW_MOCK=true si es intencional.'
+    );
+  }
+}
+
+if (IS_MOCK) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[Effi] Adaptador en MODO MOCK (EFFI_API_KEY ${process.env.EFFI_API_KEY ? 'presente pero EFFI_MOCK=true' : 'ausente'}).`
+  );
+}
+
 // ── Mock dataset ─────────────────────────────────────────────────────────────
 
 const MOCK_PRODUCTS = [
@@ -205,6 +225,7 @@ async function fetchStockFromEffi(externalId) {
  * @returns {Promise<{ externalOrderId: string }>}
  */
 async function createOrderInEffi(payload) {
+  assertMockIsSafe('createOrderInEffi');
   if (IS_MOCK) {
     const externalOrderId = `MOCK-EFF-${Date.now()}`;
     console.log(
