@@ -354,18 +354,46 @@ router.post(
   }
 );
 
+// ── PATCH /orders/:id ────────────────────────────────────────────────────────
+// Fase A (A2): SOLO admin / business_owner. Un cliente ya no puede cambiar el
+// estado de una orden (antes: cualquier rol podía PATCH {state:'pagada'} sobre
+// cualquier orden → despacho sin pago). `state` (legado) ya no se acepta:
+// updateOrderSchema lo rechaza. El avance a pago/despacho pasa por checkout(),
+// POST /:id/confirm-cod o (Fase C) la aprobación de comprobante.
 router.patch(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  checkRoles('admin', 'business_owner'),
   validatorHandler(getOrderSchema, 'params'),
   validatorHandler(updateOrderSchema, 'body'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
       const body = req.body;
-      const rta = await service.update(id, body);
-      res.status(201).json(rta);
+      const rta = await service.update(id, body, req.user.role);
+      res.status(200).json(rta);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ── POST /orders/:id/confirm-cod ─────────────────────────────────────────────
+// Fase A (A2): confirma un pedido Contra Entrega. Reemplaza el antiguo
+// PATCH /orders/:id {state:'pendiente_envio'} que hacía la tienda sin control.
+// El cliente dueño del carrito confirma; el backend revalida stock, persiste
+// totales, marca payment_method='cod' / payment_status='pending' (se cobra al
+// entregar) y dispara el despacho.
+router.post(
+  '/:id/confirm-cod',
+  passport.authenticate('jwt', { session: false }),
+  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  validatorHandler(getOrderSchema, 'params'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const result = await service.confirmCod(id, req.user.sub);
+      res.status(200).json(result);
     } catch (error) {
       next(error);
     }

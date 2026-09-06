@@ -241,8 +241,12 @@ class OrderService {
   async findOrdersByBusinessId(businessId) {
     const orders = await models.Order.findAll({
       where: {
+        // Fase A (A2): se añade 'comprada' → antes las órdenes pagadas 100%
+        // con créditos (state='comprada') no aparecían en el dashboard del
+        // negocio y quedaban sin despachar. El payment_status viaja en el
+        // modelo para que el dashboard muestre pendiente / pagado.
         state: {
-          [Op.in]: ['pagada', 'pendiente_envio'],
+          [Op.in]: ['comprada', 'pagada', 'pendiente_envio'],
         },
       },
       include: [
@@ -280,8 +284,23 @@ class OrderService {
     }
     return ordersByState;
   }
-  async update(id, changes) {
+  // Fase A (A2): estados de fulfillment terminales — una vez ahí, sólo un admin
+  // puede moverlos (evita que un business_owner "des-entregue" o "des-cancele").
+  _assertStateOrderTransition(current, next, userRole) {
+    if (!next || current === next) return;
+    const TERMINAL = ['entregado', 'cancelado', 'devuelto', 'controversia_resuelta'];
+    if (TERMINAL.includes(current) && userRole !== 'admin') {
+      throw boom.forbidden(
+        `La orden está en estado "${current}" (terminal); sólo un admin puede cambiarlo.`
+      );
+    }
+  }
+
+  async update(id, changes, userRole = null) {
     const order = await this.findOne(id);
+    if (changes.stateOrder) {
+      this._assertStateOrderTransition(order.stateOrder, changes.stateOrder, userRole);
+    }
     const rta = await order.update(changes);
     if (changes.state === 'pagada'|| changes.state === 'pendiente_envio') {
       const orderItems = await models.OrderProduct.findAll({
@@ -530,6 +549,69 @@ class OrderService {
     this._assertCartMutable(order, userId);
     await item.destroy();
     return { rta: true };
+  }
+
+  // ── Totales de la orden desde precios autoritativos ────────────────────────
+  // `order.items` (belongsToMany a través de OrderProduct) trae el precio ACTUAL
+  // del producto, no el cacheado en el carrito. tax=0 por ahora (ver A5 / TODO
+  // Fase B: unificar IVA 15%).
+  _computeOrderTotals(items) {
+    let subtotal = 0;
+    for (const item of items) {
+      const qty = item.OrderProduct?.amount ?? 0;
+      subtotal += Number(item.price) * qty;
+    }
+    subtotal = parseFloat(subtotal.toFixed(2));
+    return { subtotal, tax: 0, total: subtotal };
+  }
+
+  // ── Confirmar pedido Contra Entrega — Fase A (A2) ──────────────────────────
+  // Reemplaza el antiguo PATCH /orders/:id {state:'pendiente_envio'} que la
+  // tienda ejecutaba sin ninguna validación de propiedad ni de carrito.
+  async confirmCod(orderId, userId) {
+    const order = await this.findOne(orderId);
+    if (!order) throw boom.notFound('Orden no encontrada');
+    if (!order.customer || order.customer.userId !== userId) {
+      throw boom.forbidden('Esta orden no te pertenece');
+    }
+    if (order.state !== 'carrito') {
+      throw boom.conflict(`La orden ya fue confirmada (estado: ${order.state})`);
+    }
+    if (!order.items || order.items.length === 0) {
+      throw boom.badRequest('No puedes confirmar un carrito vacío');
+    }
+
+    // Revalidar stock con datos actuales.
+    for (const item of order.items) {
+      const qty = item.OrderProduct.amount;
+      if (item.stock !== null && item.stock < qty) {
+        throw boom.conflict(
+          `Stock insuficiente para "${item.name}". Disponible: ${item.stock}, pedido: ${qty}`
+        );
+      }
+    }
+
+    const { subtotal, tax, total } = this._computeOrderTotals(order.items);
+
+    await order.update({
+      paymentMethod: 'cod',
+      paymentStatus: 'pending', // COD: se cobra al entregar
+      subtotal,
+      tax,
+      total,
+    });
+
+    // Reusa el pipeline existente (decremento de stock + despacho + emails).
+    await this.update(orderId, { state: 'pendiente_envio' });
+
+    return {
+      orderId: Number(orderId),
+      paymentMethod: 'cod',
+      paymentStatus: 'pending',
+      subtotal,
+      total,
+      state: 'pendiente_envio',
+    };
   }
 
   /**

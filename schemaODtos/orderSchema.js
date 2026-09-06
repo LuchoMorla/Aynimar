@@ -1,14 +1,20 @@
 const Joi = require('joi');
+const {
+  ORDER_STATE_ORDER_VALUES,
+  ORDER_PAYMENT_STATUS_VALUES,
+} = require('../db/models/orderModel');
 
 const id = Joi.number().integer();
 const customerId = Joi.number().integer();
 const orderId = Joi.number().integer();
 const productId = Joi.number().integer();
 const amount = Joi.number().integer().min(1);
+// `state` sigue permisivo para las consultas por estado (?state=carrito, etc.);
+// para ESCRITURA se usa el enum cerrado en updateOrderSchema.
 const state = Joi.string();
-const stateOrder = Joi.string();
-// AGREGAR ESTAS LÍNEAS - Definir las nuevas variables
-// const state_order = Joi.string();
+// Fase A (A2): enums cerrados — antes cualquier string entraba.
+const stateOrder = Joi.string().valid(...ORDER_STATE_ORDER_VALUES);
+const paymentStatus = Joi.string().valid(...ORDER_PAYMENT_STATUS_VALUES);
 const paymentMethod = Joi.string();
 
 const getOrderSchema = Joi.object({
@@ -46,12 +52,15 @@ const addItemGuestSchema = Joi.object({
   selectedDropiId: Joi.string().allow(null, '').optional(),
 });
 
-// ACTUALIZAR ESTE SCHEMA - cambiar stateOrder por state_order y agregar payment_method
+// Fase A (A2): PATCH /orders/:id — sólo admin/business_owner (ver ruta).
+// `state` (string legado) YA NO se acepta por esta vía: cualquier request con
+// `state` es rechazada por Joi (unknown key). El avance a 'paid' / despacho pasa
+// por checkout(), confirmCod() o (Fase C) la aprobación de comprobante.
 const updateOrderSchema = Joi.object({
   customerId: customerId,
-  state: state,
-  stateOrder: stateOrder,        // Cambiar de stateOrder a state_order
-  paymentMethod: paymentMethod,  // Agregar este campo nuevo
+  stateOrder: stateOrder,          // enum cerrado
+  paymentStatus: paymentStatus,    // enum cerrado
+  paymentMethod: paymentMethod,
 });
 
 //ITEMS
