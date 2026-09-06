@@ -17,8 +17,19 @@
  *   failed               — pago rechazado / comprobante rechazado
  *   refunded             — reembolsado
  *
- * PostgreSQL no permite eliminar valores de un ENUM, por eso el down() sólo
- * puede quitar la columna, no el tipo. Documentado abajo.
+ * BACKFILL (revisado en Fase B, decisión 3):
+ *   - `paid` SÓLO con evidencia real de pago:
+ *       · flujo histórico de tarjeta      → `state = 'pagada'`
+ *       · créditos que cubrieron el 100%  → `state = 'comprada'` + `green_credits`
+ *   - COD histórico (`state = 'pendiente_envio'`) queda `pending` (se cobra en
+ *     la entrega; consistente con el nuevo confirm-cod). NO se marca `paid`
+ *     sólo por el estado.
+ *   - Segundo UPDATE (opcional, revisar): normaliza `payment_method='cod'` en
+ *     el COD histórico para que dashboard/reportes lo filtren igual que las
+ *     órdenes nuevas. No toca `payment_status` ni datos financieros.
+ *
+ * PostgreSQL no permite eliminar valores de un ENUM: el down() sólo quita la
+ * columna.
  */
 
 const {
@@ -34,25 +45,26 @@ module.exports = {
       defaultValue: 'pending',
     });
 
-    // ── Backfill conservador ────────────────────────────────────────────────
-    // Sólo marcamos 'paid' lo que con certeza ya estaba pagado/confirmado:
-    //   - órdenes que el flujo anterior movió a 'pagada' o 'pendiente_envio'
-    //   - órdenes cubiertas 100% con créditos verdes (checkout con amountToPay=0)
-    // Todo lo demás queda en 'pending' (default), incluidas las órdenes en
-    // 'carrito' y las que quedaron a medias.
+    // ── 1. `paid` SÓLO con evidencia de pago real ──────────────────────────
     await queryInterface.sequelize.query(`
       UPDATE "${ORDER_TABLE}"
          SET "payment_status" = 'paid'
-       WHERE "state" IN ('pagada', 'pendiente_envio')
+       WHERE "state" = 'pagada'
           OR ("state" = 'comprada' AND "payment_method" = 'green_credits')
+    `);
+
+    // ── 2. Identificar COD histórico — NO cambia payment_status ────────────
+    // (revisar antes de aplicar; se puede omitir sin afectar el código nuevo)
+    await queryInterface.sequelize.query(`
+      UPDATE "${ORDER_TABLE}"
+         SET "payment_method" = 'cod'
+       WHERE "state" = 'pendiente_envio'
+         AND ("payment_method" IS NULL OR "payment_method" = 'contra_entrega')
     `);
   },
 
   async down(queryInterface) {
     await queryInterface.removeColumn(ORDER_TABLE, 'payment_status');
-    // El tipo ENUM "enum_orders_payment_status" queda huérfano. Para eliminarlo
-    // manualmente (sólo si ninguna columna lo usa):
-    //   DROP TYPE IF EXISTS "enum_orders_payment_status";
     await queryInterface.sequelize
       .query('DROP TYPE IF EXISTS "enum_orders_payment_status";')
       .catch(() => {

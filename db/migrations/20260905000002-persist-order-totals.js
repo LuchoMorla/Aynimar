@@ -8,11 +8,17 @@
  * dashboard y en cualquier cálculo de cobro. La columna real `orders.total`
  * (creada en 20250618150857-pago-contra-entrega) existía pero nunca se escribía.
  *
- * Esta migración:
- *   - añade `subtotal` y `tax` (la columna `total` ya existe)
- *   - backfill best-effort de filas existentes: subtotal = Σ(cantidad × precio
- *     actual del producto); tax = 0; total = subtotal. Las órdenes nuevas
- *     escriben los tres valores correctamente al checkout / confirm-cod.
+ * Esta migración SÓLO añade `subtotal` y `tax` (la columna `total` ya existe).
+ * A partir de ahora, checkout() y confirm-cod() escriben los tres valores con
+ * la fórmula única `Services/orderTotals.js#computeOrderTotals`.
+ *
+ * SIN BACKFILL (decisión 4, Fase B):
+ *   NO se reconstruye el histórico con los precios ACTUALES de los productos
+ *   — eso alteraría información financiera histórica con datos que no son los
+ *   reales del momento de la compra.
+ *   ⇒ Las órdenes anteriores a esta migración quedan con subtotal = tax =
+ *      total = 0. Ese 0 significa "no registrado", NO "gratis". El total
+ *      histórico real no es recuperable desde los datos actuales.
  */
 
 const { ORDER_TABLE } = require('../models/orderModel');
@@ -29,21 +35,7 @@ module.exports = {
       allowNull: false,
       defaultValue: 0,
     });
-
-    // Backfill best-effort de órdenes ya existentes.
-    await queryInterface.sequelize.query(`
-      UPDATE "${ORDER_TABLE}" o
-         SET "subtotal" = sub.s,
-             "total"    = sub.s
-        FROM (
-          SELECT op."order_id" AS oid,
-                 COALESCE(SUM(op."amount" * p."price"), 0) AS s
-            FROM "orders_products" op
-            JOIN "products" p ON p."id" = op."product_id"
-           GROUP BY op."order_id"
-        ) sub
-       WHERE o."id" = sub.oid
-    `);
+    // Sin UPDATE de backfill — ver cabecera.
   },
 
   async down(queryInterface) {
