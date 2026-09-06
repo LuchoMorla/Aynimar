@@ -338,6 +338,20 @@ class OrderService {
       });
       if (!ord) throw boom.notFound('Orden no encontrada');
 
+      // Propiedad primero (antes que el estado): un no-dueño nunca recibe
+      // información sobre la orden (403, no 409).
+      if (userId != null) {
+        const customer = ord.customerId
+          ? await models.Customer.findByPk(ord.customerId, {
+              attributes: ['id', 'userId'],
+              transaction: t,
+            })
+          : null;
+        if (!customer || customer.userId !== userId) {
+          throw boom.forbidden('Esta orden no te pertenece');
+        }
+      }
+
       // Transición atómica. Estados de entrada válidos:
       //   - 'carrito'                              → COD directo
       //   - 'comprada' + 'comprado_pendiente_pago' → créditos parciales ya
@@ -349,19 +363,6 @@ class OrderService {
         throw boom.conflict(
           `La orden no se puede confirmar (estado: ${ord.state} / ${ord.stateOrder})`
         );
-      }
-
-      // Propiedad (dentro de la txn, tras el lock).
-      if (userId != null) {
-        const customer = ord.customerId
-          ? await models.Customer.findByPk(ord.customerId, {
-              attributes: ['id', 'userId'],
-              transaction: t,
-            })
-          : null;
-        if (!customer || customer.userId !== userId) {
-          throw boom.forbidden('Esta orden no te pertenece');
-        }
       }
 
       const items = await models.OrderProduct.findAll({
