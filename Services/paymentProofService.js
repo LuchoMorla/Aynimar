@@ -76,9 +76,10 @@ async function getDeunaPaymentInfo(orderId, userId, userRole) {
     amountToPay: order.total,
     currency: 'USD',
     instructions:
-      'Escanea el código QR o abre el link de DeUna, paga el monto indicado y sube el ' +
-      'comprobante de pago en Aynimar. La verificación del pago es manual — tu pedido ' +
-      'quedará "pago pendiente de verificación" hasta que un administrador lo revise.',
+      'Escanea el código QR o abre el link de DeUna, o transfiere/deposita directamente a ' +
+      'esa misma cuenta. Paga el monto indicado y sube el comprobante de pago en Aynimar. ' +
+      'La verificación del pago es manual — tu pedido quedará "pago pendiente de ' +
+      'verificación" hasta que un administrador lo revise.',
   };
 }
 
