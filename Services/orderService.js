@@ -43,21 +43,25 @@ class OrderService {
 
     // Enqueue the abandoned-cart recovery job with a 2-hour delay.
     // The worker will verify the order is still in 'carrito' state before sending.
-    try {
-      await cartRecoveryQueue.add(
-        'recover-cart',
-        { orderId: newGuestOrder.id, guestEmail: guestEmail || null },
-        {
-          delay: CART_RECOVERY_DELAY_MS,
-          jobId: `cart-${newGuestOrder.id}`,
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 60000 },
-        }
-      );
-    } catch (queueErr) {
-      // Non-fatal: email recovery failing must not block order creation
+    //
+    // Fire-and-forget on purpose: cart recovery is a secondary feature and
+    // must never make order creation wait on Redis. Non-fatal: email recovery
+    // failing (or Redis being unreachable) must not block order creation —
+    // `.catch()` here (no `await`) is what actually guarantees that, since an
+    // awaited call would still block this request until Redis's own bounded
+    // retry/timeout gives up (see libs/cartRecoveryQueue.js `queueConnection`).
+    cartRecoveryQueue.add(
+      'recover-cart',
+      { orderId: newGuestOrder.id, guestEmail: guestEmail || null },
+      {
+        delay: CART_RECOVERY_DELAY_MS,
+        jobId: `cart-${newGuestOrder.id}`,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 60000 },
+      }
+    ).catch((queueErr) => {
       console.error('[CartRecovery] Failed to enqueue job:', queueErr.message);
-    }
+    });
 
     return newGuestOrder;
   }
@@ -86,7 +90,12 @@ class OrderService {
 
     // Reset the 2-hour countdown each time an item is added (idempotent via jobId).
     // If guestEmail is now available, update it in the new job payload.
-    try {
+    //
+    // Fire-and-forget on purpose (see createGuestOrder() above) — adding an
+    // item to the cart must never wait on Redis. The whole getJob→remove→add
+    // sequence runs detached from the request; any failure along the way
+    // (including Redis being unreachable) is caught and logged, never thrown.
+    (async () => {
       const jobId = `cart-${data.orderId}`;
       const existing = await cartRecoveryQueue.getJob(jobId);
       if (existing) await existing.remove();
@@ -104,9 +113,9 @@ class OrderService {
           backoff: { type: 'exponential', delay: 60000 },
         }
       );
-    } catch (queueErr) {
+    })().catch((queueErr) => {
       console.error('[CartRecovery] Failed to re-enqueue job:', queueErr.message);
-    }
+    });
 
     return newItem;
   }
@@ -1051,11 +1060,15 @@ class OrderService {
       // ── 1. Load order with a row-level lock ────────────────────────────────
       // The lock prevents a second concurrent checkout on the same cart from
       // reading a stale state while this transaction is in progress.
+      //
+      // IMPORTANT: no `include` here. `Order.belongsTo(Customer)` is optional
+      // (customer_id is nullable — guest carts), so Sequelize would generate a
+      // LEFT OUTER JOIN for any included association, and PostgreSQL rejects
+      // `FOR UPDATE` on the nullable side of an outer join for ANY order,
+      // regardless of whether that particular row actually has a customer.
+      // Customer/user and cart items are loaded separately below — same
+      // pattern already used (and proven) by `_finalizeAndDispatch()`.
       const order = await models.Order.findByPk(orderId, {
-        include: [
-          { association: 'customer', include: ['user'] },
-          { association: 'items' },
-        ],
         lock: t.LOCK.UPDATE,
         transaction: t,
       });
@@ -1063,10 +1076,16 @@ class OrderService {
       if (!order) throw boom.notFound('Order not found');
 
       // ── 2. Guard: only the cart owner can check out ────────────────────────
-      if (!order.customer) {
+      const customer = order.customerId
+        ? await models.Customer.findByPk(order.customerId, {
+            include: ['user'],
+            transaction: t,
+          })
+        : null;
+      if (!customer) {
         throw boom.badRequest('This order has no customer. Associate it first.');
       }
-      if (order.customer.userId !== userId) {
+      if (customer.userId !== userId) {
         throw boom.forbidden('You are not allowed to check out this order');
       }
 
@@ -1078,7 +1097,11 @@ class OrderService {
       }
 
       // ── 4. Guard: cart must have at least one item ─────────────────────────
-      if (!order.items || order.items.length === 0) {
+      const cartItems = await models.OrderProduct.findAll({
+        where: { orderId: order.id },
+        transaction: t,
+      });
+      if (cartItems.length === 0) {
         throw boom.badRequest('Cannot check out an empty cart');
       }
 
@@ -1086,7 +1109,7 @@ class OrderService {
       // We never trust the price cached on the cart item — we read from
       // the products table inside this transaction so the price cannot change
       // between our read and the moment we commit.
-      const productIds = order.items.map((item) => item.id);
+      const productIds = cartItems.map((item) => item.productId);
       const products = await models.Product.findAll({
         where: { id: productIds, isDeleted: false },
         lock: t.LOCK.UPDATE,
@@ -1105,9 +1128,9 @@ class OrderService {
 
       // ── 6. Validate stock and calculate totals ────────────────────────────
       const lineItems = [];
-      for (const item of order.items) {
-        const product = productMap.get(item.id);
-        const quantity = item.OrderProduct.amount;
+      for (const item of cartItems) {
+        const product = productMap.get(item.productId);
+        const quantity = item.amount;
 
         // Stock can be null for unlimited/dropship products — skip the check.
         if (product.stock !== null && product.stock < quantity) {
@@ -1180,7 +1203,7 @@ class OrderService {
         stateOrder: newStateOrder,
         paymentStatus,
         paymentMethod,
-        itemCount: order.items.length,
+        itemCount: cartItems.length,
       };
     });
   }
