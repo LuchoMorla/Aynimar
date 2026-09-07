@@ -1,0 +1,80 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Firebase Storage Security Rules — Aynimar
+// Proyecto: aynimar-1329a   ·   Bucket: aynimar-1329a.firebasestorage.app
+//
+// FUENTE DE VERDAD: este archivo. Publicar SIEMPRE desde aquí
+//   (npm run storage:rules:deploy  o  Firebase Console pegando este contenido).
+//   Nunca editar sólo en Console sin reflejarlo aquí.
+//
+// Aynimar NO usa Firebase Authentication → request.auth es SIEMPRE null.
+// Ninguna regla se apoya en request.auth. La autorización de negocio vive en el
+// backend:
+//   - comprobantes: Services/paymentProofService._assertOwnerOrStaff
+//                 + Services/paymentProofImageValidation (assertTrustedProofUrl
+//                   + verifyProofFileExists por HTTP HEAD real).
+//
+// La LECTURA de imágenes ya publicadas ocurre por las download URLs tokenizadas
+// (?alt=media&token=…) guardadas en PostgreSQL — son "capability URLs" y NO
+// pasan por estas reglas. Estas reglas gobiernan el acceso vía Firebase Storage
+// SDK (uploadBytes / getDownloadURL / deleteObject / listAll) desde el cliente.
+//
+// FORMA DE LAS RUTAS: todo objeto que crea Aynimar tiene exactamente
+//   images/{categoria}/{subcarpeta}/{archivo}          (profundidad 4)
+// Cualquier otra forma (raíz del bucket, images/<archivo>, rutas más profundas)
+// no coincide con ninguna regla → queda DENEGADA.
+//
+// NOTA sobre el bug histórico: NO usar .matches() sobre un comodín recursivo
+// ({allPaths=**}) — produjo un deny-all en un intento anterior. Aquí {category}
+// es un segmento simple y se compara con != (seguro).
+//
+// Validado con el emulador de Storage (30/30 casos) — ver docs/STORAGE.md.
+// ─────────────────────────────────────────────────────────────────────────────
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ── COMPROBANTES DE PAGO DeUna ─────────────────────────────────────────
+    // images/payment-proofs/{orderId}/{fileName}
+    //   get    : getDownloadURL() lo necesita justo tras subir; también sirve
+    //            la imagen a quien tenga la URL.
+    //   list   : NO — nadie enumera las carpetas de comprobantes.
+    //   create : SÓLO primera subida (resource == null ⇒ nunca sobrescribir),
+    //            < 8 MB, sólo JPEG/PNG/WebP.
+    //   update : NO (updateMetadata).   delete : NO desde cliente.
+    // El backend re-verifica todo (HEAD real) antes de aceptar y antes de aprobar.
+    match /images/payment-proofs/{orderId}/{fileName} {
+      allow get:    if true;
+      allow list:   if false;
+      allow create: if resource == null
+                    && request.resource.size < 8 * 1024 * 1024
+                    && request.resource.contentType != null
+                    && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow update, delete: if false;
+    }
+
+    // ── CATÁLOGO + ADMINISTRACIÓN ─────────────────────────────────────────
+    // images/{category}/{subfolder}/{fileName}
+    //   category ∈ { products, categories, business, wastes, variant-images }
+    // Comportamiento = el de hoy (lectura/escritura/borrado abiertos, sin auth)
+    // + límite de tamaño (10 MB) y MIME (JPEG/PNG/WebP) en las ESCRITURAS
+    //   (defensa server-side: el cliente se puede saltar la validación de JS).
+    // Se permite sobrescritura y borrado desde cliente para no romper el flujo
+    // actual (dashboard: deleteFile() al quitar una miniatura de la galería).
+    // La limpieza de huérfanas la hace el reconciliador con Service Account.
+    // payment-proofs queda excluido aquí → sólo lo gobierna el bloque de arriba.
+    match /images/{category}/{subfolder}/{fileName} {
+      allow read: if category != 'payment-proofs';
+      allow write: if category != 'payment-proofs'
+                   && (
+                        request.resource == null                        // delete
+                        || (
+                             request.resource.size < 10 * 1024 * 1024    // create / overwrite
+                             && request.resource.contentType != null
+                             && request.resource.contentType.matches('image/(jpeg|png|webp)')
+                           )
+                      );
+    }
+  }
+}

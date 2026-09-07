@@ -205,3 +205,5 @@ Dockerfile
 user/src/app
 
 uploads/**
+# Reconciliador de Firebase Storage — reportes locales (no versionar)
+storage-reports/

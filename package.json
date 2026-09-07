@@ -17,7 +17,11 @@
     "migrations:generate": "sequelize-cli migration:generate --name",
     "migrations:run": "sequelize-cli db:migrate",
     "migrations:revert": "sequelize-cli db:migrate:undo",
-    "migrations:delete": "sequelize-cli db:migrate:undo:all"
+    "migrations:delete": "sequelize-cli db:migrate:undo:all",
+    "storage:reconcile": "node scripts/storage-reconcile.js",
+    "storage:rules:validate": "firebase deploy --only storage --dry-run --project aynimar-1329a",
+    "storage:rules:deploy": "firebase deploy --only storage --project aynimar-1329a",
+    "storage:emulator:test": "node scripts/storage-rules-emulator-test.mjs"
   },
   "keywords": [],
   "author": "Luis Morla",
@@ -29,10 +33,13 @@
     "eslint": "^8.0.0",
     "eslint-config-prettier": "^8.3.0",
     "eslint-plugin-prettier": "^4.0.0",
+    "firebase": "^10.14.1",
+    "firebase-tools": "^13.29.1",
     "nodemon": "^3.1.14",
     "prettier": "^2.4.1"
   },
   "dependencies": {
+    "@google-cloud/storage": "^7.14.0",
     "@hapi/boom": "^9.1.4",
     "@sentry/node": "^10.59.0",
     "bcryptjs": "^3.0.3",

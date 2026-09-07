@@ -13,5 +13,14 @@
     },
     "rules": {
       "no-console": "warn"
-    }
+    },
+    "overrides": [
+      {
+        "files": ["**/*.mjs", "scripts/*.mjs"],
+        "parserOptions": {
+          "ecmaVersion": 2022,
+          "sourceType": "module"
+        }
+      }
+    ]
   }
