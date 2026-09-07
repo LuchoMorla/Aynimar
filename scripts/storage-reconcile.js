@@ -27,7 +27,13 @@
  *        --report-id <id de un dry-run reciente> \
  *        --confirm "BORRAR <N> OBJETOS DEL BUCKET aynimar-1329a" \
  *        --only ORPHAN            # (por defecto sólo ORPHAN; DUPLICATE opt-in)
- *        --max 50
+ *        --max 50 \
+ *        --backup-dir ./storage-backups/<fecha>   # descarga cada objeto ANTES
+ *                                                 # de borrarlo (Storage no tiene
+ *                                                 # papelera) — MUY recomendado
+ *        [--rest]                # borra vía REST (válido mientras las Rules
+ *                                # dejen borrar catálogo desde cliente); si no,
+ *                                # usa Service Account
  *
  * CREDENCIALES DE STORAGE (una de las dos):
  *   FIREBASE_SERVICE_ACCOUNT_JSON = '{ ...clave JSON del service account... }'
@@ -77,6 +83,7 @@ const ONLY = (flagVal('--only', 'ORPHAN') || 'ORPHAN').toUpperCase().split(',');
 const MAX_DELETE = Number(flagVal('--max', '50')) || 50;
 const REPORT_ID_ARG = flagVal('--report-id', null);
 const CONFIRM_ARG = flagVal('--confirm', null);
+const BACKUP_DIR = flagVal('--backup-dir', null); // descarga cada objeto antes de borrarlo (Storage no tiene papelera)
 const OPERATOR = process.env.USER || process.env.LOGNAME || 'unknown';
 
 const OUT_DIR = path.join(process.cwd(), 'storage-reports', new Date().toISOString().replace(/[:.]/g, '-'));
@@ -402,7 +409,10 @@ function buildDuplicatePrimaries(objects, refs) {
   console.log(`gracia      : ${GRACE_DAYS} días`);
   console.log('');
 
-  if (MODE_REST && MODE_DELETE) bail('--rest no se permite con --delete (el borrado exige Service Account).');
+  // --rest + --delete: permitido MIENTRAS las Storage Rules dejen borrar catálogo
+  // desde cliente (create/overwrite/delete abiertos para images/{category}/**;
+  // payment-proofs SIEMPRE bloqueado por reglas Y por el hard-skip de abajo).
+  // Cuando el catálogo se cierre del todo, usar Service Account (sin --rest).
   const bucket = MODE_REST ? null : getBucket();
   const db = await getDb();
 
@@ -532,7 +542,9 @@ function buildDuplicatePrimaries(objects, refs) {
       bail(`${targets.length} candidatos > --max ${MAX_DELETE}. Sube --max conscientemente o acota con --only.`);
     }
 
-    // credencial de escritura + tabla de log
+    // conjunto vivo de paths referenciados (para revalidación just-in-time)
+    const referencedNow = new Set(refs.keys());
+
     const runId = crypto.randomUUID();
     const logClient = new (require('pg').Client)({
       connectionString: process.env.DATABASE_URL,
@@ -540,27 +552,52 @@ function buildDuplicatePrimaries(objects, refs) {
     });
     await logClient.connect();
 
+    const api = `https://${FIREBASE_DL_HOST}/v0/b/${BUCKET}/o`;
+    const restDelete = async (p) => {
+      const enc = encodeURIComponent(p);
+      const head = await fetch(`${api}/${enc}`);
+      if (head.status === 404) return 'missing';
+      const del = await fetch(`${api}/${enc}`, { method: 'DELETE' });
+      if (!del.ok && del.status !== 404) throw new Error(`DELETE ${p} → HTTP ${del.status}`);
+      return 'deleted';
+    };
+    const restBackup = async (p) => {
+      if (!BACKUP_DIR) return;
+      const dest = path.join(BACKUP_DIR, p);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      const r = await fetch(`${api}/${encodeURIComponent(p)}?alt=media`);
+      if (!r.ok) throw new Error(`backup ${p} → HTTP ${r.status}`);
+      fs.writeFileSync(dest, Buffer.from(await r.arrayBuffer()));
+    };
+
     let deleted = 0;
     let skipped = 0;
     for (const t of targets) {
-      if (t.storagePath.startsWith(PROTECTED_PREFIX)) { skipped++; continue; } // hard-skip incondicional
-      // revalidación just-in-time: ¿sigue sin referencia y existe?
-      const [exists] = await bucket.file(t.storagePath).exists();
-      if (!exists) { skipped++; continue; }
-      // (en un flujo real aquí se re-consultaría la BD por si volvió a usarse)
+      if (t.storagePath.startsWith(PROTECTED_PREFIX)) { skipped++; console.log(`  skip (protegido): ${t.storagePath}`); continue; }
+      // revalidación just-in-time contra la BD leída en esta misma corrida
+      if (referencedNow.has(t.storagePath)) { skipped++; console.log(`  skip (volvió a estar referenciado): ${t.storagePath}`); continue; }
+
+      if (BACKUP_DIR) await restBackup(t.storagePath);
+
       await logClient.query(
         `INSERT INTO storage_cleanup_log
            (run_id, report_id, storage_path, size_bytes, md5_hash, classification, reason, action, operator)
          VALUES ($1,$2,$3,$4,$5,$6,$7,'deleted',$8)`,
         [runId, reportId, t.storagePath, t.size, t.md5, t.classification, t.reason, OPERATOR]
       );
-      await bucket.file(t.storagePath).delete();
-      deleted++;
-      if (deleted % MAX_DELETE === 0) await new Promise((r) => setTimeout(r, 200));
+
+      let res;
+      if (MODE_REST) res = await restDelete(t.storagePath);
+      else { const [ex] = await bucket.file(t.storagePath).exists(); if (!ex) res = 'missing'; else { await bucket.file(t.storagePath).delete(); res = 'deleted'; } }
+
+      if (res === 'missing') { skipped++; console.log(`  skip (ya no existe): ${t.storagePath}`); }
+      else { deleted++; console.log(`  borrado: ${t.storagePath}  (${(t.size / 1024).toFixed(0)} KB)`); }
+      if ((deleted + skipped) % 25 === 0) await new Promise((r) => setTimeout(r, 300));
     }
     await logClient.end();
-    console.log(`\n  borrados: ${deleted}   saltados (reclasificados / inexistentes / protegidos): ${skipped}`);
+    console.log(`\n  borrados: ${deleted}   saltados (protegidos / re-referenciados / inexistentes): ${skipped}`);
     console.log(`  run_id: ${runId}  → auditoría en storage_cleanup_log`);
+    if (BACKUP_DIR) console.log(`  copia de respaldo: ${BACKUP_DIR}`);
     await db.end();
   } catch (err) {
     await db.end().catch(() => {});
