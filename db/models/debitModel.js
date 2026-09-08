@@ -13,7 +13,7 @@ const DebitSchema = {
   },
   customerId: {
     field: 'customer_id',
-    allowNull: false,
+    allowNull: true, // onDelete: SET NULL exige nullable — ver migración 20260908000002
     type: DataTypes.INTEGER,
     references: {
       model: CUSTOMER_TABLE,
@@ -24,7 +24,7 @@ const DebitSchema = {
   },
   orderId: {
     field: 'order_id',
-    allowNull: false,
+    allowNull: true, // onDelete: SET NULL exige nullable — ver migración 20260908000002
     type: DataTypes.INTEGER,
     references: {
       model: ORDER_TABLE,
