@@ -1,29 +1,106 @@
 'use strict';
+/* eslint-disable no-console */
 
 const OpenAI = require('openai');
 
 // GROQ_API_KEY is the dedicated key for copy/import endpoints.
 // Falls back to GROQ_IA_KEY so NutrIA and aiCopyService share one key if preferred.
 const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY;
-const GROQ_MODEL   = process.env.GROQ_MODEL   || 'llama-3.1-8b-instant';
+
+// ── Model resiliency ─────────────────────────────────────────────────────────
+// Groq retires models frequently. In Sep 2026 it removed EVERY Llama text model
+// (llama-3.1-8b-instant, llama-3.3-70b-versatile…) in one sweep — the previous
+// hard-coded defaults — so every copy/NutrIA call started failing with
+// 400 `model_decommissioned`. To stay "always available" we never trust a single
+// model id:
+//  1. GROQ_MODEL (Railway override) is tried first if set,
+//  2. then this chain of models verified live on Groq (best→cheapest).
+// The first id that answers is used; a decommissioned/unknown id is skipped.
+// Refresh this list from https://console.groq.com/docs/models (or
+// `curl https://api.groq.com/openai/v1/models`) when Groq changes its line-up.
+//
+// Verified 2026-09-08 against the production key:
+//  - qwen/qwen3.8-27b     → clean Spanish Markdown, native tool-calling, no
+//                           reasoning-token leak. Primary.
+//  - openai/gpt-oss-120b  → highest quality, tool-calling, ~low reasoning cost.
+//  - openai/gpt-oss-20b   → fast/cheap fallback, tool-calling.
+// (qwen/qwen3.6-27b is intentionally excluded: it dumps <think> blocks into the
+//  response and exhausts max_tokens before producing usable copy.)
+const STABLE_GROQ_MODELS = ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
+const GROQ_MODEL_CHAIN = [
+  ...(process.env.GROQ_MODEL ? [process.env.GROQ_MODEL.trim()] : []),
+  ...STABLE_GROQ_MODELS,
+].filter((m, i, arr) => m && arr.indexOf(m) === i);
+
+// Primary model id (for logs / callers that just want one name).
+const GROQ_MODEL = GROQ_MODEL_CHAIN[0];
 
 // Startup diagnostic — visible in Railway logs on every deploy/restart.
 const _keySource = process.env.GROQ_API_KEY
   ? 'GROQ_API_KEY ✓'
   : (process.env.GROQ_IA_KEY ? 'GROQ_IA_KEY (fallback) ✓' : 'NO CONFIGURADA ✗');
-console.log(`[aiCopyService] Groq key: ${_keySource} | model: ${GROQ_MODEL}`);
+console.log(`[aiCopyService] Groq key: ${_keySource} | model chain: ${GROQ_MODEL_CHAIN.join(' → ')}`);
 
 function getGroqClient() {
   if (!GROQ_API_KEY) return null;
   return new OpenAI({ apiKey: GROQ_API_KEY, baseURL: 'https://api.groq.com/openai/v1' });
 }
 
+// True when Groq rejected the request because the model id is gone/unknown
+// (decommissioned, typo, not enabled for this key) — safe to retry with another.
+function isModelUnavailableError(err) {
+  const status = err?.status ?? err?.statusCode;
+  const code   = err?.code || err?.error?.code || err?.response?.data?.error?.code;
+  const msg    = (err?.message || err?.error?.message || '').toLowerCase();
+  if (code === 'model_decommissioned' || code === 'model_not_found') return true;
+  if ((status === 400 || status === 404) &&
+      (msg.includes('decommission') || msg.includes('does not exist') ||
+       msg.includes('not found') || msg.includes('not supported') || msg.includes('no longer'))) {
+    return true;
+  }
+  return false;
+}
+
+// Runs a Groq chat completion trying each model in GROQ_MODEL_CHAIN until one
+// answers. `overrides.stream` etc. pass straight through. Throws the last error
+// if every model fails. Returns { completion, model }.
+async function groqCreateWithFallback(groq, params, reqOpts) {
+  let lastErr;
+  for (const model of GROQ_MODEL_CHAIN) {
+    try {
+      const completion = await groq.chat.completions.create({ ...params, model }, reqOpts);
+      if (model !== GROQ_MODEL_CHAIN[0]) {
+        console.warn(`[aiCopyService] modelo "${GROQ_MODEL_CHAIN[0]}" no disponible — usando "${model}"`);
+      }
+      return { completion, model };
+    } catch (err) {
+      lastErr = err;
+      if (isModelUnavailableError(err)) {
+        console.error(`[aiCopyService] modelo "${model}" no disponible (${err.message}) — probando el siguiente`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+// Reasoning models (Qwen3, gpt-oss) sometimes emit <think>…</think> chain-of-thought
+// inline instead of in a separate field. Strip it so it never reaches the storefront.
+function stripReasoning(text) {
+  if (!text || typeof text !== 'string') return text;
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/^\s*<think>[\s\S]*$/i, '') // unterminated (truncated) block
+    .trim();
+}
+
 // ── Internal Groq chat helper (non-streaming) ─────────────────────────────────
 async function groqChat(messages, { max_tokens = 600 } = {}) {
   const groq = getGroqClient();
   if (!groq) throw new Error('GROQ_API_KEY no configurada en Railway');
-  const completion = await groq.chat.completions.create({ model: GROQ_MODEL, messages, max_tokens });
-  return completion.choices[0]?.message?.content ?? null;
+  const { completion } = await groqCreateWithFallback(groq, { messages, max_tokens });
+  return stripReasoning(completion.choices[0]?.message?.content ?? null);
 }
 
 // ── Copy quality guard ────────────────────────────────────────────────────────
@@ -275,5 +352,9 @@ module.exports = {
   NEURO_SYSTEM_PROMPT,
   buildNeuroCopyUserContent,
   GROQ_MODEL,
+  GROQ_MODEL_CHAIN,
+  groqCreateWithFallback,
+  isModelUnavailableError,
+  stripReasoning,
   getGroqClient,
 };

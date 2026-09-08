@@ -11,6 +11,10 @@ const {
   NEURO_SYSTEM_PROMPT,
   buildNeuroCopyUserContent,
   validateCopyOutput,
+  GROQ_MODEL_CHAIN,
+  groqCreateWithFallback,
+  isModelUnavailableError,
+  stripReasoning,
 } = require('../integrations/aiCopyService');
 const { completeManual2FA }   = require('../integrations/dropi/dropiAuthService');
 const sequelize               = require('../libs/sequelize');
@@ -18,8 +22,12 @@ const sequelize               = require('../libs/sequelize');
 const router = express.Router();
 
 // ── Groq client ───────────────────────────────────────────────────────────────
-const MODEL_PRIMARY  = 'llama-3.3-70b-versatile';
-const MODEL_FALLBACK = 'llama-3.1-8b-instant';
+// PRIMARY handles complex reasoning turns (comparisons, neurosales analysis);
+// FALLBACK handles routine sales chat and 429 spill-over. Both verified live on
+// Groq 2026-09-08 with native tool-calling. If either is retired, safeGroqCall
+// transparently walks GROQ_MODEL_CHAIN (see aiCopyService.js) so NutrIA stays up.
+const MODEL_PRIMARY  = GROQ_MODEL_CHAIN.find((m) => m.includes('gpt-oss-120b')) || GROQ_MODEL_CHAIN[0];
+const MODEL_FALLBACK = GROQ_MODEL_CHAIN[0];
 
 // In-memory order cache — one DB hit per order per 5 min regardless of tool-call repetitions
 const ORDER_CACHE     = new Map();
@@ -67,11 +75,27 @@ function pickModel(message) {
   return COMPLEX_RE.test(message) ? MODEL_PRIMARY : MODEL_FALLBACK;
 }
 
-// safeGroqCall: 70B→8B fallback on 429; throws RateLimitError when both models are saturated
+// safeGroqCall: 70B→8B fallback on 429; throws RateLimitError when both models are saturated.
+// Also transparently walks GROQ_MODEL_CHAIN when a model id is decommissioned/unknown,
+// so a stale GROQ_MODEL env var never takes NutrIA offline.
 async function safeGroqCall(groq, params) {
   try {
     return await groq.chat.completions.create(params);
   } catch (err) {
+    if (isModelUnavailableError(err)) {
+      for (const model of GROQ_MODEL_CHAIN) {
+        if (model === params.model) continue;
+        try {
+          console.error(`[NutrIA] modelo "${params.model}" no disponible — reintentando con "${model}"`);
+          return await groq.chat.completions.create({ ...params, model });
+        } catch (e2) {
+          if (isModelUnavailableError(e2)) continue;
+          if (e2.status === 429 || e2.statusCode === 429) throw new RateLimitError();
+          throw e2;
+        }
+      }
+      throw err;
+    }
     if (err.status === 429 || err.statusCode === 429) {
       if (params.model === MODEL_PRIMARY) {
         console.error('[NutrIA] 429 on 70B — retrying with 8B');
@@ -112,9 +136,13 @@ async function sendTelegram(text) {
 }
 
 // ── Sanitize reply — strip leaked <function=…>…</function> artifacts ──────────
+// Also strips <think>…</think> chain-of-thought blocks: Qwen/reasoning models on
+// Groq can emit them inline when the API doesn't split reasoning into its own field.
 function sanitizeReply(text) {
   if (!text || typeof text !== 'string') return '';
   return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think>[\s\S]*$/i, '') // unterminated (truncated) reasoning block
     .replace(/<function=[^>]*>[\s\S]*?<\/function>/gi, '')
     .replace(/\[function=[^\]]*\]/gi, '')
     .replace(/^\s*\n+/, '')
@@ -1276,23 +1304,23 @@ router.post(
       return res.status(503).json({ message: 'GROQ_API_KEY no configurada — agrega la variable en Railway.' });
     }
 
-    const copyModel = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+    const copyModel = GROQ_MODEL_CHAIN.join(' → '); // for logs only — real pick happens in groqCreateWithFallback
     const keySource = process.env.GROQ_API_KEY ? 'GROQ_API_KEY' : 'GROQ_IA_KEY(fallback)';
 
     // ── ?stream=0 — non-streaming fallback (prueba de fuego) ─────────────────
     // If text appears in the JSON response, the backend works and the problem is buffering.
     if (req.query.stream === '0') {
       try {
-        console.log(`[NeuroAI] NON-STREAM mode — producto: "${name.trim()}" | modelo: ${copyModel} | key: ${keySource}`);
-        const completion = await groq.chat.completions.create({
-          model:      copyModel,
+        console.log(`[NeuroAI] NON-STREAM mode — producto: "${name.trim()}" | cadena: ${copyModel} | key: ${keySource}`);
+        const { completion, model: usedModel } = await groqCreateWithFallback(groq, {
           messages: [
             { role: 'system', content: NEURO_SYSTEM_PROMPT },
             { role: 'user',   content: buildNeuroCopyUserContent({ name: name.trim(), description, rawDetails, variants, approvedExamples }) },
           ],
           max_tokens: 650,
         });
-        const text = completion.choices[0]?.message?.content ?? null;
+        const text = stripReasoning(completion.choices[0]?.message?.content ?? null);
+        console.log(`[NeuroAI] NON-STREAM modelo usado: ${usedModel}`);
         console.log(`[NeuroAI] NON-STREAM completado — ${text?.length ?? 0} chars`);
         if (!text) return res.status(502).json({ message: 'Groq no devolvió contenido.' });
         const qvNonStream = validateCopyOutput(text);
@@ -1332,10 +1360,10 @@ router.post(
     req.on('close', () => controller.abort());
 
     try {
-      console.log(`[NeuroAI] Stream iniciado — producto: "${name.trim()}" | modelo: ${copyModel} | key: ${keySource}`);
-      const stream = await groq.chat.completions.create(
+      console.log(`[NeuroAI] Stream iniciado — producto: "${name.trim()}" | cadena: ${copyModel} | key: ${keySource}`);
+      const { completion: stream, model: usedModel } = await groqCreateWithFallback(
+        groq,
         {
-          model:      copyModel,
           messages: [
             { role: 'system', content: NEURO_SYSTEM_PROMPT },
             { role: 'user',   content: buildNeuroCopyUserContent({ name: name.trim(), description, rawDetails, variants, approvedExamples }) },
@@ -1345,6 +1373,7 @@ router.post(
         },
         { signal: controller.signal }
       );
+      console.log(`[NeuroAI] Stream modelo usado: ${usedModel}`);
 
       let chunkCount = 0;
       let assembledText = '';
@@ -1364,7 +1393,7 @@ router.post(
       // Cannot un-send SSE chunks, so we emit a warning event that the dashboard uses
       // to show a "Regenerar" alert without blocking the display of the generated copy.
       if (assembledText) {
-        const qv = validateCopyOutput(assembledText);
+        const qv = validateCopyOutput(stripReasoning(assembledText));
         if (!qv.ok) {
           console.error(`[NeuroAI] QUALITY GATE FAIL (stream) — "${name.trim()}" — motivo: ${qv.reason} | preview: ${assembledText.slice(0, 120)}`);
           if (!res.writableEnded) {
