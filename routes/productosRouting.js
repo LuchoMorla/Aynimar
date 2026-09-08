@@ -1,5 +1,6 @@
 const express = require('express');
 const passport = require('passport');
+const boom = require('@hapi/boom');
 
 const { checkRoles } = require('../middlewares/authHandler');
 
@@ -59,6 +60,12 @@ router.get(
     try {
       const { id } = req.params;
       const product = await service.findOne(id);
+      // Lectura pública: un producto borrado no existe para la tienda.
+      // El storefront (getStaticProps) traduce este 404 a notFound → página 404.
+      // update()/delete() usan service.findOne directamente y NO pasan por aquí.
+      if (product.isDeleted) {
+        throw boom.notFound('Product not found');
+      }
       res.json(product);
     } catch (error) {
       next(error);
