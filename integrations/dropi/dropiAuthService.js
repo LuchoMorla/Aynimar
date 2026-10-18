@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { getTokenFromDB, saveTokenToDB, set2FAStatus } = require('./dropiTokenService');
+const { getTelegramToken } = require('../../libs/telegramSecurity');
 
 async function fetchJson(url, { method = 'POST', headers = {}, body, timeout = 15000 } = {}) {
   const controller = new AbortController();
@@ -97,7 +98,7 @@ function generateTOTP(base32Secret, windowOffset = 0) {
 // ── Telegram notification helper ─────────────────────────────────────────────
 
 const _sendTelegram = async (text) => {
-  const token  = process.env.TELEGRAM_BOT_TOKEN;
+  const token  = getTelegramToken();
   const chatId = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) {
     console.warn('[Dropi Auth] Telegram no configurado (falta TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID).');

@@ -1,7 +1,9 @@
 'use strict';
 
+const { getTelegramToken } = require('../libs/telegramSecurity');
+
 async function sendTelegramNotification(text) {
-  const token  = process.env.TELEGRAM_BOT_TOKEN;
+  const token  = getTelegramToken();
   const chatId = process.env.TELEGRAM_OWNER_ID || process.env.TELEGRAM_CHAT_ID;
 
   if (!token || !chatId) return;

@@ -18,6 +18,13 @@ const {
 } = require('../integrations/aiCopyService');
 const { completeManual2FA }   = require('../integrations/dropi/dropiAuthService');
 const sequelize               = require('../libs/sequelize');
+const {
+  getTelegramToken,
+  getAdminChatId,
+  isValidWebhookSecret,
+  verifyCallbackQuery,
+  maskId,
+} = require('../libs/telegramSecurity');
 
 const router = express.Router();
 
@@ -55,12 +62,6 @@ function logSalesEvent(models, { sessionId, outcome, productIds, turns, lastInte
 class RateLimitError extends Error {
   constructor() { super('rate_limit'); this.isRateLimit = true; }
 }
-
-// ── Telegram auto-discovery state ─────────────────────────────────────────────
-// Populated by the /telegram/webhook endpoint the first time a message arrives.
-// Used as last-resort fallback when neither TELEGRAM_OWNER_ID nor TELEGRAM_CHAT_ID is set.
-let detectedOwnerId = null;
-let ownerIdWarned   = false;
 
 function getGroqClient() {
   const apiKey = process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY;
@@ -112,12 +113,13 @@ async function safeGroqCall(groq, params) {
 }
 
 // ── Telegram helper ───────────────────────────────────────────────────────────
-// Priority: TELEGRAM_OWNER_ID → TELEGRAM_CHAT_ID → auto-discovered detectedOwnerId
+// Priority: TELEGRAM_OWNER_ID → TELEGRAM_CHAT_ID. Sin auto-descubrimiento: el
+// primer desconocido que escribiera al bot recibiría las alertas (F0).
 async function sendTelegram(text) {
-  const token  = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_OWNER_ID || process.env.TELEGRAM_CHAT_ID || detectedOwnerId;
+  const token  = getTelegramToken();
+  const chatId = getAdminChatId();
   if (!token || !chatId) {
-    console.warn('[NutrIA] Telegram no configurado — envía un mensaje al bot para auto-detectar el chat_id.');
+    console.warn('[NutrIA] Telegram no configurado (token/chat ausente o bloqueado en este entorno).');
     return false;
   }
   try {
@@ -1059,78 +1061,103 @@ router.get('/stats', passport.authenticate('jwt', { session: false }), checkRole
 });
 
 // ── GET /api/v1/ai/telegram/debug ────────────────────────────────────────────
-// Returns live webhook status from Telegram + local env/auto-discovery state.
-// Hit this endpoint after deploy to confirm the webhook is registered correctly.
-router.get('/telegram/debug', async (req, res) => {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+// Returns live webhook status from Telegram. Admin-only (F0): antes era público
+// y exponía el chat_id del CEO. Los ids se devuelven enmascarados.
+router.get('/telegram/debug', passport.authenticate('jwt', { session: false }), checkRoles('admin'), async (req, res) => {
+  const token = getTelegramToken();
   if (!token) {
-    return res.status(503).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN no configurado en Railway.' });
+    return res.status(503).json({ ok: false, error: 'Telegram no configurado o bloqueado en este entorno.' });
   }
   try {
     const tgRes  = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
     const tgData = await tgRes.json();
+    const info   = tgData.result ?? {};
     return res.json({
       ok:           tgData.ok,
-      webhook_info: tgData.result ?? null,
+      webhook_info: {
+        url:                  info.url ?? null,
+        pending_update_count: info.pending_update_count ?? null,
+        last_error_date:      info.last_error_date ?? null,
+        last_error_message:   info.last_error_message ?? null,
+        allowed_updates:      info.allowed_updates ?? null,
+      },
       local_state:  {
-        TELEGRAM_OWNER_ID: process.env.TELEGRAM_OWNER_ID || null,
-        TELEGRAM_CHAT_ID:  process.env.TELEGRAM_CHAT_ID  || null,
-        detectedOwnerId:   detectedOwnerId               || null,
-        ownerIdWarned,
+        admin_chat_id:      maskId(getAdminChatId()),
+        webhook_secret_set: !!process.env.TELEGRAM_WEBHOOK_SECRET,
       },
     });
   } catch (err) {
-    console.error('[Telegram:debug]', err.message);
-    return res.status(500).json({ ok: false, error: err.message });
+    console.error('[Telegram:debug] getWebhookInfo falló:', err.name);
+    return res.status(502).json({ ok: false, error: 'No se pudo consultar Telegram.' });
   }
 });
+
+// Responde a un callback_query (quita el "reloj" del botón). Nunca lanza.
+async function answerCallback(callbackQueryId, text) {
+  const token = getTelegramToken();
+  if (!token || !callbackQueryId) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ callback_query_id: callbackQueryId, text, show_alert: false }),
+    });
+  } catch (err) {
+    console.error('[Telegram Webhook] answerCallbackQuery falló:', err.name);
+  }
+}
 
 // ── POST /api/v1/ai/telegram/webhook ─────────────────────────────────────────
 // Receives ALL Telegram bot updates (NutrIA alerts + Dropi 2FA failover).
 // Returns 200 immediately — Telegram retries if we don't respond within 3 s.
 router.post('/telegram/webhook', async (req, res) => {
-  // Validate optional webhook secret (set when registering with Telegram).
-  const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (expectedSecret) {
-    const incoming = req.headers['x-telegram-bot-api-secret-token'];
-    if (incoming !== expectedSecret) {
-      console.warn('[Telegram Webhook] Rejected: invalid secret token.');
-      return res.sendStatus(403);
-    }
+  // F0: secreto OBLIGATORIO (fail-closed). Sin TELEGRAM_WEBHOOK_SECRET en el
+  // entorno, o con header ausente/incorrecto, la petición se rechaza.
+  if (!process.env.TELEGRAM_WEBHOOK_SECRET) {
+    console.error('[Telegram Webhook][CRITICAL] TELEGRAM_WEBHOOK_SECRET no configurado — update rechazado.');
+    return res.sendStatus(503);
+  }
+  if (!isValidWebhookSecret(req.headers['x-telegram-bot-api-secret-token'])) {
+    console.warn('[Telegram Webhook] Rejected: secret token ausente o inválido.');
+    return res.sendStatus(403);
   }
 
   res.sendStatus(200); // ack before any async work
 
   const update = req.body;
+
+  // ── callback_query — base para futuras aprobaciones (F0: no ejecuta nada) ──
+  // Nunca se aprueba por texto libre. Un callback solo es válido si viene del
+  // admin, en su chat, con callback_data firmado (libs/telegramSecurity.js).
+  if (update?.callback_query) {
+    const cq      = update.callback_query;
+    const verdict = verifyCallbackQuery(cq);
+    if (!verdict.ok) {
+      console.warn(`[Telegram Webhook] callback_query rechazado: ${verdict.reason}`);
+      await answerCallback(cq.id, '⛔ Acción no válida.');
+      return;
+    }
+    console.log(`[Telegram Webhook] callback_query válido (accion=${verdict.action}) — aprobaciones aún no habilitadas, no se ejecuta nada.`);
+    await answerCallback(cq.id, 'Las aprobaciones todavía no están habilitadas.');
+    return;
+  }
+
   const msg    = update?.message ?? update?.channel_post ?? update?.edited_message;
   if (!msg?.chat?.id) return;
 
   const incomingId = String(msg.chat.id);
   const text       = (msg.text || '').trim();
 
-  // Auto-discovery: capture the owner's chat_id on first message.
-  if (!detectedOwnerId) {
-    detectedOwnerId = incomingId;
-  }
-
-  if (!ownerIdWarned) {
-    const configured = process.env.TELEGRAM_OWNER_ID;
-    if (!configured || configured !== incomingId) {
-      ownerIdWarned = true;
-      console.warn(`[AUTO-CONFIG] First message from chat_id=${incomingId}. Set TELEGRAM_OWNER_ID=${incomingId} in Railway to make this permanent.`);
-    }
-  }
-
   // ── Dropi 2FA failover — CEO sends 6-digit code ───────────────────────────
   // Only process from the configured owner chat; ignore bots and groups.
-  const allowedChatId = process.env.TELEGRAM_OWNER_ID || process.env.TELEGRAM_CHAT_ID;
+  const allowedChatId = getAdminChatId();
   if (!allowedChatId || incomingId !== String(allowedChatId)) return;
 
   const codeMatch = text.match(/\b(\d{6})\b/);
   if (!codeMatch) return; // Not a 2FA code — NutrIA alert replies are ignored
 
   const code = codeMatch[1];
-  console.log(`[Telegram Webhook] Código 2FA recibido del CEO (chat_id=${incomingId}): ${code}`);
+  console.log('[Telegram Webhook] Código 2FA recibido del admin.'); // el código OTP no se registra
 
   try {
     await completeManual2FA(code);

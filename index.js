@@ -22,6 +22,12 @@ const routerApi = require('./routes');
 const cors = require('cors');
 const { checkApiKey } = require('./middlewares/authHandler');
 const { generalLimiter } = require('./middlewares/rateLimiter');
+const {
+  getTelegramToken,
+  telegramDisabledReason,
+  buildSetWebhookBody,
+  getAdminChatId,
+} = require('./libs/telegramSecurity');
 
 //Los middlewares del tipo error se deben crear despues de establecer el routing de nuestra aplicacion
 const {
@@ -165,10 +171,12 @@ app.use(errorHandler);
 // ── Telegram webhook auto-registration ───────────────────────────────────────
 // Runs once after the server is up. Uses BACKEND_URL (set manually in Railway)
 // or falls back to RAILWAY_PUBLIC_DOMAIN (injected automatically by Railway).
+// F0: siempre con secret_token (el handler rechaza updates sin él) y, fuera de
+// production, solo con el bot de pruebas (libs/telegramSecurity.js).
 async function registerTelegramWebhook() {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const token = getTelegramToken();
   if (!token) {
-    console.warn('[Telegram] TELEGRAM_BOT_TOKEN no configurado — webhook no registrado.');
+    console.warn(`[Telegram] Webhook no registrado — ${telegramDisabledReason()}.`);
     return;
   }
 
@@ -184,23 +192,29 @@ async function registerTelegramWebhook() {
   }
 
   const webhookUrl = `${rawDomain.replace(/\/$/, '')}/api/v1/ai/telegram/webhook`;
-  console.log(`[Telegram] Registrando webhook en: ${webhookUrl}`);
+  const { body, error } = buildSetWebhookBody(webhookUrl);
+  if (error) {
+    console.error(`[Telegram][CRITICAL] Webhook no registrado — ${error}. Los updates entrantes serán rechazados hasta corregirlo.`);
+    return;
+  }
+  console.log(`[Telegram] Registrando webhook en: ${webhookUrl}${body.allowed_updates ? ` (allowed_updates=${body.allowed_updates.join(',')})` : ''}`);
 
   try {
     const res  = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ url: webhookUrl, drop_pending_updates: false }),
+      body:    JSON.stringify(body),
     });
     const data = await res.json();
 
     if (data.ok) {
       console.log(`[Telegram] Webhook registrado correctamente ✓  URL: ${webhookUrl}`);
     } else {
-      console.error(`[Telegram][CRITICAL] setWebhook rechazado por Telegram: ${JSON.stringify(data)}`);
+      // Solo la descripción: nunca el cuerpo enviado (contiene secret_token).
+      console.error(`[Telegram][CRITICAL] setWebhook rechazado por Telegram: ${data.error_code ?? ''} ${data.description ?? ''}`);
     }
   } catch (err) {
-    console.error(`[Telegram][CRITICAL] Error de red al registrar webhook: ${err.message}`);
+    console.error(`[Telegram][CRITICAL] Error de red al registrar webhook: ${err.name}`);
   }
 }
 
@@ -208,8 +222,8 @@ async function registerTelegramWebhook() {
 // Sends a Telegram message on every Railway deploy with the exact health status.
 // Non-blocking — failures are logged but never crash the server.
 async function notifyDeployHealth() {
-  const token  = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_OWNER_ID || process.env.TELEGRAM_CHAT_ID;
+  const token  = getTelegramToken();
+  const chatId = getAdminChatId();
   if (!token || !chatId) return; // Telegram not configured — skip silently
 
   const checks = {

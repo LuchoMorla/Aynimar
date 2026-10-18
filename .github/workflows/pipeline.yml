@@ -27,6 +27,9 @@ jobs:
       - name: Run smoke tests
         run: node scripts/smoke-test.js
 
+      - name: Run Telegram security tests
+        run: node scripts/telegram-security-test.js
+
   # ── Gate 2: ESLint ───────────────────────────────────────────────────────────
   # Style and static-analysis gate. Runs in parallel with smoke tests.
   # Failure here blocks deploy even if smoke tests pass.
