@@ -168,9 +168,41 @@ function storeLink(productId, { network = 'instagram', campaign, ref }) {
   return `https://www.aynimar.com/store/${encodeURIComponent(productId)}?${q}`;
 }
 
+/** Texto listo para copiar en la red (kit de publicación manual). Solo datos de BD + beneficio del dueño. */
+function socialCaption({ name, price, benefit, link }) {
+  const b = String(benefit || '').replace(/\s+/g, ' ').trim();
+  return `${shortName(name)}\n${b}\nAhora a $${Number(price).toFixed(2)}.\nPídelo en aynimar.com 👉 ${link}`;
+}
+
 /** ref opaco ≤32 [A-Za-z0-9_-] para callback_data. */
 function newRef(productId) {
   return `v${productId}x${Date.now().toString(36)}${crypto.randomBytes(2).toString('hex')}`;
+}
+
+/**
+ * Envía el mp4 a Telegram para revisión y registra la fila pending (F2).
+ * Si la BD falla, el vídeo ya está en el chat: se avisa al admin y no se lanza
+ * (no se reintenta el envío). Lanza solo si Telegram no acepta el vídeo.
+ */
+async function sendForReview({ file, product, variant, benefit, network, ref }) {
+  const link = storeLink(product.id, { network, campaign: `video_${variant}`, ref });
+  const caption = `Vídeo ${variant.toUpperCase()} para revisión\n${shortName(product.name)} · $${Number(product.price).toFixed(2)}\nBeneficio: ${String(benefit).replace(/\s+/g, ' ').trim()}\nRef: ${ref}\n${link}`;
+  const { sendTelegramVideo } = require('../utils/telegramNotify');
+  const tg = await sendTelegramVideo(file, caption, ref);
+  if (!tg.ok) throw new Error(`Telegram no aceptó el vídeo ${ref}`);
+  console.log(`[Video] ${ref} enviado a revisión file_id=${tg.fileId}`);
+  try {
+    await require('../Services/creativeReviewService').recordPending({
+      ref, productId: product.id, variant, network, utmLink: link,
+      caption: socialCaption({ name: product.name, price: product.price, benefit, link }),
+      telegramFileId: tg.fileId, telegramMessageId: tg.messageId,
+    });
+  } catch (err) {
+    console.error(`[Video] ${ref} no se pudo registrar la revisión: ${err.name}`);
+    const { sendTelegramNotification } = require('../utils/telegramNotify');
+    await sendTelegramNotification(`⚠️ El vídeo ${ref} se envió pero no se pudo registrar su revisión: sus botones no funcionarán. Genera de nuevo la pieza.`);
+  }
+  return tg;
 }
 
 /**
@@ -191,12 +223,7 @@ async function createProductVideo({ productId, variant, benefit, network = 'inst
     const r = await renderProductVideo({ images, texts, outPath: file });
     console.log(`[Video] ${ref} producto=${productId} ${variant} ${(r.bytes / 1e6).toFixed(1)}MB ${r.durationS}s render=${((Date.now() - t0) / 1000).toFixed(1)}s`);
     if (!send) return { ...r, ref };
-    const link = storeLink(product.id, { network, campaign: `video_${variant}`, ref });
-    const caption = `Vídeo ${variant.toUpperCase()} para revisión\n${shortName(product.name)} · $${Number(product.price).toFixed(2)}\nBeneficio: ${String(benefit).replace(/\s+/g, ' ').trim()}\nRef: ${ref}\n${link}`;
-    const { sendTelegramVideo } = require('../utils/telegramNotify');
-    const tg = await sendTelegramVideo(file, caption, ref);
-    if (!tg.ok) throw new Error(`Telegram no aceptó el vídeo ${ref}`);
-    console.log(`[Video] ${ref} enviado a revisión file_id=${tg.fileId}`);
+    const tg = await sendForReview({ file, product, variant, benefit, network, ref });
     return { ...r, ref, fileId: tg.fileId };
   } finally {
     if (!outPath) fs.rmSync(file, { force: true });
@@ -204,6 +231,6 @@ async function createProductVideo({ productId, variant, benefit, network = 'inst
 }
 
 module.exports = {
-  renderProductVideo, createProductVideo, buildTexts, productImages, storeLink, newRef,
+  renderProductVideo, createProductVideo, buildTexts, productImages, storeLink, newRef, socialCaption, sendForReview,
   wrap, shortName, isAllowedImageUrl, ALLOWED_IMAGE_HOSTS, VARIANTS, FONT_FILE,
 };

@@ -22,6 +22,7 @@ const { SalesPerformance, SalesPerformanceSchema } = require('./salesPerformance
 const { AiCopyFeedback, AiCopyFeedbackSchema } = require('./aiCopyFeedbackModel');
 const { WalletTransaction, WalletTransactionSchema } = require('./walletTransactionModel');
 const { PaymentProof, PaymentProofSchema } = require('./paymentProofModel');
+const { CreativeReview, CreativeReviewSchema } = require('./creativeReviewModel');
 
 
 function setupModels(sequelize) {
@@ -48,6 +49,7 @@ function setupModels(sequelize) {
   AiCopyFeedback.init(AiCopyFeedbackSchema, AiCopyFeedback.config(sequelize));
   WalletTransaction.init(WalletTransactionSchema, WalletTransaction.config(sequelize));
   PaymentProof.init(PaymentProofSchema, PaymentProof.config(sequelize));
+  CreativeReview.init(CreativeReviewSchema, CreativeReview.config(sequelize));
 
   User.associate(sequelize.models);
   Customer.associate(sequelize.models);

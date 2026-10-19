@@ -128,6 +128,10 @@ async function main() {
   const express = require('express');
   const jwt = require('jsonwebtoken');
   require('../utils/auth');
+  // F2: la decisión se prueba en scripts/telegram-approvals-test.js; aquí solo
+  // se comprueba que un callback válido llega a esa capa (sin BD).
+  const reviewCalls = [];
+  require('../Services/creativeReviewService').decide = async (...a) => { reviewCalls.push(a); return { changed: false, review: null }; };
   const aiRouter = require('../routes/aiRouter');
   const { logErrors, ormErrorHandler, boomErrorHandler, errorHandler } = require('../middlewares/errorsHandler');
 
@@ -188,7 +192,7 @@ async function main() {
     await post({ update_id: 9, channel_post: { chat: { id: Number(FAKE.ADMIN_ID) }, text: '111222' } }, FAKE.SECRET);
     assert('channel_post del chat admin sigue aceptado (comportamiento previo)', twoFACalls.length === calls + 1);
 
-    out('\n▶ Webhook — callback_query (base de aprobaciones, F0 no ejecuta nada)');
+    out('\n▶ Webhook — callback_query (verificación previa a las aprobaciones F2)');
     const good = sec.signCallbackData('ap', 'abc123');
     assert('callback_data firmado ≤ 64 bytes', Buffer.byteLength(good) <= 64, good);
     const cq = (data, fromId = FAKE.ADMIN_ID, chatId = FAKE.ADMIN_ID) => ({ update_id: 2, callback_query: { id: 'cq1', from: { id: Number(fromId) }, message: { chat: { id: Number(chatId) } }, data } });
@@ -197,7 +201,7 @@ async function main() {
     calls = twoFACalls.length;
 
     await post(cq(good), FAKE.SECRET);
-    assert('callback válido del admin → respondido "no habilitadas", sin ejecutar', lastAnswer()?.body.text.includes('todavía no están habilitadas'));
+    assert('callback válido del admin → llega a la decisión F2 (ref inexistente → "no encontrada")', reviewCalls.length === 1 && reviewCalls[0][0] === 'abc123' && lastAnswer()?.body.text.includes('no encontrada'));
     const tamperedSig = good.slice(0, -1) + (good.endsWith('A') ? 'B' : 'A');
     await post(cq(tamperedSig), FAKE.SECRET);
     assert('firma manipulada → rechazado (bad_signature)', verdictLog().includes('bad_signature') && lastAnswer()?.body.text.includes('no válida'));
@@ -217,6 +221,7 @@ async function main() {
     assert('callback con firma válida pero sin secreto de webhook → 403', await post(cq(good), undefined) === 403);
     await post(cq('mk:ap:123456:AAAAAAAAAAAAAAAA'), FAKE.SECRET);
     assert('ningún callback dispara el 2FA de Dropi', twoFACalls.length === calls);
+    assert('ningún callback rechazado llega a la capa de decisión', reviewCalls.length === 1);
 
     out('\n▶ Endpoint de diagnóstico /telegram/debug');
     const noAuth = await getDebug(null);

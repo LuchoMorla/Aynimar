@@ -26,8 +26,8 @@ async function sendTelegramNotification(text) {
 /**
  * Envía un mp4 al admin para revisión con botones firmados Aprobar/Rechazar/Cambios.
  * Caption en texto plano (sin parse_mode): incluye datos de producto.
- * Los botones solo se registran hoy; ejecutarlos depende de F2 (autorizaciones).
- * @returns {Promise<{ok: boolean, fileId?: string}>}
+ * Los botones los procesa POST /api/v1/ai/telegram/webhook (F2).
+ * @returns {Promise<{ok: boolean, fileId?: string, messageId?: number}>}
  */
 async function sendTelegramVideo(filePath, caption, ref) {
   const token  = getTelegramToken();
@@ -52,11 +52,37 @@ async function sendTelegramVideo(filePath, caption, ref) {
       console.warn(`[TelegramNotify] Telegram rechazó el vídeo: ${data.error_code ?? resp.status} ${data.description ?? ''}`);
       return { ok: false };
     }
-    return { ok: true, fileId: data.result?.video?.file_id };
+    return { ok: true, fileId: data.result?.video?.file_id, messageId: data.result?.message_id };
   } catch (err) {
     console.warn('[TelegramNotify] Failed to send video:', err.message);
     return { ok: false };
   }
 }
 
-module.exports = { sendTelegramNotification, sendTelegramVideo };
+/**
+ * Llamada genérica a la Bot API (JSON). Nunca lanza ni registra el token.
+ * @returns {Promise<object|null>} result de Telegram, o null si falla.
+ */
+async function callTelegram(method, payload) {
+  const token = getTelegramToken();
+  if (!token) return null;
+  try {
+    const resp = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+      signal:  AbortSignal.timeout(15000),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!data.ok) {
+      console.warn(`[TelegramNotify] ${method} rechazado: ${data.error_code ?? resp.status} ${data.description ?? ''}`);
+      return null;
+    }
+    return data.result ?? true;
+  } catch (err) {
+    console.warn(`[TelegramNotify] ${method} falló:`, err.name);
+    return null;
+  }
+}
+
+module.exports = { sendTelegramNotification, sendTelegramVideo, callTelegram };
