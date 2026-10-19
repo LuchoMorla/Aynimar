@@ -88,6 +88,7 @@ async function main() {
     assert(`${v}: incluye precio formateado $24.90`, t.some((x) => x.text.includes('$24.90')));
     assert(`${v}: incluye el beneficio literal`, t.some((x) => x.text === d.benefit));
     assert(`${v}: sin envío gratis/garantía/contra entrega`, !t.some((x) => /gratis|garant|contra\s*entrega/i.test(x.text)));
+    assert(`${v}: sin textos que sugieran rebaja ("ahora a", "antes", "oferta")`, !t.some((x) => /ahora\s+a\b|\bantes\s+\$|oferta|descuento|rebaja/i.test(x.text)));
     assert(`${v}: tiempos crecientes dentro de la duración`, t.every((x, i) => x.from < x.to && (i === 0 || x.from >= t[i - 1].from)));
   }
   assert('variante desconocida → error', await rejects(async () => vs.buildTexts('v9', d), /variante/));

@@ -123,7 +123,7 @@ const VARIANTS = {
     { text: `Mira bien este ${d.name}`, from: 0, to: 0.17, pos: 'top', size: 66 },
     { text: d.benefit, from: 0.17, to: 0.45, pos: 'bottom' },
     { text: 'Fotos reales del producto', from: 0.45, to: 0.7, pos: 'bottom' },
-    { text: `Ahora a ${d.price}`, from: 0.7, to: 0.85, pos: 'bottom', size: 110 },
+    { text: `Precio: ${d.price}`, from: 0.7, to: 0.85, pos: 'bottom', size: 110 },
     { text: 'Pídelo en aynimar.com', from: 0.85, to: 1, pos: 'bottom', size: 70 },
   ] },
   v3: { maxImages: 6, texts: (d) => [ // "Antes de comprar"
@@ -187,7 +187,7 @@ function storeLink(productId, { network = 'instagram', campaign, ref }, env = pr
 /** Texto listo para copiar en la red (kit de publicación manual). Solo datos de BD + beneficio del dueño. */
 function socialCaption({ name, price, benefit, link }) {
   const b = String(benefit || '').replace(/\s+/g, ' ').trim();
-  return `${shortName(name)}\n${b}\nAhora a $${Number(price).toFixed(2)}.\nPídelo en aynimar.com 👉 ${link}`;
+  return `${shortName(name)}\n${b}\nPrecio: $${Number(price).toFixed(2)} · pagas al recibir.\nPídelo en aynimar.com 👉 ${link}`;
 }
 
 /** ref opaco ≤32 [A-Za-z0-9_-] para callback_data. */
