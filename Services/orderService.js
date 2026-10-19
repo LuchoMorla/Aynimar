@@ -340,7 +340,9 @@ class OrderService {
   //   paymentMethod/paymentStatus — Paso 11 (DeUna): default 'cod'/'pending'
   //   preserva EXACTAMENTE el comportamiento previo de confirmCod. Quien
   //   confirma un comprobante aprobado pasa 'deuna'/'paid' explícitamente.
-  async _finalizeAndDispatch(orderId, { userId, paymentMethod = 'cod', paymentStatus = 'pending' } = {}) {
+  //   attribution — opcional (tienda, ya validado por Joi). Solo se guarda si
+  //   la orden aún no tiene una (checkout() pudo fijarla antes).
+  async _finalizeAndDispatch(orderId, { userId, paymentMethod = 'cod', paymentStatus = 'pending', attribution } = {}) {
     // ── FASE 1: transacción DB (rápida, sin llamadas externas) ─────────────
     await sequelize.transaction(async (t) => {
       // Lock SÓLO la fila de la orden — `SELECT ... FROM orders WHERE id=? FOR
@@ -425,6 +427,10 @@ class OrderService {
           ...totals,
           fulfillmentStatus:     'PENDING_DISPATCH',
           fulfillmentRetryCount: 0,
+          // checkout() (créditos parciales / DeUna) ya fijó la fecha de compra:
+          // no se sobrescribe al aprobar el comprobante.
+          confirmedAt:           ord.confirmedAt ?? new Date(),
+          ...(attribution && !ord.attribution ? { attribution } : {}),
         },
         { transaction: t }
       );
@@ -729,8 +735,8 @@ class OrderService {
   // Reemplaza el antiguo PATCH /orders/:id {state:'pendiente_envio'}.
   // Toda la lógica (transacción + stock + despacho idempotente) vive en
   // _finalizeAndDispatch.
-  async confirmCod(orderId, userId) {
-    return this._finalizeAndDispatch(orderId, { userId });
+  async confirmCod(orderId, userId, attribution) {
+    return this._finalizeAndDispatch(orderId, { userId, attribution });
   }
 
   // ── Confirmar pago DeUna aprobado — Paso 11 ────────────────────────────────
@@ -1052,7 +1058,7 @@ class OrderService {
    * @param {number} creditsToApply   Non-negative integer — credits the user wants to use
    * @returns {Promise<CheckoutSummary>}
    */
-  async checkout(orderId, userId, creditsToApply = 0) {
+  async checkout(orderId, userId, creditsToApply = 0, attribution) {
     const walletService = new WalletService();
 
     return sequelize.transaction(async (t) => {
@@ -1190,6 +1196,8 @@ class OrderService {
           // `total` = monto neto adeudado (post-créditos), no el bruto — es
           // lo que efectivamente debe cobrarse (COD hoy, futuras pasarelas).
           total: amountToPay,
+          confirmedAt: new Date(),
+          ...(attribution ? { attribution } : {}),
         },
         { transaction: t }
       );

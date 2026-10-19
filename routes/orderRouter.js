@@ -22,6 +22,8 @@ const {
   getOrdersByBusinessId,
   getVerifyProductIsInOrderActive,
   checkoutSchema,
+  confirmCodSchema,
+  sanitizeAttribution,
 } = require('../schemaODtos/orderSchema');
 const {
   getOrderIdSchema,
@@ -179,8 +181,8 @@ router.post(
   async (req, res, next) => {
     try {
       const userId = req.user.sub;
-      const { orderId, creditsToApply } = req.body;
-      const summary = await service.checkout(orderId, userId, creditsToApply);
+      const { orderId, creditsToApply, attribution } = req.body;
+      const summary = await service.checkout(orderId, userId, creditsToApply, sanitizeAttribution(attribution));
       res.status(200).json(summary);
     } catch (error) {
       next(error);
@@ -396,10 +398,11 @@ router.post(
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'recycler', 'customer', 'business_owner'),
   validatorHandler(getOrderSchema, 'params'),
+  validatorHandler(confirmCodSchema, 'body'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const result = await service.confirmCod(id, req.user.sub);
+      const result = await service.confirmCod(id, req.user.sub, sanitizeAttribution(req.body?.attribution));
       res.status(200).json(result);
     } catch (error) {
       next(error);
