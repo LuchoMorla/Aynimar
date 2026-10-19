@@ -2,7 +2,12 @@ const express = require('express');
 const passport = require('passport');
 const boom = require('@hapi/boom');
 
-const { checkRoles } = require('../middlewares/authHandler');
+const { checkRoles, optionalAuth } = require('../middlewares/authHandler');
+
+// Las lecturas GET / y GET /:id son públicas (tienda). Solo un admin autenticado
+// recibe el modelo completo (costPrice, pricing*, dropi*); cualquier otro
+// (invitado, cliente, token inválido) recibe la vista pública filtrada.
+const isAdminRequest = (req) => req.user?.role === 'admin';
 
 const ProductsService = require('./../Services/productServices');
 
@@ -22,10 +27,11 @@ const service = new ProductsService();
 
 router.get(
   '/',
+  optionalAuth,
   validatorHandler(queryProductSchema, 'query'),
   async (req, res, next) => {
     try {
-      const products = await service.find(req.query);
+      const products = await service.find(req.query, { publicView: !isAdminRequest(req) });
       res.json(products);
     } catch (error) {
       next(error);
@@ -55,14 +61,19 @@ router.get(
 
 router.get(
   '/:id',
+  optionalAuth,
   validatorHandler(getProductSchema, 'params'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const product = await service.findOne(id);
-      // Lectura pública: un producto borrado no existe para la tienda.
-      // El storefront (getStaticProps) traduce este 404 a notFound → página 404.
+      // Lectura pública: un producto borrado o borrador (showShop=false) no
+      // existe para la tienda (findOnePublic → 404). El storefront
+      // (getStaticProps) traduce este 404 a notFound → página 404.
       // update()/delete() usan service.findOne directamente y NO pasan por aquí.
+      if (!isAdminRequest(req)) {
+        return res.json(await service.findOnePublic(id));
+      }
+      const product = await service.findOne(id);
       if (product.isDeleted) {
         throw boom.notFound('Product not found');
       }

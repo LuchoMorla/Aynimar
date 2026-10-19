@@ -2353,6 +2353,116 @@ async function runDeunaPaymentProofSuite() {
   }
 }
 
+// ── Lectura pública de productos — sin campos internos, sin borrados/borradores ──
+// GET /api/v1/products y /:id son públicos. Se invocan los handlers reales con
+// Product.findAll/findByPk STUBEADOS devolviendo una fila completa (con coste y
+// datos de proveedor): si algún campo interno llega a la respuesta, falla.
+async function runPublicProductFieldsSuite() {
+  console.log(`\n▶ Lectura pública de productos — sin campos internos (routes/productosRouting.js)`);
+
+  const priorDatabaseUrl = process.env.DATABASE_URL;
+  if (priorDatabaseUrl === undefined) {
+    process.env.DATABASE_URL = 'postgres://smoke:test@localhost:5432/smoketest_never_connects';
+  }
+  let models, productosRouter;
+  try {
+    ({ models } = require('../libs/sequelize'));
+    productosRouter = require('../routes/productosRouting');
+  } finally {
+    if (priorDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+  }
+
+  const INTERNAL_FIELDS = ['costPrice', 'cost_price', 'pricingSource', 'pricingCostSnapshot', 'pricing_cost_snapshot',
+    'pricingCalculatedPrice', 'pricingAppliedAt', 'dropiProductId', 'dropi_product_id', 'sourceProvider',
+    'lastSyncAt', 'isDeleted'];
+
+  function handlerFor(method, routePath) {
+    const layer = productosRouter.stack.find((l) => l.route && l.route.path === routePath && l.route.methods[method]);
+    if (!layer) throw new Error(`No se encontró la ruta ${method.toUpperCase()} ${routePath}`);
+    return layer.route.stack[layer.route.stack.length - 1].handle;
+  }
+  function invoke(handler, req) {
+    return new Promise((resolve) => {
+      const res = {
+        _status: 200,
+        status(code) { this._status = code; return this; },
+        json(payload) { resolve({ status: this._status, body: payload }); },
+      };
+      Promise.resolve(handler(req, res, (err) => resolve({ error: err }))).catch((err) => resolve({ error: err }));
+    });
+  }
+  const fullRow = (overrides = {}) => {
+    const row = {
+      id: 77, name: 'Producto', image: 'i.png', images: '["i.png"]', description: 'desc', price: 20, stock: 3,
+      showShop: true, isDeleted: false, categoryId: 1, businessId: 2, externalId: 'EXT-1', variants: null,
+      attributes: null, isBundle: false, createdAt: new Date(0),
+      dropiItems: [{ id: 'D1', value: 'Rojo', qty: 1, cost: 4, supplierPrice: 4 }],
+      costPrice: 9.5, pricingSource: 'manual', pricingCostSnapshot: '9.50', pricingCalculatedPrice: '20.00',
+      pricingAppliedAt: new Date(0), dropiProductId: 'DP-1', sourceProvider: 'dropi', lastSyncAt: new Date(0),
+      category: { id: 1, name: 'Cat', image: 'c.png', createdAt: new Date(0) },
+      ...overrides,
+    };
+    return { ...row, toJSON: () => row };
+  };
+  const leaked = (obj) => INTERNAL_FIELDS.filter((f) => f in obj);
+
+  const listHandler = handlerFor('get', '/');
+  const oneHandler = handlerFor('get', '/:id');
+  const originalFindAll = models.Product.findAll;
+  const originalFindByPk = models.Product.findByPk;
+
+  try {
+    // ── Listado público ──
+    let listOptions = null;
+    models.Product.findAll = async (options) => { listOptions = options; return [fullRow()]; };
+    const list = await invoke(listHandler, { query: { show_shop: 'false' } });
+    const item = list.body && list.body[0];
+    assert('GET /products público → 200 con un producto', list.status === 200 && item && item.id === 77, JSON.stringify(list.error || list.body));
+    assert('GET /products público → ningún campo interno (coste, pricing, proveedor, isDeleted)', item && leaked(item).length === 0, item && leaked(item).join(','));
+    assert('GET /products público → dropiItems solo con {id, value, qty} (sin coste del proveedor)',
+      item && JSON.stringify(item.dropiItems) === JSON.stringify([{ id: 'D1', value: 'Rojo', qty: 1 }]), item && JSON.stringify(item.dropiItems));
+    assert('GET /products público → la query filtra isDeleted=false y showShop=true aunque el cliente pida show_shop=false',
+      listOptions && listOptions.where.isDeleted === false && listOptions.where.showShop === true, JSON.stringify(listOptions && listOptions.where));
+    assert('GET /products público → la query SQL no selecciona costPrice', listOptions && Array.isArray(listOptions.attributes) && !listOptions.attributes.includes('costPrice'));
+
+    // Un cliente autenticado (no admin) recibe la misma vista pública.
+    const listCustomer = await invoke(listHandler, { query: {}, user: { sub: 5, role: 'customer' } });
+    assert('GET /products con rol customer → vista pública, sin costPrice', listCustomer.body && leaked(listCustomer.body[0]).length === 0);
+
+    // Admin conserva el modelo completo.
+    let adminOptions = null;
+    models.Product.findAll = async (options) => { adminOptions = options; return [fullRow()]; };
+    const listAdmin = await invoke(listHandler, { query: {}, user: { sub: 1, role: 'admin' } });
+    assert('GET /products como admin → modelo completo (incluye costPrice) y sin filtro forzado de isDeleted',
+      listAdmin.body && listAdmin.body[0].costPrice === 9.5 && adminOptions && !('isDeleted' in adminOptions.where));
+
+    // ── Detalle público ──
+    models.Product.findByPk = async () => fullRow();
+    const one = await invoke(oneHandler, { params: { id: 77 } });
+    assert('GET /products/:id público → 200 sin campos internos', one.status === 200 && one.body && leaked(one.body).length === 0, JSON.stringify(one.error || (one.body && leaked(one.body))));
+    assert('GET /products/:id público → category sin campos extra', one.body && JSON.stringify(Object.keys(one.body.category)) === JSON.stringify(['id', 'name', 'image']));
+
+    models.Product.findByPk = async () => fullRow({ isDeleted: true });
+    const deleted = await invoke(oneHandler, { params: { id: 77 } });
+    assert('GET /products/:id público de un producto borrado → 404', deleted.error && deleted.error.output && deleted.error.output.statusCode === 404);
+
+    models.Product.findByPk = async () => fullRow({ showShop: false });
+    const draft = await invoke(oneHandler, { params: { id: 77 } });
+    assert('GET /products/:id público de un borrador (showShop=false) → 404', draft.error && draft.error.output && draft.error.output.statusCode === 404);
+
+    models.Product.findByPk = async () => null;
+    const missing = await invoke(oneHandler, { params: { id: 78 } });
+    assert('GET /products/:id público inexistente → 404', missing.error && missing.error.output && missing.error.output.statusCode === 404);
+
+    models.Product.findByPk = async () => fullRow({ showShop: false });
+    const oneAdmin = await invoke(oneHandler, { params: { id: 77 }, user: { sub: 1, role: 'admin' } });
+    assert('GET /products/:id como admin → modelo completo, también para borradores', oneAdmin.body && oneAdmin.body.costPrice === 9.5);
+  } finally {
+    models.Product.findAll = originalFindAll;
+    models.Product.findByPk = originalFindByPk;
+  }
+}
+
 // ── Result summary (espera ambas suites async de arriba antes de contar/salir) ──
 runPricingSourceAuthoritySuite()
   .catch((err) => {
@@ -2372,6 +2482,11 @@ runPricingSourceAuthoritySuite()
   .then(() => runDeunaPaymentProofSuite())
   .catch((err) => {
     console.error('🚨 Error inesperado en la suite async de DeUna/comprobante:', err);
+    failed++;
+  })
+  .then(() => runPublicProductFieldsSuite())
+  .catch((err) => {
+    console.error('🚨 Error inesperado en la suite async de lectura pública de productos:', err);
     failed++;
   })
   .then(() => {

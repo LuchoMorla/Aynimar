@@ -6,6 +6,40 @@ const { Op } = require('sequelize');
  const setupModels = require('../db/models'); */
 const { models } = require('../libs/sequelize');
 
+// Campos que la tienda pública (sin auth de admin) puede ver. Es una ALLOWLIST:
+// cualquier columna nueva del modelo queda privada por defecto. Fuera quedan,
+// entre otros: costPrice, pricingSource/pricingCostSnapshot/pricingCalculatedPrice/
+// pricingAppliedAt, dropiProductId, sourceProvider, lastSyncAt e isDeleted.
+// Campos verificados contra lo que consume frontAynimar (store/[id], FormProduct,
+// ProductList, sitemap).
+const PUBLIC_PRODUCT_FIELDS = [
+  'id', 'name', 'image', 'images', 'description', 'price', 'stock', 'showShop',
+  'createdAt', 'categoryId', 'businessId', 'externalId', 'variants', 'attributes',
+  'isBundle', 'dropiItems',
+];
+
+// Proyección a la forma pública. Se aplica sobre el objeto ya leído (no solo vía
+// `attributes` en SQL) para que un campo interno nunca salga aunque cambie la query.
+// dropiItems: la tienda necesita {id, value, qty} para el selector de variantes y
+// el resumen de pack (selectedDropiId vuelve en el carrito); nada más del JSONB sale.
+function toPublicProduct(product) {
+  const row = product && typeof product.toJSON === 'function' ? product.toJSON() : product;
+  const out = {};
+  for (const field of PUBLIC_PRODUCT_FIELDS) {
+    if (field in row) out[field] = row[field];
+  }
+  if (Array.isArray(out.dropiItems)) {
+    out.dropiItems = out.dropiItems.map((item) => ({
+      id: item?.id, value: item?.value, qty: item?.qty,
+    }));
+  }
+  if (row.category) {
+    const { id, name, image } = row.category;
+    out.category = { id, name, image };
+  }
+  return out;
+}
+
 class ProductsService {
   constructor() {
     /*         this.products = []; */
@@ -23,7 +57,9 @@ class ProductsService {
     return newProduct;
   }
 
-  async find(query) {
+  // publicView=true: solo productos visibles en tienda (no borrados, showShop) y
+  // solo campos públicos. publicView=false: modelo completo (uso admin).
+  async find(query, { publicView = false } = {}) {
 
     const options = {
       include: ['category'],
@@ -60,8 +96,28 @@ class ProductsService {
     }
     // ------------------------------------------
 
+    if (publicView) {
+      options.attributes = PUBLIC_PRODUCT_FIELDS;
+      // Se aplican después de los filtros del query: un `show_shop=false`
+      // público no puede sobreescribirlos.
+      options.where.isDeleted = false;
+      options.where.showShop = true;
+    }
+
     const products = await models.Product.findAll(options);
-    return products;
+    return publicView ? products.map(toPublicProduct) : products;
+  }
+
+  // Lectura pública de un producto: borrados y borradores (showShop=false) no
+  // existen para la tienda → 404. update()/delete() siguen usando findOne().
+  async findOnePublic(id) {
+    const product = await models.Product.findByPk(id, {
+      attributes: [...PUBLIC_PRODUCT_FIELDS, 'isDeleted'],
+    });
+    if (!product || product.isDeleted || product.showShop !== true) {
+      throw boom.notFound('Product not found');
+    }
+    return toPublicProduct(product);
   }
 
   async findOne(id) {
@@ -119,3 +175,4 @@ class ProductsService {
   }
 }
 module.exports = ProductsService;
+module.exports.PUBLIC_PRODUCT_FIELDS = PUBLIC_PRODUCT_FIELDS;
