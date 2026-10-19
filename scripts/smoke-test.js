@@ -1525,8 +1525,8 @@ suite('DeUna/Comprobante — schema Joi, roles y aislamiento de orderTotals (Pas
   const orderServiceSource = fs.readFileSync(path.join(__dirname, '..', 'Services', 'orderService.js'), 'utf8');
   assert("_finalizeAndDispatch conserva los defaults paymentMethod='cod', paymentStatus='pending' (cero cambio de comportamiento para confirmCod)",
     /paymentMethod\s*=\s*'cod'/.test(orderServiceSource) && /paymentStatus\s*=\s*'pending'/.test(orderServiceSource));
-  assert('confirmCod sigue llamando _finalizeAndDispatch SOLO con { userId } — no le pasa paymentMethod/paymentStatus (usa los defaults de COD intactos)',
-    /confirmCod\(orderId, userId\)\s*\{\s*return this\._finalizeAndDispatch\(orderId,\s*\{\s*userId\s*\}\);/.test(orderServiceSource.replace(/\s+/g, ' ')));
+  assert('confirmCod sigue llamando _finalizeAndDispatch SOLO con { userId, attribution } — no le pasa paymentMethod/paymentStatus (usa los defaults de COD intactos)',
+    /confirmCod\(orderId, userId, attribution\)\s*\{\s*return this\._finalizeAndDispatch\(orderId,\s*\{\s*userId,\s*attribution\s*\}\);/.test(orderServiceSource.replace(/\s+/g, ' ')));
   assert('confirmPaymentProof existe y delega en _finalizeAndDispatch con paymentMethod/paymentStatus explícitos (mismo camino que confirmCod, sin duplicar la lógica de stock/lock/despacho)',
     /confirmPaymentProof\(orderId,\s*\{\s*paymentMethod,\s*paymentStatus\s*\}\)/.test(orderServiceSource.replace(/\s+/g, ' ')));
 
@@ -1687,6 +1687,45 @@ async function runSyncPriceProtectionSuite() {
     models.Product.findOrCreate = originalFindOrCreate;
   }
 }
+
+// ── Atribución de pedidos (UTM) + confirmed_at — schema y estructura, sin DB ──
+suite('Atribución de pedidos — attributionSchema, confirm-cod/checkout y migración aditiva', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const { attributionSchema, confirmCodSchema, checkoutSchema } = require('../schemaODtos/orderSchema');
+
+  const full = {
+    utm_source: 'tiktok', utm_medium: 'video', utm_campaign: 'oct26', utm_content: 'vid123', utm_term: 'x',
+    fbclid: 'fb1', ttclid: 'tt1', referrer: 'https://www.tiktok.com/', landing_path: '/store/23',
+    first_seen_at: '2026-10-18T10:00:00.000Z',
+  };
+  assert('attributionSchema acepta las 10 claves permitidas', !attributionSchema.validate(full).error);
+  assert('attributionSchema RECHAZA claves desconocidas', !!attributionSchema.validate({ utm_source: 'a', email: 'x@y.com' }).error);
+  assert('attributionSchema RECHAZA strings > 200', !!attributionSchema.validate({ referrer: 'a'.repeat(201) }).error);
+  assert('attributionSchema RECHAZA valores no string', !!attributionSchema.validate({ utm_source: { $gt: 1 } }).error);
+  assert('confirmCodSchema acepta body vacío {} (clientes que no envían attribution)', !confirmCodSchema.validate({}).error);
+  assert('confirmCodSchema acepta body undefined', !confirmCodSchema.validate(undefined).error);
+  assert('confirmCodSchema acepta { attribution }', !confirmCodSchema.validate({ attribution: { utm_source: 'tiktok' } }).error);
+  assert('confirmCodSchema RECHAZA otros campos (p. ej. total)', !!confirmCodSchema.validate({ total: 1 }).error);
+  assert('checkoutSchema sigue aceptando { orderId, creditsToApply } sin attribution', !checkoutSchema.validate({ orderId: 1, creditsToApply: 0 }).error);
+  assert('checkoutSchema acepta attribution opcional', !checkoutSchema.validate({ orderId: 1, attribution: { utm_campaign: 'c' } }).error);
+
+  const routerSource = fs.readFileSync(path.join(__dirname, '..', 'routes', 'orderRouter.js'), 'utf8');
+  assert('POST /:id/confirm-cod valida el body con confirmCodSchema',
+    /'\/:id\/confirm-cod'[\s\S]{0,300}validatorHandler\(confirmCodSchema, 'body'\)/.test(routerSource));
+
+  const svc = fs.readFileSync(path.join(__dirname, '..', 'Services', 'orderService.js'), 'utf8');
+  assert('_finalizeAndDispatch fija confirmedAt sin sobrescribir uno previo', /confirmedAt:\s*ord\.confirmedAt \?\? new Date\(\)/.test(svc));
+  assert('checkout() fija confirmedAt', /total: amountToPay,\s*confirmedAt: new Date\(\)/.test(svc));
+
+  const migDir = path.join(__dirname, '..', 'db', 'migrations');
+  const mig = fs.readFileSync(path.join(migDir, '20261018000001-add-attribution-and-confirmed-at-to-orders.js'), 'utf8');
+  assert('migración de atribución: solo addColumn nullable (aditiva), sin UPDATE/backfill',
+    (mig.match(/addColumn\(/g) || []).length === 2 && (mig.match(/allowNull: true/g) || []).length === 2 && !/bulkUpdate|UPDATE\s/.test(mig.replace(/\/\*[\s\S]*?\*\//, '')));
+  const { OrderSchema } = require('../db/models/orderModel');
+  assert('orderModel declara attribution (JSONB) y confirmedAt (confirmed_at), ambos nullable',
+    OrderSchema.attribution?.allowNull === true && OrderSchema.confirmedAt?.field === 'confirmed_at' && OrderSchema.confirmedAt?.allowNull === true);
+});
 
 // ── 10. Environment variable presence (warn-only) ────────────────────────────
 suite('Environment variable presence (warnings only)', () => {

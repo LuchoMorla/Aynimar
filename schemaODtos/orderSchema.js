@@ -86,8 +86,29 @@ const updateItemSchema = Joi.object({
 });
 //se le podrían agregar cosas como estados(entregada, se pago, no se pago, etc.), dirección, etc.
 
+// Atribución opcional enviada por la tienda al confirmar la compra. Solo
+// claves conocidas (Joi rechaza las desconocidas), strings cortos.
+const attrStr = Joi.string().max(200);
+const attributionSchema = Joi.object({
+  utm_source: attrStr,
+  utm_medium: attrStr,
+  utm_campaign: attrStr,
+  utm_content: attrStr,
+  utm_term: attrStr,
+  fbclid: attrStr,
+  ttclid: attrStr,
+  referrer: attrStr,
+  landing_path: attrStr,
+  first_seen_at: attrStr,
+});
+
+const confirmCodSchema = Joi.object({
+  attribution: attributionSchema.optional(),
+});
+
 const checkoutSchema = Joi.object({
   orderId: orderId.required(),
+  attribution: attributionSchema.optional(),
   // Integer credits the user wants to redeem (0 = no credits, omit = same).
   // The service caps this at floor(subtotal) automatically.
   creditsToApply: Joi.number().integer().min(0).default(0),
@@ -107,4 +128,6 @@ module.exports = {
   getOrdersByBusinessId,
   getVerifyProductIsInOrderActive,
   checkoutSchema,
+  confirmCodSchema,
+  attributionSchema,
 };

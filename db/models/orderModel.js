@@ -145,6 +145,18 @@ const OrderSchema = {
       return v == null ? 0 : parseFloat(v);
     },
   },
+  // Atribución (UTM / click ids, último toque) y fecha real de compra.
+  // Ver db/migrations/20261018000001-add-attribution-and-confirmed-at-to-orders.js
+  attribution: {
+    field: 'attribution',
+    allowNull: true,
+    type: DataTypes.JSONB,
+  },
+  confirmedAt: {
+    field: 'confirmed_at',
+    allowNull: true,
+    type: DataTypes.DATE,
+  },
   total: {
     field: 'total',
     allowNull: false,
