@@ -10,6 +10,8 @@ const { checkRoles }          = require('../middlewares/authHandler');
 const validatorHandler        = require('../middlewares/validatorHandler');
 const { enqueueVideo }        = require('../libs/videoQueue');
 const { newRef }              = require('../integrations/videoService');
+const reviews                 = require('../Services/creativeReviewService');
+const { callTelegram }        = require('../utils/telegramNotify');
 const {
   optimizeProductCopy,
   NEURO_SYSTEM_PROMPT,
@@ -1133,6 +1135,101 @@ async function answerCallback(callbackQueryId, text) {
   }
 }
 
+// ── F2: revisión de piezas desde Telegram ────────────────────────────────────
+// "Aprobar" NO publica en redes: marca la pieza y envía el kit de publicación manual.
+const escHtml = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+function adminMessage(text, extra = {}) {
+  return callTelegram('sendMessage', { chat_id: getAdminChatId(), text, ...extra });
+}
+
+function publishKit(r) {
+  const net = escHtml(r.network || 'la red');
+  return `📦 <b>KIT DE PUBLICACIÓN</b>\nRef: ${escHtml(r.ref)} · ${net}\n\n` +
+    `<b>1. Texto para copiar</b> (tócalo para copiarlo):\n<pre>${escHtml(r.caption)}</pre>\n\n` +
+    `<b>2. Link con UTM</b>:\n${escHtml(r.utmLink)}\n\n` +
+    `Coste de producción: ${r.productionCostUsd == null ? 'desconocido' : `$${Number(r.productionCostUsd).toFixed(4)}`}\n\n` +
+    `<b>3. Pasos manuales</b>\n` +
+    `• Abre el vídeo de este chat → ⋮ → Guardar / Descargar.\n` +
+    `• Publícalo en ${net} y pega el texto del punto 1.\n` +
+    `• Si la red no hace clicables los links del texto, pon el link en la bio o en una historia con enlace.\n\n` +
+    `Nada se publica automáticamente.`;
+}
+
+async function handleReviewCallback(cq, { action, ref }) {
+  let result;
+  try {
+    result = await reviews.decide(ref, action, cq.from.id);
+  } catch (err) {
+    console.error(`[Telegram Webhook] no se pudo registrar la decisión de ${ref}: ${err.name}`);
+    await answerCallback(cq.id, '⚠️ No se pudo registrar la decisión. Inténtalo de nuevo.');
+    return;
+  }
+  const { changed, review } = result;
+  if (!review) {
+    console.warn(`[Telegram Webhook] callback para pieza inexistente ${ref}.`);
+    await answerCallback(cq.id, 'Pieza no encontrada.');
+    return;
+  }
+  const label = reviews.STATUS_LABEL[review.status] || review.status;
+  if (!changed) {
+    console.log(`[Telegram Webhook] ${ref} ya decidida (${review.status}); sin cambios.`);
+    await answerCallback(cq.id, `Ya decidido: ${label}`);
+    return;
+  }
+  console.log(`[Telegram Webhook] ${ref} → ${review.status}`);
+  await answerCallback(cq.id, label);
+
+  const chatId = cq.message?.chat?.id;
+  const messageId = cq.message?.message_id;
+  const replyTo = messageId ? { reply_to_message_id: messageId } : {};
+  if (chatId && messageId) {
+    // Quitar botones (evita doble clic) y añadir el estado al caption; si no se
+    // puede editar, el estado va como respuesta al vídeo.
+    await callTelegram('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } });
+    const caption = `${String(cq.message.caption || '').slice(0, 960)}\n\nEstado: ${label}`;
+    const edited = await callTelegram('editMessageCaption', { chat_id: chatId, message_id: messageId, caption, reply_markup: { inline_keyboard: [] } });
+    if (!edited) await adminMessage(`Estado de ${ref}: ${label}`, replyTo);
+  }
+
+  if (review.status === 'approved') await adminMessage(publishKit(review), { parse_mode: 'HTML', ...replyTo });
+  else if (review.status === 'rejected') await adminMessage(`❌ Pieza ${ref} rechazada. No se publicará.`, replyTo);
+  else await adminMessage(`✏️ Ref: ${ref}\nResponde (Responder) a este mensaje o al vídeo con los cambios que quieres.`, replyTo);
+}
+
+/** true si el texto se guardó como cambios de una pieza en changes_requested. */
+async function saveChangeRequestSafe(ref, text, messageId) {
+  try {
+    if (!(await reviews.saveChangeRequest(ref, text))) return false;
+  } catch (err) {
+    console.error(`[Telegram Webhook] no se pudieron guardar los cambios de ${ref}: ${err.name}`);
+    await adminMessage(`⚠️ No se pudieron guardar los cambios de ${ref}. Inténtalo de nuevo.`, { reply_to_message_id: messageId });
+    return true;
+  }
+  console.log(`[Telegram Webhook] cambios guardados para ${ref}.`);
+  await adminMessage(`📝 Cambios guardados para ${ref}.`, { reply_to_message_id: messageId });
+  return true;
+}
+
+async function handleAdminCommand(cmd) {
+  try {
+    if (cmd === 'estado') {
+      const [rows, social] = await Promise.all([reviews.latest(10), reviews.isSocialEnabled()]);
+      const lines = rows.map((r) => `• ${r.ref} · producto ${r.productId} · ${r.variant || '-'} · ${r.network || '-'} — ${reviews.STATUS_LABEL[r.status] || r.status}`);
+      await adminMessage(`Últimas piezas:\n${lines.join('\n') || '(ninguna)'}\n\nInterruptor de publicación (${reviews.SOCIAL_KEY}): ${social ? 'ON' : 'OFF'}`);
+      return;
+    }
+    // /start lo envía Telegram al abrir el bot: no puede encender la publicación.
+    const enabled = cmd === 'reanudar';
+    await reviews.setSocialEnabled(enabled);
+    console.log(`[Social] interruptor de publicación → ${enabled ? 'ON' : 'OFF'} (admin vía Telegram).`);
+    await adminMessage(`Interruptor de publicación: ${enabled ? 'ON' : 'OFF'}.\nNo hay publicador automático: la publicación sigue siendo manual con el kit.`);
+  } catch (err) {
+    console.error(`[Telegram Webhook] comando /${cmd} falló: ${err.name}`);
+    await adminMessage(`⚠️ No se pudo ejecutar /${cmd}.`);
+  }
+}
+
 // ── POST /api/v1/ai/telegram/webhook ─────────────────────────────────────────
 // Receives ALL Telegram bot updates (NutrIA alerts + Dropi 2FA failover).
 // Returns 200 immediately — Telegram retries if we don't respond within 3 s.
@@ -1152,7 +1249,7 @@ router.post('/telegram/webhook', async (req, res) => {
 
   const update = req.body;
 
-  // ── callback_query — base para futuras aprobaciones (F0: no ejecuta nada) ──
+  // ── callback_query — aprobaciones F2 ──────────────────────────────────────
   // Nunca se aprueba por texto libre. Un callback solo es válido si viene del
   // admin, en su chat, con callback_data firmado (libs/telegramSecurity.js).
   if (update?.callback_query) {
@@ -1163,8 +1260,7 @@ router.post('/telegram/webhook', async (req, res) => {
       await answerCallback(cq.id, '⛔ Acción no válida.');
       return;
     }
-    console.log(`[Telegram Webhook] callback_query válido (accion=${verdict.action}) — aprobaciones aún no habilitadas, no se ejecuta nada.`);
-    await answerCallback(cq.id, 'Las aprobaciones todavía no están habilitadas.');
+    await handleReviewCallback(cq, verdict);
     return;
   }
 
@@ -1178,6 +1274,18 @@ router.post('/telegram/webhook', async (req, res) => {
   // Only process from the configured owner chat; ignore bots and groups.
   const allowedChatId = getAdminChatId();
   if (!allowedChatId || incomingId !== String(allowedChatId)) return;
+
+  // ── F2: comandos y respuestas de cambios (solo mensajes nuevos del admin) ──
+  // Un texto que sea SOLO 6 dígitos nunca se trata como cambios: va al 2FA.
+  if (update.message && String(msg.from?.id) === String(allowedChatId)) {
+    const cmd = /^\/(estado|stop|reanudar)(?:@\w+)?$/i.exec(text);
+    if (cmd) { await handleAdminCommand(cmd[1].toLowerCase()); return; }
+    const replied = msg.reply_to_message;
+    if (replied?.from?.is_bot && text && !/^\d{6}$/.test(text)) {
+      const ref = /Ref: ([A-Za-z0-9_-]{1,32})/.exec(replied.caption || replied.text || '')?.[1];
+      if (ref && await saveChangeRequestSafe(ref, text, msg.message_id)) return;
+    }
+  }
 
   const codeMatch = text.match(/\b(\d{6})\b/);
   if (!codeMatch) return; // Not a 2FA code — NutrIA alert replies are ignored
