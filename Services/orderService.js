@@ -651,8 +651,36 @@ class OrderService {
       console.log('Emails enviados a los dueños de negocios:', Object.keys(ownersData));
     }
   }
-  async delete(id) {
+  // ¿Contiene la orden algún producto de un negocio cuyo dueño es este usuario?
+  async isOrderOfBusinessOwner(orderId, userId) {
+    const [rows] = await sequelize.query(
+      `SELECT 1 FROM orders_products op
+         JOIN products p ON p.id = op.product_id
+         JOIN business b ON b.id = p.business_id
+         JOIN bussiness_owner bo ON bo.id = b.business_owner_id
+        WHERE op.order_id = :orderId AND bo.user_id = :userId
+        LIMIT 1`,
+      { replacements: { orderId, userId } }
+    );
+    return rows.length > 0;
+  }
+
+  // IDOR: admin ve/borra cualquiera; el cliente solo la suya; el business_owner
+  // solo órdenes con productos de su negocio. Sin permiso → 404 (no revela existencia).
+  async findOneForUser(id, { sub, role }) {
+    const order = await this.findOne(id);
+    if (!order) throw boom.notFound('Orden no encontrada');
+    if (role === 'admin') return order;
+    if (order.customer && order.customer.userId === Number(sub)) return order;
+    if (role === 'business_owner' && (await this.isOrderOfBusinessOwner(order.id, sub))) return order;
+    throw boom.notFound('Orden no encontrada');
+  }
+
+  // Borrado: solo admin (cualquiera) o business_owner (órdenes de su negocio).
+  async delete(id, { sub, role } = { role: 'admin' }) {
     const model = await this.findOne(id);
+    const allowed = model && (role === 'admin' || (role === 'business_owner' && (await this.isOrderOfBusinessOwner(model.id, sub))));
+    if (!allowed) throw boom.notFound('Orden no encontrada');
     await model.destroy();
     return { rta: true };
   }

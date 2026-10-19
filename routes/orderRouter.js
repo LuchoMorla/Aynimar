@@ -210,7 +210,8 @@ router.get(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const order = await service.findOne(id);
+      // IDOR: solo admin, el cliente dueño o el business_owner del negocio; si no, 404.
+      const order = await service.findOneForUser(id, req.user);
       res.json(order);
     } catch (error) {
       next(error);
@@ -543,12 +544,14 @@ router.patch(
 router.delete(
   '/:id',
   passport.authenticate('jwt', { session: false }),
-  checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  // IDOR: antes cualquier cliente podía borrar pedidos ajenos. El dashboard
+  // (solo business_owner) lo usa: se limita a órdenes de su negocio.
+  checkRoles('admin', 'business_owner'),
   validatorHandler(getOrderSchema, 'params'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const deleteOrder = await service.delete(id);
+      const deleteOrder = await service.delete(id, req.user);
       res.status(201).json(deleteOrder);
     } catch (error) {
       next(error);
