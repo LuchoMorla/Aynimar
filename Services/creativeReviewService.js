@@ -15,8 +15,8 @@ const STATUS_LABEL = {
 };
 const SOCIAL_KEY = 'social.enabled';
 
-function recordPending({ ref, productId, variant, network, utmLink, caption, telegramFileId, telegramMessageId }) {
-  return models.CreativeReview.create({ ref, productId, variant, network, utmLink, caption, telegramFileId, telegramMessageId, status: 'pending' });
+function recordPending({ ref, productId, variant, network, utmLink, caption, telegramFileId, telegramMessageId, productionCostUsd = null }) {
+  return models.CreativeReview.create({ ref, productId, variant, network, utmLink, caption, telegramFileId, telegramMessageId, productionCostUsd, status: 'pending' });
 }
 
 /**

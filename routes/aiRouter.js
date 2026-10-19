@@ -1148,6 +1148,7 @@ function publishKit(r) {
   return `📦 <b>KIT DE PUBLICACIÓN</b>\nRef: ${escHtml(r.ref)} · ${net}\n\n` +
     `<b>1. Texto para copiar</b> (tócalo para copiarlo):\n<pre>${escHtml(r.caption)}</pre>\n\n` +
     `<b>2. Link con UTM</b>:\n${escHtml(r.utmLink)}\n\n` +
+    `Coste de producción: ${r.productionCostUsd == null ? 'desconocido' : `$${Number(r.productionCostUsd).toFixed(4)}`}\n\n` +
     `<b>3. Pasos manuales</b>\n` +
     `• Abre el vídeo de este chat → ⋮ → Guardar / Descargar.\n` +
     `• Publícalo en ${net} y pega el texto del punto 1.\n` +

@@ -163,9 +163,25 @@ function productImages(product) {
   return [...new Set([product.image, ...(Array.isArray(extra) ? extra : [])])].filter((u) => typeof u === 'string' && isAllowedImageUrl(u));
 }
 
-function storeLink(productId, { network = 'instagram', campaign, ref }) {
+const DEFAULT_STORE_BASE_URL = 'https://www.aynimar.com';
+// Motor ffmpeg local con fotos reales: sin coste variable por pieza.
+const FFMPEG_PRODUCTION_COST_USD = 0;
+
+/** STORE_BASE_URL (p.ej. la tienda de staging) validada: https, sin query/hash/credenciales, sin barra final. */
+function storeBaseUrl(env = process.env) {
+  const raw = env.STORE_BASE_URL;
+  if (!raw) return DEFAULT_STORE_BASE_URL;
+  try {
+    const u = new URL(raw);
+    if (u.protocol === 'https:' && !u.search && !u.hash && !u.username && !u.password) return `${u.origin}${u.pathname}`.replace(/\/+$/, '');
+  } catch { /* inválida: se usa la de por defecto */ }
+  console.warn('[Video] STORE_BASE_URL inválida (debe ser https://host[/ruta]); se usa la tienda por defecto.');
+  return DEFAULT_STORE_BASE_URL;
+}
+
+function storeLink(productId, { network = 'instagram', campaign, ref }, env = process.env) {
   const q = new URLSearchParams({ utm_source: network, utm_medium: 'organic', utm_campaign: campaign, utm_content: ref });
-  return `https://www.aynimar.com/store/${encodeURIComponent(productId)}?${q}`;
+  return `${storeBaseUrl(env)}/store/${encodeURIComponent(productId)}?${q}`;
 }
 
 /** Texto listo para copiar en la red (kit de publicación manual). Solo datos de BD + beneficio del dueño. */
@@ -196,6 +212,7 @@ async function sendForReview({ file, product, variant, benefit, network, ref }) 
       ref, productId: product.id, variant, network, utmLink: link,
       caption: socialCaption({ name: product.name, price: product.price, benefit, link }),
       telegramFileId: tg.fileId, telegramMessageId: tg.messageId,
+      productionCostUsd: FFMPEG_PRODUCTION_COST_USD,
     });
   } catch (err) {
     console.error(`[Video] ${ref} no se pudo registrar la revisión: ${err.name}`);
@@ -231,6 +248,6 @@ async function createProductVideo({ productId, variant, benefit, network = 'inst
 }
 
 module.exports = {
-  renderProductVideo, createProductVideo, buildTexts, productImages, storeLink, newRef, socialCaption, sendForReview,
+  renderProductVideo, createProductVideo, buildTexts, productImages, storeLink, storeBaseUrl, newRef, socialCaption, sendForReview,
   wrap, shortName, isAllowedImageUrl, ALLOWED_IMAGE_HOSTS, VARIANTS, FONT_FILE,
 };

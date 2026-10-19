@@ -20,6 +20,7 @@ const { spawnSync } = require('child_process');
 const FAKE = { BOT_TOKEN: '111111:FAKE-bot-token-for-tests-only', SECRET: 'test_webhook-SECRET_abc123', ADMIN_ID: '987654321', JWT_SECRET: 'test-jwt-secret-only' };
 for (const k of Object.keys(process.env)) if (k.startsWith('TELEGRAM_') || k.startsWith('RAILWAY_')) delete process.env[k];
 delete process.env.REDIS_URL;
+delete process.env.STORE_BASE_URL;
 Object.assign(process.env, {
   DATABASE_URL: 'postgres://vtest:test@localhost:5432/vtest_never_connects',
   JWT_SECRET: FAKE.JWT_SECRET,
@@ -100,6 +101,17 @@ async function main() {
   assert('ref ≤32 y apto para callback_data', /^[A-Za-z0-9_-]{1,32}$/.test(ref), ref);
   const link = vs.storeLink(82, { network: 'tiktok', campaign: 'video_v1', ref });
   assert('link UTM correcto', link === `https://www.aynimar.com/store/82?utm_source=tiktok&utm_medium=organic&utm_campaign=video_v1&utm_content=${ref}`, link);
+  const q = `utm_source=tiktok&utm_medium=organic&utm_campaign=video_v1&utm_content=${ref}`;
+  const withBase = (b) => vs.storeLink(82, { network: 'tiktok', campaign: 'video_v1', ref }, b === undefined ? {} : { STORE_BASE_URL: b });
+  const warn = console.warn; console.warn = () => {};
+  try {
+    assert('sin STORE_BASE_URL → tienda por defecto', withBase(undefined) === `https://www.aynimar.com/store/82?${q}`);
+    assert('STORE_BASE_URL de staging → link a staging', withBase('https://staging.aynimar.com') === `https://staging.aynimar.com/store/82?${q}`);
+    assert('STORE_BASE_URL con barra(s) final(es) → sin doble barra', withBase('https://staging.aynimar.com//') === `https://staging.aynimar.com/store/82?${q}`);
+    assert('STORE_BASE_URL con subruta se respeta', withBase('https://x.vercel.app/tienda/') === `https://x.vercel.app/tienda/store/82?${q}`);
+    assert('STORE_BASE_URL http → rechazada, por defecto', withBase('http://staging.aynimar.com') === `https://www.aynimar.com/store/82?${q}`);
+    assert('STORE_BASE_URL basura / javascript: / con query → por defecto', ['no es url', 'javascript:alert(1)', 'https://a.com/?x=1', 'https://u:p@a.com'].every((b) => withBase(b) === `https://www.aynimar.com/store/82?${q}`));
+  } finally { console.warn = warn; }
 
   console.log('\n▶ sendTelegramVideo — botones firmados');
   const { sendTelegramVideo } = require('../utils/telegramNotify');

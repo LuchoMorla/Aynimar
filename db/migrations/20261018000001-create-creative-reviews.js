@@ -5,7 +5,8 @@
  *
  * Una fila por vídeo enviado a revisión. `ref` es el id opaco que viaja en el
  * callback_data firmado. La decisión es una transición atómica desde 'pending'
- * (UPDATE ... WHERE status='pending'). Sin datos de clientes.
+ * (UPDATE ... WHERE status='pending'). production_cost_usd = coste de producir
+ * la pieza (0 para el motor ffmpeg; NULL = desconocido). Sin datos de clientes.
  *
  * ADITIVA y reversible: up → CREATE TABLE IF NOT EXISTS; down → DROP TABLE IF
  * EXISTS (ninguna otra tabla la referencia).
@@ -26,6 +27,7 @@ module.exports = {
         "status"              VARCHAR(20)  NOT NULL DEFAULT 'pending'
                               CHECK ("status" IN ('pending','approved','rejected','changes_requested')),
         "change_request"      TEXT,
+        "production_cost_usd" NUMERIC(10,4),
         "decided_at"          TIMESTAMPTZ,
         "decided_by"          BIGINT,
         "created_at"          TIMESTAMPTZ  NOT NULL DEFAULT now(),

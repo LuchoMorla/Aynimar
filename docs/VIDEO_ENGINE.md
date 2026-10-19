@@ -10,6 +10,7 @@ Vídeo vertical 1080x1920 (9:16, 30 fps, H.264 + pista de audio silenciosa) con 
 (2 a 6): fondo desenfocado, zoom lento (Ken Burns), fundido y rótulos. 3,5 s por foto. Se envía al admin por Telegram
 con los botones firmados Aprobar / Rechazar / Cambios (`mk:<ap|rj|ch>:<ref>:<hmac>`) y un link con UTM:
 `https://www.aynimar.com/store/{id}?utm_source=<red>&utm_medium=organic&utm_campaign=video_<variante>&utm_content=<ref>`.
+La base es configurable con `STORE_BASE_URL` (no secreta; p.ej. la tienda de staging para probar atribución). Se exige `https://host[/ruta]` sin query, hash ni credenciales; la barra final se quita. Si falta o es inválida se usa `https://www.aynimar.com` (con aviso en log).
 Desde F2 los botones registran la decisión en `creative_reviews` y "Aprobar" envía el kit de publicación manual (ver docs/TELEGRAM_SECURITY.md, sección F2). No publica en redes.
 
 ## Decisiones

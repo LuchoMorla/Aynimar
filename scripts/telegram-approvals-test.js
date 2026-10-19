@@ -20,7 +20,7 @@ const FAKE = {
   SECRET:    'test_webhook-SECRET_abc123',
   ADMIN_ID:  '987654321',
 };
-for (const k of Object.keys(process.env)) if (k.startsWith('TELEGRAM_') || k.startsWith('RAILWAY_') || k === 'REDIS_URL') delete process.env[k];
+for (const k of Object.keys(process.env)) if (k.startsWith('TELEGRAM_') || k.startsWith('RAILWAY_') || k === 'REDIS_URL' || k === 'STORE_BASE_URL') delete process.env[k];
 Object.assign(process.env, {
   DATABASE_URL:             'postgres://tgtest:test@localhost:5432/tgtest_never_connects',
   JWT_SECRET:               'test-jwt-secret-only',
@@ -104,6 +104,7 @@ async function main() {
   assert('sendVideo devuelve file_id y message_id', sent.ok && sent.fileId === 'FILEID-555' && sent.messageId === 555);
   assert('fila pending con ref, producto, variante, red, file_id y message_id', row?.status === 'pending' && row.productId === 82 && row.variant === 'v1' && row.network === 'tiktok' && row.telegramFileId === 'FILEID-555' && row.telegramMessageId === 555);
   assert('link UTM guardado', row?.utmLink === vs.storeLink(82, { network: 'tiktok', campaign: 'video_v1', ref: REF }));
+  assert('coste de producción registrado (motor ffmpeg = 0)', row?.productionCostUsd === 0);
   assert('caption para la red con beneficio, precio y link', row?.caption.includes('Agua fresca siempre') && row.caption.includes('$24.90') && row.caption.includes(row.utmLink));
   dbDown = true;
   let n = tg.length;
@@ -139,7 +140,7 @@ async function main() {
   });
   const msg = (text, { from = ADMIN, chat = ADMIN, reply } = {}) => ({ update_id: 2, message: { message_id: ++msgSeq, chat: { id: chat }, from: { id: from }, text, ...(reply ? { reply_to_message: reply } : {}) } });
   const answers = (calls) => calls.filter((c) => c.method === 'answerCallbackQuery').map((c) => c.body.text);
-  const pending = (ref, extra = {}) => store.set(ref, { ref, productId: 82, variant: 'v1', network: 'instagram', utmLink: `https://www.aynimar.com/store/82?utm_content=${ref}`, caption: 'Fuente <b>Pro</b> & agua\nPídelo', telegramFileId: 'F', telegramMessageId: 555, status: 'pending', createdAt: new Date(), ...extra });
+  const pending = (ref, extra = {}) => store.set(ref, { ref, productId: 82, variant: 'v1', network: 'instagram', utmLink: `https://www.aynimar.com/store/82?utm_content=${ref}`, caption: 'Fuente <b>Pro</b> & agua\nPídelo', productionCostUsd: null, telegramFileId: 'F', telegramMessageId: 555, status: 'pending', createdAt: new Date(), ...extra });
 
   try {
     out('\n▶ Aprobar');
@@ -157,6 +158,7 @@ async function main() {
     const kit = calls.find((c) => c.method === 'sendMessage' && c.body.text.includes('KIT DE PUBLICACIÓN'));
     assert('kit enviado al admin como respuesta al vídeo', kit && String(kit.body.chat_id) === FAKE.ADMIN_ID && kit.body.reply_to_message_id === 555);
     assert('kit incluye caption para copiar, link UTM y pasos manuales', kit && kit.body.text.includes('<pre>') && kit.body.text.includes(store.get(REF).utmLink.replace(/&/g, '&amp;')) && kit.body.text.includes('Descargar') && kit.body.text.includes('Nada se publica automáticamente'));
+    assert('kit muestra el coste de producción', kit && kit.body.text.includes('Coste de producción: $0.0000'));
     assert('kit escapa HTML del nombre de producto', kit && kit.body.text.includes('&lt;b&gt;Pro&lt;/b&gt; &amp; agua') && !kit.body.text.includes('<b>Pro</b>'));
     assert('aprobar NO publica en redes (solo llamadas a api.telegram.org)', calls.every((c) => ['answerCallbackQuery', 'editMessageReplyMarkup', 'editMessageCaption', 'sendMessage'].includes(c.method)));
 

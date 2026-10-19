@@ -16,6 +16,7 @@ const CreativeReviewSchema = {
   telegramMessageId: { field: 'telegram_message_id', type: DataTypes.BIGINT },
   status:            { allowNull: false, type: DataTypes.STRING(20), defaultValue: 'pending', validate: { isIn: [CREATIVE_REVIEW_STATUS] } },
   changeRequest:     { field: 'change_request', type: DataTypes.TEXT },
+  productionCostUsd: { field: 'production_cost_usd', type: DataTypes.DECIMAL(10, 4), allowNull: true },
   decidedAt:         { field: 'decided_at', type: DataTypes.DATE },
   decidedBy:         { field: 'decided_by', type: DataTypes.BIGINT },
   createdAt:         { field: 'created_at', allowNull: false, type: DataTypes.DATE, defaultValue: Sequelize.NOW },
