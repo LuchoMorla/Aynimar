@@ -50,4 +50,4 @@ const queueConnection = {
 
 const cartRecoveryQueue = new Queue('cart-recovery', { connection: queueConnection });
 
-module.exports = { cartRecoveryQueue, connection };
+module.exports = { cartRecoveryQueue, connection, queueConnection };
