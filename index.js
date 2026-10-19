@@ -259,12 +259,14 @@ async function notifyDeployHealth() {
       : '');
 
   try {
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const resp = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'HTML' }),
     });
-    console.log('[DeployHealth] Telegram notificado.');
+    const data = await resp.json().catch(() => ({}));
+    if (data.ok) console.log('[DeployHealth] Telegram notificado.');
+    else console.error(`[DeployHealth] Telegram rechazó el envío: ${data.error_code ?? resp.status} ${data.description ?? ''}`);
   } catch (err) {
     console.error('[DeployHealth] Error enviando Telegram:', err.message);
   }
