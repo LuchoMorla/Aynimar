@@ -1,6 +1,8 @@
 'use strict';
+/* global FormData */
 
-const { getTelegramToken } = require('../libs/telegramSecurity');
+const fs = require('fs');
+const { getTelegramToken, getAdminChatId, signCallbackData } = require('../libs/telegramSecurity');
 
 async function sendTelegramNotification(text) {
   const token  = getTelegramToken();
@@ -21,4 +23,40 @@ async function sendTelegramNotification(text) {
   }
 }
 
-module.exports = { sendTelegramNotification };
+/**
+ * Envía un mp4 al admin para revisión con botones firmados Aprobar/Rechazar/Cambios.
+ * Caption en texto plano (sin parse_mode): incluye datos de producto.
+ * Los botones solo se registran hoy; ejecutarlos depende de F2 (autorizaciones).
+ * @returns {Promise<{ok: boolean, fileId?: string}>}
+ */
+async function sendTelegramVideo(filePath, caption, ref) {
+  const token  = getTelegramToken();
+  const chatId = getAdminChatId();
+  if (!token || !chatId) {
+    console.warn('[TelegramNotify] Telegram no configurado (token/chat ausente o bloqueado en este entorno).');
+    return { ok: false };
+  }
+  const buttons = [['ap', 'Aprobar'], ['rj', 'Rechazar'], ['ch', 'Cambios']]
+    .map(([a, text]) => ({ text, callback_data: signCallbackData(a, ref) }));
+  const form = new FormData();
+  form.append('chat_id', String(chatId));
+  form.append('caption', String(caption).slice(0, 1024));
+  form.append('supports_streaming', 'true');
+  if (buttons.every((b) => b.callback_data)) form.append('reply_markup', JSON.stringify({ inline_keyboard: [buttons] }));
+  else console.warn('[TelegramNotify] Sin TELEGRAM_WEBHOOK_SECRET o ref inválido: vídeo enviado sin botones.');
+  form.append('video', await fs.openAsBlob(filePath, { type: 'video/mp4' }), 'video.mp4');
+  try {
+    const resp = await fetch(`https://api.telegram.org/bot${token}/sendVideo`, { method: 'POST', body: form, signal: AbortSignal.timeout(120000) });
+    const data = await resp.json().catch(() => ({}));
+    if (!data.ok) {
+      console.warn(`[TelegramNotify] Telegram rechazó el vídeo: ${data.error_code ?? resp.status} ${data.description ?? ''}`);
+      return { ok: false };
+    }
+    return { ok: true, fileId: data.result?.video?.file_id };
+  } catch (err) {
+    console.warn('[TelegramNotify] Failed to send video:', err.message);
+    return { ok: false };
+  }
+}
+
+module.exports = { sendTelegramNotification, sendTelegramVideo };

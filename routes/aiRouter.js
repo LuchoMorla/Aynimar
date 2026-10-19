@@ -5,7 +5,11 @@ const express  = require('express');
 const passport = require('passport');
 const OpenAI   = require('openai');
 const { Op }   = require('sequelize');
+const Joi      = require('joi');
 const { checkRoles }          = require('../middlewares/authHandler');
+const validatorHandler        = require('../middlewares/validatorHandler');
+const { enqueueVideo }        = require('../libs/videoQueue');
+const { newRef }              = require('../integrations/videoService');
 const {
   optimizeProductCopy,
   NEURO_SYSTEM_PROMPT,
@@ -1057,6 +1061,28 @@ router.get('/stats', passport.authenticate('jwt', { session: false }), checkRole
   } catch (err) {
     console.error('[NutrIA:stats]', err.message);
     return res.status(500).json({ message: 'Error al obtener estadísticas de ventas.' });
+  }
+});
+
+// ── POST /api/v1/ai/videos ───────────────────────────────────────────────────
+// Admin. Encola el render de un vídeo 9:16 con fotos reales y lo envía a
+// Telegram para revisión. benefit lo escribe el dueño (no LLM). Responde 202.
+const videoSchema = Joi.object({
+  productId: Joi.number().integer().positive().required(),
+  variant:   Joi.string().valid('v1', 'v2', 'v3').required(),
+  benefit:   Joi.string().trim().min(3).max(60).required(),
+  network:   Joi.string().valid('instagram', 'tiktok', 'facebook').default('instagram'),
+});
+router.post('/videos', passport.authenticate('jwt', { session: false }), checkRoles('admin'), validatorHandler(videoSchema, 'body'), async (req, res) => {
+  const { value } = videoSchema.validate(req.body);
+  const ref = newRef(value.productId);
+  try {
+    const { mode } = await enqueueVideo({ ...value, ref });
+    return res.status(202).json({ queued: true, ref, mode });
+  } catch (err) {
+    if (err.status === 429) return res.status(429).json({ message: 'Ya hay vídeos en cola; inténtalo en unos minutos.' });
+    console.error('[Video] no se pudo encolar:', err.message);
+    return res.status(503).json({ message: 'No se pudo encolar el vídeo.' });
   }
 });
 
