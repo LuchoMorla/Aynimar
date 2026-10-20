@@ -1,0 +1,21 @@
+{
+  "exportedAt": "2026-10-20T05:27:12Z",
+  "source": "Dropi Ecuador list_products (MCP, solo lectura). Transcrito de informes/equivalencias-dropi.csv (20-oct) y del catálogo consultado el 19-oct (189358). Sin datos de proveedor: list_products solo da supplier_id.",
+  "products": [
+    {
+      "productId": 82,
+      "storeImageHash": null,
+      "freight": { "value": 5.54, "source": "ESTIMADO (como patillera 9822, margenes.csv)" },
+      "items": [
+        { "id": 176296, "name": "FUENTE DE AGUA Y COMEDOR  MASCOTA 2 EN 1", "sale_price": 18.5, "suggested_price": 38, "stock": 98, "supplier_id": 46384,
+          "gallery": [{ "urlS3": "https://d39ru7awumhhs2.cloudfront.net/ecuador/products/176296/f0916977-38c0-4e2b-a879-0d19bb40353f.png" }], "variations": [] },
+        { "id": 123170, "name": "Fuente De Agua Y Comida Mascotas 2 En 1", "sale_price": 16, "suggested_price": 25, "stock": 11, "supplier_id": 70383,
+          "gallery": [{ "urlS3": "https://d39ru7awumhhs2.cloudfront.net/ecuador/products/123170/284979a6-38b0-4681-8f13-ccd9a656f757.jpg" }], "variations": [] },
+        { "id": 185342, "name": "Dispensador de agua para gatos", "sale_price": 11, "suggested_price": 31, "stock": 556, "supplier_id": 1001,
+          "gallery": [{ "urlS3": "https://d39ru7awumhhs2.cloudfront.net/ecuador/products/185342/123564a5-aced-414b-926a-346c13ba3671.jpg" }], "variations": [] },
+        { "id": 189358, "name": "PLATO MASCOTA 2 EN 1 COMEDERO BEBEDERO", "sale_price": 15.25, "suggested_price": 46, "stock": 10, "supplier_id": 23918,
+          "stockCheckedAt": "2026-10-19T15:54:00Z", "gallery": [], "variations": [] }
+      ]
+    }
+  ]
+}
