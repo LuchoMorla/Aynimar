@@ -5,7 +5,7 @@
  * Sin BD ni red: LLM SIMULADO (nunca llama a Groq) y modelos Sequelize sustituidos.
  * Cubre: flag off 404, HMAC válido/inválido/timestamp vencido, sesión anónima
  * pidiendo un pedido → no encontrado (sin tocar BD), conversión a {messages}
- * con enlaces, handoff, dedupe y que el teléfono no aparezca en logs.
+ * con enlaces (ficha y /comprar con sus límites), handoff, dedupe y que el teléfono no aparezca en logs.
  * Usage: node scripts/hub-adapter-test.js
  */
 
@@ -16,6 +16,7 @@ Object.assign(process.env, {
   JWT_SECRET:   'test-jwt-secret-only',
   HUB_SHARED_SECRET: 'secreto-hub-de-prueba-0123456789',
   NEXT_PUBLIC_FRONTEND_URL: 'https://tienda.test',
+  NUTRIA_SHOP_URL: 'https://tienda-compra.test/',
 });
 for (const k of Object.keys(process.env)) if (k.startsWith('TELEGRAM_') || k.startsWith('GROQ_') || k === 'REDIS_URL') delete process.env[k];
 delete process.env.FLAG_NUTRIA_HUB;
@@ -115,9 +116,27 @@ async function main() {
     const all = (r.json?.messages || []).map((m) => m.text).join('\n');
     assert('todos los mensajes son texto', r.json?.messages?.every((m) => m.type === 'text'));
     assert('ficha del producto con precio y enlace', /Powerbank Solar 20000 — \$24\.9\nhttps:\/\/tienda\.test\/store\/5/.test(all), all);
-    assert('carrito → enlace a la ficha (sin token)', /agrégalo al carrito: https:\/\/tienda\.test\/store\/5$/m.test(all));
-    assert('checkout → enlace público', /https:\/\/tienda\.test\/checkout/.test(all));
+    assert('carrito/checkout → un solo enlace de compra', (all.match(/\/comprar\?/g) || []).length === 1, all);
+    assert('enlace de compra = contrato', /https:\/\/tienda-compra\.test\/comprar\?items=5:1&src=AE-WA$/m.test(all), all);
     assert('sin tokens/JWT en los enlaces', !/token=|jwt|Bearer/i.test(all));
+    script = [{ tools: [['agregar_al_carrito', { producto_id: 8, cantidad: 2 }]] }, { content: 'Listo.' }];
+    r = await post(payload('agrega también el 8, dos'));
+    const link2 = (r.json?.messages || []).map((m) => m.text).join('\n').match(/https:\S+comprar\S+/)?.[0];
+    assert('el carrito se acumula entre turnos', link2 === 'https://tienda-compra.test/comprar?items=5:1,8:2&src=AE-WA', link2);
+    assert('la URL de compra nunca lleva precio ni teléfono', link2 && !link2.includes('24.9') && !link2.includes(PHONE) && !/precio|price|\$/i.test(link2));
+
+    console.log('\n▶ buyLink(): límites del contrato');
+    const { buyLink } = hubRouter;
+    const eleven = Object.fromEntries(Array.from({ length: 11 }, (_, i) => [String(i + 1), 1]));
+    assert('11 ítems → recorta a 10', (buyLink(eleven).match(/items=([^&]+)/)[1].split(',')).length === 10);
+    assert('cantidad 11 → 10', /items=3:10&/.test(buyLink({ 3: 11 })));
+    assert('cantidad 0 → fuera (sin ítems ⇒ sin enlace)', buyLink({ 3: 0 }) === null);
+    assert('cantidad no entera/negativa → fuera', buyLink({ 3: 1.5, 4: -2, 5: 'x' }) === null);
+    assert('ids no numéricos o con inyección → fuera', buyLink({ abc: 1, '5;x': 1, '0': 1, '-3': 1, '1e3': 1, '7&src=evil': 1 }) === null);
+    assert('ids válidos se conservan, inválidos se descartan', buyLink({ 12: 2, 'x': 1 }) === 'https://tienda-compra.test/comprar?items=12:2&src=AE-WA');
+    const savedShop = process.env.NUTRIA_SHOP_URL; delete process.env.NUTRIA_SHOP_URL;
+    assert('base por defecto https://aynimar.com', buyLink({ 1: 1 }) === 'https://aynimar.com/comprar?items=1:1&src=AE-WA');
+    process.env.NUTRIA_SHOP_URL = savedShop;
 
     console.log('\n▶ Handoff y dedupe');
     script = [{ tools: [['alertar_telegram', { tipo: 'critico', mensaje: 'Reclamo <b>x</b>' }]] }, { content: 'Un humano te contactará.' }];

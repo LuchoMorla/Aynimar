@@ -4,8 +4,9 @@
 //   POST /api/v1/hub/handle   { tenantId:'AE', origin, entry, phone, msgId, text?, replyId? }
 //                             → { messages:[{type:'text',text}], handoff }
 // Mismo patrón que Pulpia (Pescafast): reutiliza EXACTAMENTE el motor de NutrIA
-// (aiRouter.runNutriaTurn) con channel='whatsapp' y la acciones de navegador
-// (tarjetas, carrito, redirect) convertidas en texto con enlaces a la tienda.
+// (aiRouter.runNutriaTurn) con channel='whatsapp' y las acciones de navegador
+// (tarjetas, carrito, redirect) convertidas en texto con enlaces a la tienda
+// (carrito/checkout ⇒ enlace /comprar, ver buyLink).
 // Seguridad: FLAG_NUTRIA_HUB apagado o HUB_SHARED_SECRET sin configurar ⇒ 404.
 // Firma: X-Hub-Signature = sha256=HMAC(HUB_SHARED_SECRET, `${X-Hub-Timestamp}.${body crudo}`),
 // timestamp en segundos, ventana ±5 min, comparación timing-safe; la reproducción
@@ -68,22 +69,36 @@ function isDuplicate(msgId, now) {
   return false;
 }
 
-// Respuesta web de NutrIA → mensajes de texto para WhatsApp (sin tokens ni datos personales:
-// solo enlaces públicos a la ficha; el checkout recalcula precio y stock desde BD).
-function toWhatsApp(body) {
+// Enlace de compra (contrato con la tienda, rama feat/wa-buy-link):
+//   ${NUTRIA_SHOP_URL}/comprar?items=<id>:<cant>[,<id>:<cant>...]&src=AE-WA
+// Solo ids numéricos y cantidades 1–10 (más ⇒ 10; 0 o inválida ⇒ fuera), máx. 10 ítems.
+// Sin precios, nombres, teléfonos ni tokens: la tienda recalcula precio y stock.
+const MAX_BUY_ITEMS = 10;
+const MAX_BUY_QTY = 10;
+function buyLink(cart) {
+  const items = Object.entries(cart || {})
+    .filter(([id, qty]) => /^[1-9]\d{0,9}$/.test(String(id)) && Number.isInteger(Number(qty)) && Number(qty) >= 1)
+    .slice(0, MAX_BUY_ITEMS)
+    .map(([id, qty]) => `${id}:${Math.min(Number(qty), MAX_BUY_QTY)}`);
+  if (!items.length) return null;
+  const base = (process.env.NUTRIA_SHOP_URL || 'https://aynimar.com').replace(/\/$/, '');
+  return `${base}/comprar?items=${items.join(',')}&src=AE-WA`;
+}
+
+// Respuesta web de NutrIA → mensajes de texto para WhatsApp. Tarjetas = enlace público a la
+// ficha; carrito/checkout = enlace de compra con el carrito de la sesión (`cart`).
+function toWhatsApp(body, cart) {
   const STORE = ai.STORE_URL;
   const out = [];
   if (body.message?.trim()) out.push(body.message.trim());
   const prods = (body.products || []).filter((p) => Number.isInteger(p.id)).slice(0, 3);
   if (prods.length) out.push(prods.map((p) => `• ${p.nombre} — $${p.precio}\n${STORE}/store/${p.id}`).join('\n\n'));
-  for (const a of body.actions || []) {
-    if (a.type === 'add_to_cart' && Number.isInteger(a.productoId) && a.productoId > 0) {
-      out.push(`Para comprarlo, abre la ficha y agrégalo al carrito: ${STORE}/store/${a.productoId}`);
-    } else if (a.type === 'redirect' && typeof a.to === 'string' && a.to.startsWith('/')) {
-      out.push(a.to === '/checkout'
-        ? `Para pagar, agrega el producto desde su ficha y finaliza aquí: ${STORE}/checkout`
-        : `Aquí lo tienes: ${STORE}${a.to}`);
-    }
+  const actions = body.actions || [];
+  const wantsBuy = actions.some((a) => a.type === 'add_to_cart' || (a.type === 'redirect' && a.to === '/checkout'));
+  const link = wantsBuy && buyLink(cart);
+  if (link) out.push(`Para comprar, abre este enlace (precio y stock se confirman en la tienda): ${link}`);
+  for (const a of actions) {
+    if (a.type === 'redirect' && typeof a.to === 'string' && a.to.startsWith('/') && a.to !== '/checkout') out.push(`Aquí lo tienes: ${STORE}${a.to}`);
   }
   return [...new Set(out)].map((text) => ({ type: 'text', text }));
 }
@@ -115,8 +130,11 @@ router.post('/handle', (req, res, next) => (enabled() ? next() : res.sendStatus(
       groq,
     );
     s.history = [...s.history, { role: 'user', content: message }, { role: 'assistant', content: String(body.message || '') }].slice(-6);
-    if (body.estadoActualizado) Object.assign(s.contexto, body.estadoActualizado);
-    const messages = toWhatsApp(body);
+    // El carrito se acumula entre turnos (el motor solo devuelve lo que cambió en este).
+    const { estadoCarrito, ...rest } = body.estadoActualizado || {};
+    Object.assign(s.contexto, rest);
+    if (estadoCarrito) s.contexto.estadoCarrito = { ...s.contexto.estadoCarrito, ...estadoCarrito };
+    const messages = toWhatsApp(body, s.contexto.estadoCarrito);
     const handoff = toolCallNames.includes('alertar_telegram') || /\b(humano|asesor|persona)\b/i.test(b.text || '');
     log.info('hub_handle', { origin: b.origin || null, count: messages.length, handoff });
     return res.json({ messages, handoff });
@@ -129,4 +147,5 @@ router.post('/handle', (req, res, next) => (enabled() ? next() : res.sendStatus(
 module.exports = router;
 module.exports.verify = verify;
 module.exports.toWhatsApp = toWhatsApp;
+module.exports.buyLink = buyLink;
 module.exports._sessions = sessions; // tests

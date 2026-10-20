@@ -93,6 +93,12 @@ async function main() {
       const out = await say('busco una linterna');
       assert.match(out, /Linterna Solar LED — \$12\.5\nhttps:\/\/www\.aynimar\.com\/store\/7/, out);
     });
+    await check('«lo quiero» → enlace de compra /comprar sin precio ni teléfono', async () => {
+      script = [{ tools: [['agregar_al_carrito', { producto_id: 7, cantidad: 2 }]] }, { content: '¡De una!' }];
+      const out = await say('lo quiero, dame 2');
+      assert.match(out, /https:\/\/aynimar\.com\/comprar\?items=7:2&src=AE-WA/, out);
+      assert.ok(!out.match(/comprar\S*/)[0].includes(PHONE));
+    });
     await check('pedido por número (sesión anónima) → no se consulta la BD', async () => {
       script = [{ tools: [['obtener_estado_orden', { orden_id: 99 }]] }, { content: 'Por aquí no veo pedidos; revísalo en tu cuenta.' }];
       const out = await say('estado del pedido 99');

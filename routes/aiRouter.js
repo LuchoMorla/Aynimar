@@ -834,8 +834,8 @@ async function executeTool(name, args, clientActions, estadoActualizado, ctx = {
 const NUTRIA_WHATSAPP_NOTE = `
 
 ━━━ CANAL WHATSAPP ━━━
-Hablas por WhatsApp: no hay tarjetas, carrito ni botones. El servidor añade solo los enlaces a la ficha de cada producto;
-no escribas URLs. En vez de "te lo agrego al carrito", invita a abrir el enlace de la ficha para comprarlo.
+Hablas por WhatsApp: no hay tarjetas ni botones. El servidor añade los enlaces a la ficha de cada producto y,
+cuando usas agregar_al_carrito o redirigir_checkout, un enlace de compra con el carrito. No escribas URLs.
 Por este canal NO se consultan pedidos por número: si preguntan por un pedido, indica revisarlo en su cuenta de la tienda.`;
 
 async function runNutriaTurn({ message, history, contexto, sessionId, user, channel } = {}, groq) {

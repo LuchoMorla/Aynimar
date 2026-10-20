@@ -13,13 +13,15 @@
   usan el mismo prompt, herramientas y bucle. `/nutria/chat` devuelve exactamente lo mismo.
 - Sesión siempre anónima (el hub no manda JWT): `obtener_estado_orden` responde «no
   encontrado» y remite a `/mi_cuenta/orders`; nunca consulta la BD por número.
-- Acciones de navegador → texto: productos y «agregar al carrito» = enlace público a la
-  ficha `/store/:id`; checkout = enlace `/checkout`. Sin tokens ni datos personales; el
-  checkout recalcula precio y stock desde BD con bloqueo de fila (orderService.checkout).
+- Acciones de navegador → texto: productos = enlace público a la ficha `/store/:id`;
+  carrito/checkout = enlace de compra (contrato con el CTO de Aynimar, tienda en
+  `feat/wa-buy-link`): `${NUTRIA_SHOP_URL:-https://aynimar.com}/comprar?items=<id>:<cant>[,…]&src=AE-WA`,
+  ids numéricos, cantidades 1–10 (más ⇒ 10, 0/inválida ⇒ fuera), máx. 10 ítems; sin precios,
+  nombres, teléfonos ni tokens. La tienda recalcula precio y stock; el checkout del backend lo
+  hace desde BD con bloqueo de fila (orderService.checkout). El carrito se acumula por sesión.
 - Historial (6 mensajes) y contexto en memoria, clave = HMAC(secreto, teléfono), TTL 24 h,
   tope 30 mensajes/hora por remitente. El teléfono no se registra ni va al LLM.
 
 **Descartado.**
-- Carrito prellenado por URL: la tienda no lo soporta hoy (requiere cambio de frontend).
 - Sesión/dedupe en BD: requiere migración (coordinar con DATABASE) — innecesario con una réplica.
 - Verificar pedido por teléfono del pedido vs `wa_id` firmado: opcional, pendiente de decisión.
