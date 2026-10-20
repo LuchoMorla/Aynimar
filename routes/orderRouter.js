@@ -2,7 +2,7 @@ const express = require('express');
 
 const passport = require('passport');
 
-const { checkRoles, optionalAuth } = require('../middlewares/authHandler');
+const { checkRoles, optionalAuth, assertUserAccess } = require('../middlewares/authHandler');
 
 const OrderService = require('../Services/orderService');
 const CustomerService = require('../Services/customerService');
@@ -309,7 +309,7 @@ router.get(
     try {
       const { id } = req.params;
       // IDOR: solo los pedidos propios (admin, los de cualquiera).
-      service.assertUserAccess(id, req.user);
+      assertUserAccess(id, req.user);
       const orders = await service.findByUser(id);
       res.json(orders);
     } catch (error) {

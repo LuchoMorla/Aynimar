@@ -1,6 +1,6 @@
 const express = require('express');
 const passport = require('passport');
-const { checkRoles } = require('../middlewares/authHandler');
+const { checkRoles, assertUserAccess } = require('../middlewares/authHandler');
 const PaymentService = require('../Services/paymentService');
 const CustomerService = require('../Services/customerService');
 const RecyclerService = require('../Services/recyclerService');
@@ -36,7 +36,8 @@ router.get(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const payment = await service.findOne(id);
+      // IDOR: solo el pago propio (admin, cualquiera).
+      const payment = await service.findOneForUser(id, req.user);
       res.json(payment);
     } catch (error) {
       next(error);
@@ -47,9 +48,12 @@ router.get(
   '/userId/:id',
   passport.authenticate('jwt', { session: false }),
   checkRoles('admin', 'recycler', 'customer', 'business_owner'),
+  validatorHandler(getPaymentSchema, 'params'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
+      // IDOR: solo los pagos propios (admin, los de cualquiera).
+      assertUserAccess(id, req.user);
       const payments = await service.findByUser(id);
       res.json(payments);
     } catch (error) {
@@ -91,6 +95,8 @@ router.post(
   async (req, res, next) => {
     try {
       const body = req.body;
+      // IDOR: solo se añade material a un pago propio (antes, a cualquiera).
+      await service.findOneForUser(body.paymentId, req.user);
       const newCommodity = await service.addCommodity(body);
       res.status(201).json(newCommodity);
     } catch (error) {

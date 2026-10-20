@@ -2,6 +2,7 @@ const boom = require('@hapi/boom');
 
 const { config } = require('./../config/config');
 const { models } = require('../libs/sequelize');
+const { assertUserAccess } = require('../middlewares/authHandler');
 
 const sendMailResend = require('../utils/sendMailResend');
 const OffersService = require('./offersService');
@@ -194,6 +195,13 @@ class PaymentService {
     return payments;
   }
 
+  // IDOR: admin ve cualquiera; el resto solo pagos de su propio recycler → 404.
+  async findOneForUser(id, user) {
+    const payment = await this.findOne(id);
+    assertUserAccess(payment.recycler?.userId, user);
+    return payment;
+  }
+
   async findOne(id) {
     const payment = await models.Payment.findByPk(id, {
       include: [
@@ -204,7 +212,8 @@ class PaymentService {
         'commodities'
       ]
     });
-    delete payment.dataValues.recycler.dataValues.user.dataValues.password;
+    if (!payment) throw boom.notFound('Pago no encontrado'); // antes: TypeError → 500
+    if (payment.recycler?.user) delete payment.recycler.user.dataValues.password;
     return payment;
   }
 

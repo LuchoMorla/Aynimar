@@ -682,13 +682,7 @@ class OrderService {
     return rows.length > 0;
   }
 
-  // IDOR en listados: admin ve el de cualquiera; el resto solo el suyo → 404
-  // (no revela existencia), igual que findOneForUser.
-  assertUserAccess(userId, { sub, role }) {
-    if (role === 'admin' || Number(userId) === Number(sub)) return;
-    throw boom.notFound('Usuario no encontrado');
-  }
-
+  // IDOR: admin accede a cualquier negocio; el business_owner solo a los suyos → 404.
   async assertBusinessAccess(businessId, { sub, role }) {
     if (role === 'admin' || (await this.isBusinessOfOwner(businessId, sub))) return;
     throw boom.notFound('Negocio no encontrado');
