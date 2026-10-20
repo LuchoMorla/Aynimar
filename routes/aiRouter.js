@@ -1357,9 +1357,11 @@ router.post('/nutria/session-close', async (req, res) => {
       return res.json({ ok: true });
     }
 
+    // Tope: 12 mensajes × 1000 caracteres (petición pública, sin auth).
     const safeHistory = history
       .filter((m) => m && ['user', 'assistant'].includes(m.role) && typeof m.content === 'string')
-      .slice(-12);
+      .slice(-12)
+      .map((m) => ({ role: m.role, content: m.content.slice(0, 1000) }));
 
     const completion = await safeGroqCall(groq, {
       model: MODEL_FALLBACK,
@@ -1385,14 +1387,18 @@ router.post('/nutria/session-close', async (req, res) => {
       analysis    = JSON.parse(match ? match[0] : raw);
     } catch (_) { /* keep empty */ }
 
+    // El análisis lo genera el LLM a partir de texto del usuario: se escapa
+    // (parse_mode HTML) y se acota cada campo.
+    const f    = (v, n = 80) => escHtml(String(v ?? 'n/a').slice(0, n));
+    const list = (v, empty) => (Array.isArray(v) ? v.slice(0, 8).map((x) => f(x)).join(', ') : '') || empty;
     const msg =
       `📊 <b>Reporte de Sesión NutrIA</b>\n\n` +
-      `😟 Emoción inicial: <b>${analysis.emocion_inicial ?? 'n/a'}</b>\n` +
-      `😊 Emoción final:   <b>${analysis.emocion_final   ?? 'n/a'}</b>\n` +
-      `⚡ Interés:          <b>${analysis.nivel_interes   ?? 'n/a'}/10</b>\n` +
-      `🛍 Productos: ${(analysis.productos_mencionados ?? []).join(', ') || 'ninguno'}\n` +
-      `🔧 Fricción:  ${(analysis.puntos_friccion       ?? []).join(', ') || 'ninguna'}\n` +
-      `✅ Resultado: <b>${analysis.resultado ?? 'n/a'}</b>`;
+      `😟 Emoción inicial: <b>${f(analysis.emocion_inicial)}</b>\n` +
+      `😊 Emoción final:   <b>${f(analysis.emocion_final)}</b>\n` +
+      `⚡ Interés:          <b>${f(analysis.nivel_interes, 4)}/10</b>\n` +
+      `🛍 Productos: ${list(analysis.productos_mencionados, 'ninguno')}\n` +
+      `🔧 Fricción:  ${list(analysis.puntos_friccion, 'ninguna')}\n` +
+      `✅ Resultado: <b>${f(analysis.resultado, 30)}</b>`;
 
     await sendTelegram(msg);
     return res.json({ ok: true, analysis });
