@@ -66,9 +66,19 @@ async function welcomeMails() {
   }
 }
 
+function productQuery() {
+  console.log('\n▶ 3. GET /products: price_min / price_max opcionales');
+  const { queryProductSchema: s } = require('../schemaODtos/productSchema');
+  assert('sin precios → válido (antes 400 "price_max" is required)', !s.validate({}).error && !s.validate({ limit: 10, offset: 0 }).error);
+  assert('con ambos → válido (sin cambios)', !s.validate({ price_min: 0, price_max: 10000000 }).error);
+  assert('price_min sin price_max → 400 (sin cambios)', /price_max/.test(s.validate({ price_min: 1 }).error?.message || ''));
+  assert('precio no entero → 400 (sin cambios)', !!s.validate({ price_min: 1.5, price_max: 3 }).error);
+}
+
 (async () => {
   try {
     await welcomeMails();
+    productQuery();
   } catch (e) {
     failed++;
     console.error('ERROR NO CONTROLADO:', e.stack);

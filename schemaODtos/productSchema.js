@@ -98,8 +98,10 @@ const queryProductSchema = Joi.object({
   offset,
   price,
   price_min,
+  // Opcionales; con price_min, price_max sigue siendo obligatorio. (Antes `is: Joi.number()`
+  // también casaba con undefined y exigía price_max siempre → 400 en el sitemap.)
   price_max: price_max.when('price_min', {
-    is: Joi.number().integer(),
+    is: Joi.exist(),
     then: Joi.required(),
   }),
   show_shop: showShop,
