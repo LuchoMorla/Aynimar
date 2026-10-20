@@ -23,6 +23,7 @@ const { AiCopyFeedback, AiCopyFeedbackSchema } = require('./aiCopyFeedbackModel'
 const { WalletTransaction, WalletTransactionSchema } = require('./walletTransactionModel');
 const { PaymentProof, PaymentProofSchema } = require('./paymentProofModel');
 const { CreativeReview, CreativeReviewSchema } = require('./creativeReviewModel');
+const { CatalogIssue, CatalogIssueSchema } = require('./catalogIssueModel');
 
 
 function setupModels(sequelize) {
@@ -50,6 +51,7 @@ function setupModels(sequelize) {
   WalletTransaction.init(WalletTransactionSchema, WalletTransaction.config(sequelize));
   PaymentProof.init(PaymentProofSchema, PaymentProof.config(sequelize));
   CreativeReview.init(CreativeReviewSchema, CreativeReview.config(sequelize));
+  CatalogIssue.init(CatalogIssueSchema, CatalogIssue.config(sequelize));
 
   User.associate(sequelize.models);
   Customer.associate(sequelize.models);
@@ -70,6 +72,7 @@ function setupModels(sequelize) {
   Coupon.associate(sequelize.models);
   WalletTransaction.associate(sequelize.models);
   PaymentProof.associate(sequelize.models);
+  CatalogIssue.associate(sequelize.models);
 
 }
 
