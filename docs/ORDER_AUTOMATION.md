@@ -33,19 +33,25 @@ El transporte `http` solo funciona en producción. Fuera de producción, un pedi
 
 | Comprobación | Excepción |
 |---|---|
-| Producto sin id Dropi numérico o componente de kit sin id | `missing_dropi_id` |
+| Producto sin proveedor Dropi confirmado: sin id Dropi numérico, componente de kit sin id, o issue `dropi_not_found`/`missing_dropi_id` en Salud del catálogo | `sourcing_required` (cola de abastecimiento manual; ver abajo) |
 | Variante no elegida (ya **no** se toma la primera), inexistente o no numérica | `variant_mismatch` |
 | Producto eliminado; issue `dropi_out_of_stock` en Salud del catálogo | `out_of_stock` |
 | Nombre, apellido, dirección, teléfono EC o ciudad Dropi verificada ausentes | `incomplete_address` |
 | Coste desconocido o contribución por debajo del piso | `margin_insufficient` |
 | Cantidad fuera de rango, pedido sin líneas, importe COD distinto de las líneas, pago no despachable | `inconsistent_data` |
 | Mismo cliente y mismas líneas en `ORDER_DUPLICATE_WINDOW_HOURS` (24 h) | `possible_duplicate` |
-| Issues abiertos de Salud del catálogo (`dropi_not_found`, `missing_dropi_id`, `dropi_out_of_stock`, `negative_margin`, `missing_cost`) | según el tipo |
+| Issues abiertos de Salud del catálogo (`dropi_out_of_stock`, `negative_margin`, `missing_cost`) | según el tipo |
 | Proveedor Dropi (`supplier_id`) sin verificar, solo con `http` | `missing_dropi_id` |
 | Tope diario de envíos reales alcanzado (justo antes de enviar) | `daily_cap_reached` |
 | Orden cancelada | `CANCELLED`, sin envío |
 
 Si la tabla `catalog_issues` (rama `feat/catalog-health`) aún no existe, se omite solo esa fuente y el resto de comprobaciones sigue aplicando.
+
+**Abastecimiento manual (`sourcing_required`, 20-oct).** Un producto sin proveedor Dropi confirmado **nunca** se envía a Dropi, ni siquiera con el interruptor en `off` (en `off` solo se abre esta excepción y se avisa por Telegram; el pedido queda `AUTOMATION_OFF`).
+- `details`: `problems` (motivo por producto), `queue: "abastecimiento_manual"`, `products[]` con `suggestedAction`, `identical` y hasta 5 `candidates` de `supplier_candidates` (sin descartados; primero el preferente, luego EXACTO/SIMILAR/DISTINTO y menor coste) y `customerNotice`.
+- `customerNotice`: borradores `retraso`, `alternativa_identica` (solo si hay un preferente EXACTO), `sustitucion` (`requiresCustomerAcceptance: true`) y `reembolso` (COD: sin cobro; pagado: devolución). `sent: false`: **nada se envía solo**. El nombre del cliente va como `{{nombre_cliente}}` (sin datos personales en la excepción).
+- Resoluciones: `retry` (después de que el propietario vincule el proveedor en Salud del catálogo) o `manual`. No admite `accept`.
+- Compatibilidad: `missing_dropi_id` sigue existiendo para el `supplier_id` sin verificar (con `http`) y para las excepciones abiertas antes del cambio. Sin las tablas `catalog_issues` o `supplier_candidates`, se omiten esas fuentes (candidatos `[]`).
 
 **Pisos de margen**, calculados al `ORDER_MARGIN_REJECT_RATE` (0,30) de rechazo, con flete, devolución y comisión COD en el peor caso del rango:
 - Piloto supervisado (`pilotFloor`): contribución ≥ `ORDER_PILOT_MIN_CONTRIBUTION_USD` (1,00), según la decisión del propietario de 04:10.
@@ -93,6 +99,13 @@ Reglas:
 - `POST /api/v1/order-exceptions/:id/resolve` con el cuerpo `{ resolution, note?, dropiOrderId?, amount?, shippingCost?, providerFees?, dropiCity? }`.
   - Resoluciones: `retry`, `accept`, `manual`, `link`, `not_created`, `collected`, `not_collected`. La tabla `RESOLUTIONS` del servicio indica cuáles admite cada tipo.
   - El cierre es atómico: si dos personas resuelven a la vez, la segunda recibe 409.
+
+## 5b. Avisos Telegram al propietario
+
+- **Pedido nuevo**: uno por cada pedido real confirmado (no `is_test`, solo en producción, sin email de QA), sea cual sea el resultado del despacho (`MANUAL_LOGISTICS`, `AUTOMATION_OFF`, `sourcing_required`/`BLOCKED`, `DISPATCHED`) y también al pagar 100 % con créditos. Lleva id, total, unidades, ciudad, método de pago, estado de envío y enlace al panel; nunca nombre, teléfono, correo ni dirección.
+- Idempotencia: `orders.owner_alerted_at` (migración aditiva `20261020000004`), fijado con `UPDATE … WHERE owner_alerted_at IS NULL` antes de enviar. Es *at-most-once*: si Telegram falla tras el claim, el aviso se pierde (queda en logs) y el pedido no se ve afectado.
+- **Comprobante DeUna**: al subirlo, aviso «pago por revisar» con pedido, total, id del comprobante y los endpoints `POST /api/v1/orders/:id/payment-proof/:proofId/approve|reject` (solo admin/business_owner; auditoría en `payment_proofs.reviewed_by_user_id/reviewed_at/review_note`). La aprobación exige el pedido en `comprada / comprado_pendiente_pago` sin pagar (409 si no, sin marcar el comprobante).
+- Decisión: alternativa descartada — botones aprobar/rechazar en Telegram: el callback no identifica a un usuario de la BD para la auditoría y añade superficie; queda pendiente si el volumen DeUna lo justifica.
 
 ## 6. Activación (requiere autorización del propietario en cada paso)
 

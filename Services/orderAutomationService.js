@@ -62,6 +62,10 @@ const EXCEPTION_TYPES = [
   'out_of_stock', 'incomplete_address', 'missing_dropi_id', 'variant_mismatch', 'margin_insufficient',
   'possible_duplicate', 'inconsistent_data', 'provider_error', 'dispatch_unknown', 'unknown_status',
   'delivery_issue', 'cod_unreconciled', 'held_by_supervisor', 'cancelled_after_dispatch', 'daily_cap_reached',
+  // Producto sin proveedor Dropi confirmado → cola de ABASTECIMIENTO MANUAL (nunca se envía a Dropi).
+  // Sustituye a missing_dropi_id para los productos; missing_dropi_id sigue para el supplier_id sin
+  // verificar (dato técnico de configuración) y para las excepciones abiertas antes del cambio.
+  'sourcing_required',
 ];
 // No bloquean el envío: avisan de algo que ya ocurrió (estado, entrega, cobro, cancelación tardía).
 const NON_BLOCKING = ['unknown_status', 'delivery_issue', 'cod_unreconciled', 'cancelled_after_dispatch'];
@@ -69,6 +73,7 @@ const NON_BLOCKING = ['unknown_status', 'delivery_issue', 'cod_unreconciled', 'c
 const RESOLUTIONS = {
   retry: EXCEPTION_TYPES.filter((t) => !['dispatch_unknown', 'cod_unreconciled', 'cancelled_after_dispatch'].includes(t)),
   // accept en unknown_status/delivery_issue/cancelled_after_dispatch = "revisado" (solo registra costes).
+  // sourcing_required no admite accept: sin proveedor confirmado no hay nada que enviar.
   accept: ['margin_insufficient', 'possible_duplicate', 'inconsistent_data', 'incomplete_address', 'held_by_supervisor', 'unknown_status', 'delivery_issue', 'cancelled_after_dispatch'],
   manual: EXCEPTION_TYPES.filter((t) => !['cod_unreconciled', 'cancelled_after_dispatch'].includes(t)),
   link: ['dispatch_unknown', 'provider_error'],
@@ -121,8 +126,8 @@ async function listExceptions({ status = 'open', type, limit = 100 } = {}) {
 // ── Salud del catálogo (rama feat/catalog-health) — interfaz desacoplada ─────
 // Tipos de catalog_issues que bloquean el envío y la excepción a la que se traducen.
 const CATALOG_BLOCKING = {
-  dropi_not_found: 'missing_dropi_id',
-  missing_dropi_id: 'missing_dropi_id',
+  dropi_not_found: 'sourcing_required',
+  missing_dropi_id: 'sourcing_required',
   dropi_out_of_stock: 'out_of_stock',
   negative_margin: 'margin_insufficient',
   missing_cost: 'margin_insufficient',
@@ -151,6 +156,92 @@ async function blockingCatalogIssues(productIds) {
 }
 async function hasBlockingIssue(productId) {
   return (await blockingCatalogIssues([productId])).length > 0;
+}
+
+// ── Abastecimiento manual (sourcing_required) ────────────────────────────────
+// Candidatos de supplier_candidates (rama feat/catalog-health). Sin tabla → [] (fallback seguro).
+const CLASS_RANK = { EXACTO: 0, SIMILAR: 1, DISTINTO: 2 };
+const STATUS_RANK = { preparado_preferente: 0, aprobado_por_propietario: 1, propuesto: 2 };
+async function sourcingCandidates(productIds) {
+  if (!productIds.length) return [];
+  try {
+    const rows = await sel(`SELECT id, product_id AS "productId", dropi_product_id AS "dropiProductId", dropi_variation_id AS "dropiVariationId",
+        name, cost::float AS cost, stock, classification, status FROM supplier_candidates
+       WHERE product_id IN (:productIds) AND status <> 'descartado'`, { productIds });
+    return rows.sort((a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9)
+      || (CLASS_RANK[a.classification] ?? 9) - (CLASS_RANK[b.classification] ?? 9) || (a.cost ?? 1e9) - (b.cost ?? 1e9) || a.id - b.id);
+  } catch (err) {
+    if (err.original?.code === '42P01' || err.parent?.code === '42P01') return [];
+    throw err;
+  }
+}
+
+/**
+ * Borradores de aviso al cliente. NUNCA se envían solos (sent:false): el operador elige uno.
+ * Sin datos personales: el nombre va como marcador {{nombre_cliente}}.
+ * Un artículo distinto es una SUSTITUCIÓN y solo se envía si el cliente la acepta.
+ */
+function customerNotice(order, productNames, { identical = false, alternatives = false } = {}) {
+  const ref = `AYNIMAR-${order.id}`;
+  const prod = productNames.map((n) => `«${n}»`).join(', ') || 'tu producto';
+  const paid = order.paymentStatus === 'paid';
+  const hi = `Hola {{nombre_cliente}}, gracias por tu pedido ${ref}.`;
+  const options = [
+    { kind: 'retraso', requiresCustomerAcceptance: false,
+      text: `${hi} ${prod} está tardando más de lo previsto con nuestro proveedor. Te escribiremos en cuanto tengamos la fecha de despacho. Si prefieres no esperar, puedes cancelar sin ningún costo.` },
+  ];
+  if (identical) {
+    options.push({ kind: 'alternativa_identica', requiresCustomerAcceptance: false,
+      text: `${hi} Vamos a despachar ${prod} desde otro proveedor: es el mismo artículo, al mismo precio. Puede tardar {{dias}} días más. Si prefieres cancelar, avísanos.` });
+  }
+  if (alternatives) {
+    options.push({ kind: 'sustitucion', requiresCustomerAcceptance: true,
+      text: `${hi} No podemos garantizar ${prod} tal como aparece en la tienda. Te proponemos esta alternativa: {{descripcion_alternativa}} (diferencias: {{diferencias}}). Solo la enviaremos si nos respondes que la aceptas; si no, cancelamos el pedido${paid ? ' y te devolvemos el importe' : ' sin ningún cobro'}.` });
+  }
+  options.push({ kind: 'reembolso', requiresCustomerAcceptance: false,
+    text: paid
+      ? `${hi} Lo sentimos: no podremos entregar ${prod}. Cancelamos el pedido y te devolvemos el importe pagado en {{plazo_reembolso}}.`
+      : `${hi} Lo sentimos: no podremos entregar ${prod}. Cancelamos el pedido; como es pago contra entrega, no se te cobrará nada.` });
+  return { sent: false, autoSend: false, note: 'Borradores para el operador: nada se envía automáticamente. Sustituir por un artículo distinto requiere la aceptación del cliente.', options };
+}
+
+/** Detalle de la excepción: acción sugerida, candidatos y aviso al cliente por producto. */
+async function sourcingInfo(order, details) {
+  const ids = [...new Set(details.map((d) => d.productId).filter(Boolean))];
+  const cands = await sourcingCandidates(ids);
+  const names = new Map((order.items || []).map((i) => [i.id, i.name]));
+  const products = ids.map((productId) => {
+    const list = cands.filter((c) => c.productId === productId).slice(0, 5);
+    const preferred = list.find((c) => ['preparado_preferente', 'aprobado_por_propietario'].includes(c.status) && c.classification === 'EXACTO');
+    const suggestedAction = preferred
+      ? `Hay un proveedor alternativo con el MISMO artículo (Dropi ${preferred.dropiProductId}, ${preferred.status}). El propietario puede vincularlo en Salud del catálogo (swap_dropi_id) y después reintentar (retry). No se aplica solo.`
+      : list.length
+        ? 'Hay candidatos, pero ninguno confirmado como idéntico: abastecer a mano (manual) o avisar al cliente. Un artículo distinto requiere su aceptación.'
+        : 'Sin candidatos: abastecimiento manual (manual) o avisar al cliente (retraso o reembolso).';
+    return { productId, productName: names.get(productId) ?? null, suggestedAction, candidates: list, identical: Boolean(preferred) };
+  });
+  const notice = customerNotice(order, products.map((p) => p.productName).filter(Boolean), {
+    identical: products.length > 0 && products.every((p) => p.identical),
+    alternatives: products.some((p) => p.candidates.length > 0),
+  });
+  return { queue: 'abastecimiento_manual', products, customerNotice: notice };
+}
+
+/** Abre (o actualiza) la excepción sourcing_required. @returns {boolean} true si es nueva. */
+async function openSourcing(order, details) {
+  return openException(order.id, 'sourcing_required', { problems: details, ...(await sourcingInfo(order, details)) });
+}
+
+/** Solo la parte de abastecimiento (para el modo off, que no valida nada más). */
+async function sourcingProblems(order) {
+  // Productos con otro proveedor propio (p. ej. effi) no son «sin proveedor»: el modo off no los toca.
+  const own0 = (order.items || []).filter((i) => !i.sourceProvider || i.sourceProvider === 'dropi');
+  const { problems } = buildDropiLines({ ...order, items: own0 });
+  const own = problems.filter((p) => p.type === 'sourcing_required').map((p) => p.details);
+  for (const i of await blockingCatalogIssues(own0.map((x) => x.id))) {
+    if (CATALOG_BLOCKING[i.type] === 'sourcing_required') own.push({ productId: i.productId, catalogIssue: i.type });
+  }
+  return own;
 }
 
 // ── Ciudades Dropi ───────────────────────────────────────────────────────────
@@ -214,20 +305,20 @@ function buildDropiLines(order) {
     const price = Number(it.OrderProduct?.unitPriceGross ?? it.price);
     const productId = it.dropiProductId || (it.sourceProvider === 'dropi' ? it.externalId : null);
     if (!isDropiItem(it)) {
-      problems.push({ type: 'missing_dropi_id', details: { productId: it.id, reason: 'producto sin vínculo Dropi en un pedido Dropi' } });
+      problems.push({ type: 'sourcing_required', details: { productId: it.id, reason: 'producto sin vínculo Dropi en un pedido Dropi' } });
       continue;
     }
     const dropiItems = Array.isArray(it.dropiItems) ? it.dropiItems : [];
     if (it.isBundle === true && dropiItems.length > 0) {
       dropiItems.forEach((b, i) => {
-        if (!isDropiId(b?.id)) problems.push({ type: 'missing_dropi_id', details: { productId: it.id, reason: `componente ${i} sin id Dropi válido` } });
+        if (!isDropiId(b?.id)) problems.push({ type: 'sourcing_required', details: { productId: it.id, reason: `componente ${i} sin id Dropi válido` } });
         // El PVP del kit va en el primer componente (Dropi exige precio ≥ 0 por línea).
         lines.push({ productId: it.id, id: Number(b?.id), name: it.name, quantity: (b?.qty ?? 1) * qty, price: i === 0 ? price : 0 });
       });
       continue;
     }
     if (!isDropiId(productId)) {
-      problems.push({ type: 'missing_dropi_id', details: { productId: it.id, reason: 'dropiProductId ausente o no numérico' } });
+      problems.push({ type: 'sourcing_required', details: { productId: it.id, reason: 'dropiProductId ausente o no numérico' } });
       continue;
     }
     let variationId = null;
@@ -424,15 +515,59 @@ async function notifyAdmin(text) {
   await sendTelegramNotification(text).catch(() => {});
 }
 
+// ── Aviso «pedido nuevo» al propietario (todos los caminos: COD, DeUna aprobado, créditos) ──
+const PANEL_URL = 'https://circular-merchant.aynimar.com/';
+const escHtml = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** Prueba ≠ real: fuera de producción, marcado is_test o email de QA. */
+function isTestOrder(order, prod = isProductionEnv()) {
+  return Boolean(order.isTest) || !prod || TEST_EMAIL_RE.test(order.customer?.user?.email || '');
+}
+
+/** Texto del aviso: sin nombre, teléfono, correo ni dirección (solo la ciudad). */
+function ownerOrderAlertText(order) {
+  const units = (order.items || []).reduce((n, it) => n + (Number(it.OrderProduct?.amount) || 0), 0);
+  return `🛒 <b>Pedido nuevo #${escHtml(order.id)}</b>\n` +
+    `Total: $${escHtml(Number(order.total ?? 0).toFixed(2))} · ${units} ítem(s)\n` +
+    `Ciudad: ${escHtml(order.customer?.city || '?')} · Pago: ${escHtml(order.paymentMethod || '?')}\n` +
+    `Estado de envío: ${escHtml(order.fulfillmentStatus || '?')}\n` +
+    `Panel: ${PANEL_URL}`;
+}
+
+/**
+ * Un aviso por pedido real (claim atómico sobre owner_alerted_at). Nunca lanza:
+ * si Telegram o la BD fallan, el pedido sigue igual.
+ * ponytail: at-most-once — si Telegram falla tras el claim, ese aviso se pierde (queda en logs);
+ * añadir reintento si se ve en la práctica.
+ * @returns {Promise<boolean>} true si se envió (o intentó enviar) el aviso.
+ */
+async function notifyOwnerNewOrder(order, { prod = isProductionEnv() } = {}) {
+  try {
+    if (!order || isTestOrder(order, prod)) return false;
+    const [claimed] = await models.Order.update({ ownerAlertedAt: new Date() }, { where: { id: order.id, ownerAlertedAt: null } });
+    if (!claimed) return false;
+    await sendTelegramNotification(ownerOrderAlertText(order));
+    return true;
+  } catch (err) {
+    console.warn(`[OrderAutomation] aviso de pedido #${order?.id} no enviado: ${err.message}`);
+    return false;
+  }
+}
+
 /**
  * @returns {Promise<null | {status: string, problems?: object}>}
  *   null → se puede enviar (order.__dropiPayload queda preparado).
  */
 async function preDispatch(order, cfg = getConfig()) {
   // Prueba ≠ real: fuera de producción o con email de QA, el pedido es de prueba.
-  const email = order.customer?.user?.email || '';
-  if (!order.isTest && (!isProductionEnv() || TEST_EMAIL_RE.test(email))) await order.update({ isTest: true });
+  if (!order.isTest && isTestOrder(order)) await order.update({ isTest: true });
   if (cfg.mode === 'off') {
+    // Aun con el interruptor apagado, un producto sin proveedor confirmado entra en la cola de
+    // abastecimiento manual (decisión del propietario, 20-oct). No se envía nada a Dropi.
+    const src = await sourcingProblems(order);
+    if (src.length && (await openSourcing(order, src))) {
+      await notifyAdmin(`📦 <b>Pedido #${order.id}: abastecimiento manual</b>\nProducto sin proveedor Dropi confirmado. No se envió a Dropi.\nRevisar: GET /api/v1/order-exceptions?type=sourcing_required`);
+    }
     if (order.fulfillmentStatus !== 'AUTOMATION_OFF') await setStatus(order, 'AUTOMATION_OFF');
     return { status: 'AUTOMATION_OFF' };
   }
@@ -467,7 +602,10 @@ async function preDispatch(order, cfg = getConfig()) {
   const stillOpen = (await openExceptionTypes(order.id)).filter((t) => BLOCKING_TYPES.includes(t) && !grouped[t]);
   if (Object.keys(grouped).length || stillOpen.length) {
     const fresh = [];
-    for (const [type, details] of Object.entries(grouped)) if (await openException(order.id, type, { problems: details })) fresh.push(type);
+    for (const [type, details] of Object.entries(grouped)) {
+      const isNew = type === 'sourcing_required' ? await openSourcing(order, details) : await openException(order.id, type, { problems: details });
+      if (isNew) fresh.push(type);
+    }
     await setStatus(order, 'BLOCKED');
     if (fresh.length) await notifyAdmin(`⚠️ <b>Pedido #${order.id} retenido</b> (no enviado a Dropi)\nExcepciones: ${fresh.join(', ')}\nRevisar: GET /api/v1/order-exceptions`);
     return { status: 'BLOCKED', problems: grouped };
@@ -714,10 +852,17 @@ module.exports = {
   resolveException,
   blockingCatalogIssues,
   hasBlockingIssue,
+  customerNotice,
+  sourcingInfo,
   mapDropiStatus,
   applyDropiStatus,
   handleTelegramCallback,
   onCancelled,
+  isTestOrder,
+  ownerOrderAlertText,
+  notifyOwnerNewOrder,
+  PANEL_URL,
+  escHtml,
   realDispatchedCount,
   realDispatchedToday,
   ecuadorDayStart,

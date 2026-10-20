@@ -65,6 +65,9 @@ async function main() {
   const jwt = require('jsonwebtoken');
   require('../utils/auth');
   const orderRouter = require('../routes/orderRouter');
+  // Se carga antes de levantar el servidor: tarda y el keep-alive del cliente caducaría.
+  const { executeTool } = require('../routes/aiRouter');
+  const { models } = require('../libs/sequelize');
   const { logErrors, ormErrorHandler, boomErrorHandler, errorHandler } = require('../middlewares/errorsHandler');
   const app = express();
   app.use(express.json());
@@ -93,6 +96,18 @@ async function main() {
     assert('business_owner ajeno → 404', (await call('GET', 10, tok(7, 'business_owner'))).status === 404);
     assert('orden inexistente → 404', (await call('GET', 999, tok(1, 'admin'))).status === 404);
     assert('sin JWT → 401', (await call('GET', 10)).status === 401);
+
+    console.log('\n▶ NutrIA obtener_estado_orden (sin LLM)');
+    const realFindByPk = models.Order.findByPk;
+    models.Order.findByPk = async (id) => (ORDERS[id] ? { id: Number(id), state: 'enviado', stateOrder: 'x', trackingNumber: 'G1', carrierName: 'C', customer: ORDERS[id].customer } : null);
+    const ask = (id, ctx) => executeTool('obtener_estado_orden', { orden_id: id }, [], {}, ctx);
+    const nf = await ask(999, { userId: 1, role: 'admin' });
+    // El dueño primero: deja el pedido 10 en caché para comprobar que no se filtra a otros.
+    assert('dueño → datos', (await ask(10, { userId: 2, role: 'customer' })).guia === 'G1');
+    assert('anónimo → «no encontrado» (con caché caliente)', JSON.stringify(await ask(10, {})) === JSON.stringify(nf));
+    assert('otro usuario → «no encontrado» (con caché caliente)', JSON.stringify(await ask(10, { userId: 5, role: 'customer' })) === JSON.stringify(nf));
+    assert('admin → datos', (await ask(10, { userId: 1, role: 'admin' })).guia === 'G1');
+    models.Order.findByPk = realFindByPk; // el resto de la suite usa el real/sus propios stubs
 
     console.log('\n▶ DELETE /orders/:id');
     assert('customer (aunque sea dueño) → 403', (await call('DELETE', 10, tok(2, 'customer'))).status === 403);

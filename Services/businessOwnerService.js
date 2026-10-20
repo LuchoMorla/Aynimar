@@ -83,9 +83,8 @@ class BusinessOwnerService {
       subject: 'Bienvenido a Aynimar', // Subject line
       html: `<p> Bienvenido a Aynimar</p>
       </br>
-      <p>te has registrado/inscrito exitosamente con los siguientes datos:</p>
+      <p>te has registrado/inscrito exitosamente con el correo:</p>
       <p>mail: <strong> ${mailto} </strong></p>
-      <p>Constaseña: <strong> ${mailPassword} </strong></p>
       </br>
       <p>Gracias por ser parte de este cambio, te ofrecemos hacer <a href="${link}">click aquí</a> para que puedas
       <a href="${link}">iniciar sesion en la aplicación</a> de forma automática, este <a href="${link}">link</a> expirará en 30 minutos, aprovéchalo.</p>

@@ -485,7 +485,14 @@ class OrderService {
     // no debe usarse para escrituras tras el commit). Si el proceso muere aquí,
     // la orden queda PENDING_DISPATCH y el dropiRetryWorker la retoma.
     const order = await this.findOne(orderId);
-    await this._dispatchOrder(order);
+    try {
+      await this._dispatchOrder(order);
+    } finally {
+      // Aviso Telegram al propietario en TODOS los resultados (MANUAL_LOGISTICS,
+      // AUTOMATION_OFF, sourcing_required, despacho normal, incluso si el despacho
+      // lanza). Sin await: nunca lanza y no retrasa la respuesta al cliente.
+      automation.notifyOwnerNewOrder(order);
+    }
     this._notifyOrderConfirmed(order).catch((e) =>
       console.error(`[OrderService] notify order ${orderId} failed: ${e.message}`)
     );
@@ -1328,6 +1335,10 @@ class OrderService {
         itemCount: cartItems.length,
       };
     });
+    // Pagado 100 % con créditos: no pasa por _finalizeAndDispatch, se avisa aquí.
+    if (summary.amountToPay === 0) {
+      this.findOne(summary.orderId).then((o) => automation.notifyOwnerNewOrder(o)).catch(() => {});
+    }
     // Post-commit y solo tras el guard de propiedad (paso 2): el dueño recibe el token.
     return { ...summary, trackingToken: await this._ensureTrackingToken({ id: summary.orderId }) };
   }

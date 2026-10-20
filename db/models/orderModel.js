@@ -172,6 +172,8 @@ const OrderSchema = {
   dropiStatusHistory: { field: 'dropi_status_history', allowNull: true, type: DataTypes.JSONB },
   // Token opaco del seguimiento público (db/migrations/20261020000003-order-tracking-token.js).
   trackingToken: { field: 'tracking_token', allowNull: true, type: DataTypes.STRING(64) },
+  // Aviso Telegram «pedido nuevo» ya enviado (db/migrations/20261020000004-order-owner-alerted-at.js).
+  ownerAlertedAt: { field: 'owner_alerted_at', allowNull: true, type: DataTypes.DATE },
   total: {
     field: 'total',
     allowNull: false,

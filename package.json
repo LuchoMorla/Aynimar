@@ -4,7 +4,7 @@
   "description": "circular economy and recycling application",
   "main": "index.js",
   "scripts": {
-    "test": "node scripts/smoke-test.js && node scripts/telegram-security-test.js && node scripts/finance-test.js && node scripts/video-engine-test.js && node scripts/order-idor-test.js && node scripts/telegram-approvals-test.js && node scripts/cto-inbox-test.js && node scripts/catalog-health-test.js",
+    "test": "node scripts/smoke-test.js && node scripts/telegram-security-test.js && node scripts/finance-test.js && node scripts/video-engine-test.js && node scripts/order-idor-test.js && node scripts/telegram-approvals-test.js && node scripts/cto-inbox-test.js && node scripts/catalog-health-test.js && node scripts/order-alerts-test.js",
     "smoke-test": "node scripts/smoke-test.js",
     "health-check": "node scripts/health-check.js",
     "post-deploy": "node scripts/post-deploy.js",

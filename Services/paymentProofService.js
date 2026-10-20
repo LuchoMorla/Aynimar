@@ -23,6 +23,8 @@ const sequelize = require('../libs/sequelize');
 const { models } = sequelize;
 const OrderService = require('./orderService');
 const { assertTrustedProofUrl, verifyProofFileExists } = require('./paymentProofImageValidation');
+const automation = require('./orderAutomationService');
+const { sendTelegramNotification } = require('../utils/telegramNotify');
 
 const orderService = new OrderService();
 
@@ -133,8 +135,8 @@ async function uploadProof(orderId, { fileUrl }, userId, userRole) {
   //    formas iba a ser rechazada por los guards anteriores).
   await verifyProofFileExists(fileUrl);
 
-  return sequelize.transaction(async (t) => {
-    const proof = await models.PaymentProof.create(
+  const proof = await sequelize.transaction(async (t) => {
+    const created = await models.PaymentProof.create(
       { orderId: order.id, fileUrl, uploadedByUserId: userId, status: 'pending' },
       { transaction: t }
     );
@@ -143,8 +145,26 @@ async function uploadProof(orderId, { fileUrl }, userId, userRole) {
       { paymentMethod: 'deuna', paymentStatus: 'pending_verification' },
       { transaction: t }
     );
-    return proof;
+    return created;
   });
+  notifyProofUploaded(order, proof);
+  return proof;
+}
+
+/**
+ * Aviso Telegram «pago DeUna por revisar». Sin datos personales ni URL del
+ * comprobante. Uno por comprobante (cada subida es un registro distinto: el
+ * duplicado ya se rechazó). Sin await y nunca lanza: no afecta a la subida.
+ */
+function notifyProofUploaded(order, proof) {
+  if (automation.isTestOrder(order)) return;
+  const base = `/api/v1/orders/${order.id}/payment-proof/${proof.id}`;
+  sendTelegramNotification(
+    `💳 <b>Pago DeUna por revisar — pedido #${automation.escHtml(order.id)}</b>\n` +
+    `Total: $${automation.escHtml(Number(order.total ?? 0).toFixed(2))} · comprobante #${automation.escHtml(proof.id)}\n` +
+    `Aprobar: POST ${base}/approve\nRechazar: POST ${base}/reject\n` +
+    `Panel: ${automation.PANEL_URL}`
+  ).catch(() => {});
 }
 
 /**
@@ -198,6 +218,12 @@ async function approveProof(orderId, proofId, adminUserId) {
   if (!existingProof) throw boom.notFound('Comprobante no encontrado para esta orden.');
   if (existingProof.status !== 'pending') {
     throw boom.conflict('Este comprobante ya fue revisado.');
+  }
+  // Solo con el pedido esperando este pago (mismo estado que exige _finalizeAndDispatch):
+  // así no queda un comprobante 'approved' en un pedido que no se puede confirmar.
+  const order = await _loadOrderForPayment(orderId);
+  if (order.state !== 'comprada' || order.stateOrder !== 'comprado_pendiente_pago' || order.paymentStatus === 'paid') {
+    throw boom.conflict(`El pedido no está esperando este pago (estado: ${order.state} / ${order.stateOrder} / ${order.paymentStatus}).`);
   }
   await verifyProofFileExists(existingProof.fileUrl);
 

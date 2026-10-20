@@ -288,7 +288,35 @@ async function partA() {
   assert('rechazado → rama rejected con su fecha', rej.status === 'rejected' && rej.branch.at === 't2' && rej.branch.label);
   assert('cancelado sin rechazo → cancelled', buildProgress({ state: 'x', stateOrder: 'cancelado' }).status === 'cancelled');
   assert('por_devolver → returned', buildProgress({ state: 'x', stateOrder: 'por_devolver', dropiStatusHistory: [{ status: 'DEVOLUCION EN TRANSITO', group: 'returning', at: 't3' }] }).branch.at === 't3');
+  out('\n▶ A7. Abastecimiento manual: aviso al cliente (borradores, nunca enviados)');
+  const nCod = auto.customerNotice({ id: 82, paymentStatus: 'pending' }, ['Fuente de agua'], { alternatives: true });
+  const kinds = nCod.options.map((o) => o.kind).join();
+  assert('COD con candidatos no idénticos → retraso, sustitución (exige aceptación) y reembolso; sin «idéntica»', kinds === 'retraso,sustitucion,reembolso'
+    && nCod.options.find((o) => o.kind === 'sustitucion').requiresCustomerAcceptance === true && /Solo la enviaremos si nos respondes que la aceptas/.test(nCod.options[1].text), kinds);
+  assert('nada se envía solo (sent=false, autoSend=false)', nCod.sent === false && nCod.autoSend === false);
+  assert('sin datos personales: nombre como marcador', nCod.options.every((o) => o.text.includes('{{nombre_cliente}}')) && /no se te cobrará/.test(nCod.options.at(-1).text));
+  const nPaid = auto.customerNotice({ id: 7, paymentStatus: 'paid' }, ['X'], { identical: true });
+  assert('pagado + alternativa idéntica → retraso, idéntica, reembolso con devolución', nPaid.options.map((o) => o.kind).join() === 'retraso,alternativa_identica,reembolso' && /devolvemos el importe/.test(nPaid.options.at(-1).text));
+  assert('sourcing_required: bloqueante, admite retry y manual, NO accept', auto.EXCEPTION_TYPES.includes('sourcing_required') && auto.RESOLUTIONS.retry.includes('sourcing_required')
+    && auto.RESOLUTIONS.manual.includes('sourcing_required') && !auto.RESOLUTIONS.accept.includes('sourcing_required'));
+  assert('missing_dropi_id se conserva (compatibilidad con excepciones abiertas y supplier_id)', auto.EXCEPTION_TYPES.includes('missing_dropi_id'));
+  assert('producto sin vínculo Dropi → sourcing_required (antes missing_dropi_id)', auto.buildDropiLines({ items: [{ id: 1, name: 'x', OrderProduct: { amount: 1 } }] }).problems[0].type === 'sourcing_required');
+
   assert('BLOCKED / DISPATCH_UNKNOWN / novedad → exception', ['BLOCKED', 'DISPATCH_UNKNOWN'].every((fs) => buildProgress({ state: 'x', stateOrder: 'en_preparacion', fulfillmentStatus: fs }).status === 'exception') && buildProgress({ state: 'x', stateOrder: 'en_transito', dropiStatusHistory: [{ status: 'NOVEDAD', group: 'issue', at: 't' }] }).status === 'exception');
+
+  out('\n▶ A-alert. Aviso «pedido nuevo» al propietario (sin datos personales)');
+  {
+    const o = { id: 77, total: '41.5', paymentMethod: 'cod', fulfillmentStatus: 'AUTOMATION_OFF', isTest: false,
+      customer: { name: 'Ana', lastName: 'Pérez', phone: '0991234567', streetAddress: 'Av. Amazonas N24-03', city: 'Quito <b>x</b>', user: { email: 'ana@cliente.ec' } },
+      items: [{ OrderProduct: { amount: 2 } }, { OrderProduct: { amount: 1 } }] };
+    const t = auto.ownerOrderAlertText(o);
+    assert('incluye id, total, nº de ítems, ciudad, pago y enlace al panel', /#77/.test(t) && /\$41\.50/.test(t) && /3 ítem/.test(t) && /Quito/.test(t) && /cod/.test(t) && t.includes(auto.PANEL_URL));
+    assert('sin nombre, teléfono, correo ni dirección', !/Ana|Pérez|0991234567|Amazonas|@cliente/.test(t));
+    assert('HTML escapado (la ciudad no inyecta etiquetas)', t.includes('Quito &lt;b&gt;x&lt;/b&gt;') && !t.includes('<b>x</b>'));
+    assert('isTestOrder: fuera de prod siempre prueba; en prod, is_test o email QA', auto.isTestOrder(o, false) && !auto.isTestOrder(o, true)
+      && auto.isTestOrder({ ...o, isTest: true }, true) && auto.isTestOrder({ ...o, customer: { user: { email: 'qa+1@x.ec' } } }, true));
+    assert('notifyOwnerNewOrder nunca lanza (pedido de prueba o null → false)', (await auto.notifyOwnerNewOrder(null)) === false && (await auto.notifyOwnerNewOrder(o, { prod: false })) === false);
+  }
 }
 
 // ── Parte B: Postgres real ───────────────────────────────────────────────────
@@ -342,6 +370,11 @@ async function partB({ schema }) {
   await mig.up(qi); await mig.up(qi);
   const migTok = require('../db/migrations/20261020000003-order-tracking-token');
   await migTok.down(qi); await migTok.up(qi); await migTok.up(qi);
+  const migAlert = require('../db/migrations/20261020000004-order-owner-alerted-at');
+  await migAlert.down(qi);
+  assert('down quita owner_alerted_at', !(await cols()).includes('owner_alerted_at'));
+  await migAlert.up(qi); await migAlert.up(qi);
+  assert('up (dos veces) crea owner_alerted_at', (await cols()).includes('owner_alerted_at'));
   assert('up (dos veces) crea columnas y order_exceptions', (await cols()).includes('dropi_status_history') && (await sel("SELECT 1 FROM information_schema.tables WHERE table_schema = :s AND table_name = 'order_exceptions'", { s: schema })).length === 1);
 
   // Dropi simulado bajo control del test.
@@ -368,9 +401,9 @@ async function partB({ schema }) {
   // Datos base
   const cat = await models.Category.create({ name: 'Test', image: 'x' });
   let uSeq = 0;
-  async function customer(over = {}) {
+  async function customer(over = {}, email) {
     uSeq++;
-    const user = await models.User.create({ email: `c${uSeq}@cliente.ec`, password: 'x', role: 'customer' });
+    const user = await models.User.create({ email: email || `c${uSeq}@cliente.ec`, password: 'x', role: 'customer' });
     return models.Customer.create({ name: 'Ana', lastName: 'Pérez', phone: '0991234567', city: 'Quito', province: 'Pichincha', streetAddress: 'Av. Amazonas N24-03', userId: user.id, ...over });
   }
   const P = (o) => models.Product.create({ name: 'Prod', image: 'x', description: 'd', categoryId: cat.id, stock: 100, price: 40, costPrice: 8, dropiProductId: '1001', ...o });
@@ -390,6 +423,17 @@ async function partB({ schema }) {
   await svc.confirmCod(o1.id, c1.userId);
   assert('confirmCod → AUTOMATION_OFF, 0 llamadas a Dropi', (await reload(o1.id)).fulfillmentStatus === 'AUTOMATION_OFF' && calls.length === 0);
   assert('pedido de staging marcado is_test (prueba ≠ real)', (await reload(o1.id)).isTest === true);
+  const noLink = await P({ dropiProductId: null, sourceProvider: null, dropiItems: null, name: 'Fuente de agua para gatos' });
+  const c1b = await customer();
+  const o1b = await order(c1b, [[noLink, 1]]);
+  await svc.confirmCod(o1b.id, c1b.userId);
+  const [ex1b] = await sel("SELECT details FROM order_exceptions WHERE order_id = :id AND type = 'sourcing_required' AND status = 'open'", { id: o1b.id });
+  assert('interruptor apagado + producto sin proveedor → cola de abastecimiento manual, AUTOMATION_OFF, 0 llamadas',
+    ex1b && (await reload(o1b.id)).fulfillmentStatus === 'AUTOMATION_OFF' && calls.length === 0 && ex1b.details.queue === 'abastecimiento_manual');
+  assert('sin tabla supplier_candidates → candidatos [] y acción «Sin candidatos»', ex1b.details.products[0].candidates.length === 0 && /Sin candidatos/.test(ex1b.details.products[0].suggestedAction)
+    && ex1b.details.customerNotice.sent === false);
+  assert('aviso sin datos personales del cliente', !JSON.stringify(ex1b.details).match(/Ana|Pérez|0991234567|Amazonas|@cliente/));
+  assert('el producto de abastecimiento no se envía a Dropi ni cambia', (await models.Product.findByPk(noLink.id)).dropiProductId === null);
 
   out('\n▶ B2. Un pedido = una orden en Dropi; eventos repetidos no duplican');
   env({ DROPI_ORDER_AUTOMATION: 'auto', DROPI_ORDER_SUPERVISED_MIN: 0 });
@@ -475,7 +519,7 @@ async function partB({ schema }) {
     assert(`${label} → BLOCKED + ${type}, 0 llamadas`, r.fulfillmentStatus === 'BLOCKED' && t.includes(type) && calls.length === n, `${r.fulfillmentStatus} [${t}]`);
     return o;
   }
-  await blocked('sin ID Dropi', await customer(), [[await P({ dropiProductId: null }), 1]], 'missing_dropi_id');
+  await blocked('sin ID Dropi', await customer(), [[await P({ dropiProductId: null }), 1]], 'sourcing_required');
   const variant = await P({ dropiItems: [{ id: '501', value: 'Azul' }, { id: '502', value: 'Rojo' }] });
   await blocked('variante no elegida (no usa la 1ª)', await customer(), [[variant, 1]], 'variant_mismatch');
   await blocked('variante inexistente', await customer(), [[variant, 1, { selectedDropiId: '999' }]], 'variant_mismatch');
@@ -497,6 +541,30 @@ async function partB({ schema }) {
   await sequelize.query("INSERT INTO catalog_issues (product_id, type) VALUES (:id, 'dropi_out_of_stock')", { replacements: { id: oos.id } });
   assert('hasBlockingIssue(productId) con issue abierto → true', (await auto.hasBlockingIssue(oos.id)) === true);
   const oOos = await blocked('agotado en Dropi (catalog_issues)', await customer(), [[oos, 1]], 'out_of_stock');
+  // dropi_not_found (p. ej. 82 / 81542) → abastecimiento manual con los candidatos de supplier_candidates
+  await sequelize.query(`CREATE TABLE supplier_candidates (id SERIAL PRIMARY KEY, product_id INT NOT NULL, dropi_product_id VARCHAR(12) NOT NULL, dropi_variation_id VARCHAR(12),
+    name TEXT, cost DECIMAL(10,2), stock INT, classification VARCHAR(10) NOT NULL, status VARCHAR(30) NOT NULL DEFAULT 'propuesto')`);
+  const gone = await P({ dropiProductId: '81542', name: 'Fuente de agua para gatos comedero 2 en1' });
+  await sequelize.query("INSERT INTO catalog_issues (product_id, type) VALUES (:id, 'dropi_not_found')", { replacements: { id: gone.id } });
+  await sequelize.query(`INSERT INTO supplier_candidates (product_id, dropi_product_id, name, cost, stock, classification, status) VALUES
+    (:id, '176296', 'FUENTE DE AGUA Y COMEDOR MASCOTA 2 EN 1', 18.5, 98, 'SIMILAR', 'propuesto'),
+    (:id, '123170', 'Fuente De Agua Y Comida Mascotas 2 En 1', 16, 11, 'SIMILAR', 'propuesto'),
+    (:id, '185342', 'Dispensador de agua para gatos', 11, 556, 'DISTINTO', 'descartado')`, { replacements: { id: gone.id } });
+  const oGone = await blocked('Dropi id ya no existe (catalog_issues dropi_not_found)', await customer(), [[gone, 1]], 'sourcing_required');
+  const [exG] = await sel("SELECT id, details FROM order_exceptions WHERE order_id = :id AND type = 'sourcing_required'", { id: oGone.id });
+  const pG = exG.details.products[0];
+  assert('candidatos vivos (sin descartados), ordenados y con acción sugerida', pG.candidates.map((c) => c.dropiProductId).join() === '123170,176296'
+    && /ninguno confirmado como idéntico/.test(pG.suggestedAction) && pG.identical === false, JSON.stringify(pG));
+  assert('aviso al cliente incluye sustitución con aceptación obligatoria', exG.details.customerNotice.options.some((o) => o.kind === 'sustitucion' && o.requiresCustomerAcceptance));
+  await sequelize.query("UPDATE supplier_candidates SET classification = 'EXACTO', status = 'preparado_preferente' WHERE dropi_product_id = '123170'");
+  await models.Order.update({ fulfillmentStatus: 'PENDING_DISPATCH' }, { where: { id: oGone.id } }); // re-evaluación (como hace el worker/retry)
+  await svc._dispatchOrder(await svc.findOne(oGone.id));
+  const [exG2] = await sel("SELECT details FROM order_exceptions WHERE order_id = :id AND type = 'sourcing_required' AND status = 'open'", { id: oGone.id });
+  assert('con un preferente EXACTO: acción = vincular en Salud del catálogo y reintentar; aviso «idéntica»; sigue sin enviarse',
+    /MISMO artículo/.test(exG2.details.products[0].suggestedAction) && exG2.details.customerNotice.options.some((o) => o.kind === 'alternativa_identica')
+    && (await reload(oGone.id)).fulfillmentStatus === 'BLOCKED' && (await models.Product.findByPk(gone.id)).dropiProductId === '81542');
+  const accG = await auto.resolveException(exG.id, { resolution: 'accept', note: 'x' }, 1).catch((e) => e);
+  assert('sourcing_required no se puede «aceptar» → 400', accG.output?.statusCode === 400);
   const twice = await svc._dispatchOrder(await svc.findOne(oOos.id)).catch(() => null);
   assert('reevaluar no duplica la excepción', (await exTypes(oOos.id)).filter((t) => t === 'out_of_stock').length === 1 && twice?.status === 'SKIPPED');
   // Resolución "accept" de un margen: se envía saltándose solo ese tipo
@@ -706,6 +774,55 @@ async function partB({ schema }) {
       assert('bloqueado (oP) y novedad (o4) → exception', (await pr(oP.id)).status === 'exception' && (await pr(o4.id)).status === 'exception');
     } finally {
       server.close();
+    }
+  }
+
+  out('\n▶ B17. Aviso «pedido nuevo» al propietario: uno por pedido real, en todos los caminos');
+  {
+    const wait = () => new Promise((r) => setTimeout(r, 300));
+    const prevMode = process.env.DROPI_ORDER_AUTOMATION;
+    const alerts = (id) => tg.filter((m) => m.method === 'sendMessage' && String(m.body?.text).startsWith(`🛒 <b>Pedido nuevo #${id}</b>`));
+    env({ DROPI_ORDER_AUTOMATION: undefined });
+    const cS = await customer();
+    const oS = await order(cS, [[good, 2]]);
+    await svc.confirmCod(oS.id, cS.userId); await wait();
+    assert('staging: pedido de prueba → sin aviso', alerts(oS.id).length === 0 && (await reload(oS.id)).ownerAlertedAt === null);
+    env({ RAILWAY_ENVIRONMENT_NAME: 'production' });
+    try {
+      const cOff = await customer();
+      const oOff = await order(cOff, [[good, 2]]);
+      await svc.confirmCod(oOff.id, cOff.userId); await wait();
+      const a = alerts(oOff.id);
+      assert('prod + AUTOMATION_OFF → 1 aviso con estado y sin PII', a.length === 1 && /AUTOMATION_OFF/.test(a[0].body.text) && /2 ítem/.test(a[0].body.text) && !/Ana|Pérez|0991234567|Amazonas|@cliente/.test(a[0].body.text));
+      assert('owner_alerted_at fijado', (await reload(oOff.id)).ownerAlertedAt instanceof Date);
+      const full = await svc.findOne(oOff.id);
+      assert('segunda llamada (y concurrentes) → no se repite', (await Promise.all([auto.notifyOwnerNewOrder(full), auto.notifyOwnerNewOrder(full)])).every((x) => x === false) && alerts(oOff.id).length === 1);
+      const cSrc = await customer();
+      const oSrc = await order(cSrc, [[noLink, 1]]);
+      await svc.confirmCod(oSrc.id, cSrc.userId); await wait();
+      assert('prod + sourcing_required → aviso de abastecimiento + aviso de pedido', alerts(oSrc.id).length === 1 && (await exTypes(oSrc.id)).includes('sourcing_required'));
+      env({ DROPI_ORDER_AUTOMATION: 'auto' });
+      const cB = await customer();
+      const oB = await order(cB, [[good, 1]]);
+      await svc.confirmCod(oB.id, cB.userId); await wait();
+      assert('prod + automatización activa (aquí BLOCKED por mock) → 1 aviso', alerts(oB.id).length === 1);
+      const cQ = await customer({}, 'qa+alert@cliente.ec');
+      const oQ = await order(cQ, [[good, 1]]);
+      await svc.confirmCod(oQ.id, cQ.userId); await wait();
+      assert('prod + email de QA → sin aviso', alerts(oQ.id).length === 0);
+      // Telegram caído: el pedido se confirma igual.
+      const prevFetch = global.fetch;
+      global.fetch = async (url, opts) => (new URL(String(url)).hostname === 'api.telegram.org' ? Promise.reject(new Error('telegram caído')) : prevFetch(url, opts));
+      env({ DROPI_ORDER_AUTOMATION: undefined });
+      const cF = await customer();
+      const oF = await order(cF, [[good, 1]]);
+      let threw = null;
+      try { await svc.confirmCod(oF.id, cF.userId); await wait(); } catch (e) { threw = e; }
+      global.fetch = prevFetch;
+      const rF = await reload(oF.id);
+      assert('Telegram caído → el pedido se confirma igual', !threw && rF.state === 'pendiente_envio' && rF.fulfillmentStatus === 'AUTOMATION_OFF');
+    } finally {
+      env({ RAILWAY_ENVIRONMENT_NAME: 'staging', DROPI_ORDER_AUTOMATION: prevMode });
     }
   }
 
