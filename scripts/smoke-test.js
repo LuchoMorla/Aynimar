@@ -2096,7 +2096,7 @@ async function runDeunaPaymentProofSuite() {
 
   function makeOrder(overrides = {}) {
     const order = {
-      id: 700, state: 'comprada', paymentStatus: 'pending', fulfillmentStatus: null,
+      id: 700, state: 'comprada', stateOrder: 'comprado_pendiente_pago', paymentStatus: 'pending', fulfillmentStatus: null,
       total: 45.50, customer: { id: 9, userId: 501 },
       ...overrides,
     };

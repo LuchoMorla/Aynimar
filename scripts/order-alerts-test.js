@@ -66,6 +66,41 @@ async function welcomeMails() {
   }
 }
 
+async function deunaProof() {
+  console.log('\n▶ 2. Comprobante DeUna: aviso y aprobación en el estado correcto');
+  sequelize.transaction = async (fn) => fn({});
+  const orders = {
+    30: { id: 30, total: '25', state: 'comprada', stateOrder: 'comprado_pendiente_pago', paymentStatus: 'pending', isTest: false, customer: { userId: 2, name: 'Ana', city: 'Quito' } },
+    31: { id: 31, total: '25', state: 'pendiente_envio', stateOrder: 'en_preparacion', paymentStatus: 'pending', isTest: false, customer: { userId: 2 } },
+    32: { id: 32, total: '25', state: 'comprada', stateOrder: 'comprado_pendiente_pago', paymentStatus: 'pending', isTest: true, customer: { userId: 2 } },
+  };
+  for (const o of Object.values(orders)) o.update = async (ch) => Object.assign(o, ch);
+  models.Order.findByPk = async (id) => orders[Number(id)] || null;
+  models.PaymentProof.findOne = async ({ where }) => (where.fileUrl ? null : { id: Number(where.id), orderId: Number(where.orderId), status: 'pending', fileUrl: 'https://x/p.jpg' });
+  models.PaymentProof.create = async (d) => ({ id: 900, ...d });
+  const claims = [];
+  models.PaymentProof.update = async (d, { where }) => { claims.push(where.id); return [1]; };
+
+  const pps = require('../Services/paymentProofService');
+  const URL_PROOF = 'https://firebasestorage.googleapis.com/v0/b/x/o/payment-proofs%2F30%2Fsecreto.jpg';
+  await pps.uploadProof(30, { fileUrl: URL_PROOF }, 2, 'customer');
+  await new Promise((r) => setImmediate(r));
+  const msg = tg.find((m) => /Pago DeUna por revisar — pedido #30/.test(m.text));
+  assert('subida → 1 aviso Telegram con pedido, total, comprobante y endpoints', tg.length === 1 && msg && /\$25\.00/.test(msg.text) && /#900/.test(msg.text) && /payment-proof\/900\/approve/.test(msg.text));
+  assert('aviso sin PII ni URL del comprobante', msg && !/Ana|Quito|secreto|firebasestorage/.test(msg.text));
+  assert('aviso en HTML (parse_mode) como el resto', msg?.parse_mode === 'HTML');
+  await pps.uploadProof(32, { fileUrl: URL_PROOF.replace('30', '32') }, 2, 'customer');
+  await new Promise((r) => setImmediate(r));
+  assert('pedido de prueba → sin aviso', tg.length === 1);
+
+  let err = null;
+  try { await pps.approveProof(31, 7, 1); } catch (e) { err = e; }
+  assert('aprobar con el pedido ya confirmado → 409 y el comprobante NO se marca', err?.output?.statusCode === 409 && claims.length === 0);
+  orders[30].paymentStatus = 'paid'; err = null;
+  try { await pps.approveProof(30, 7, 1); } catch (e) { err = e; }
+  assert('aprobar un pedido ya pagado → 409 sin tocar el comprobante', err?.output?.statusCode === 409 && claims.length === 0);
+}
+
 function productQuery() {
   console.log('\n▶ 3. GET /products: price_min / price_max opcionales');
   const { queryProductSchema: s } = require('../schemaODtos/productSchema');
@@ -78,6 +113,7 @@ function productQuery() {
 (async () => {
   try {
     await welcomeMails();
+    await deunaProof();
     productQuery();
   } catch (e) {
     failed++;

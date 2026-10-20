@@ -100,6 +100,13 @@ Reglas:
   - Resoluciones: `retry`, `accept`, `manual`, `link`, `not_created`, `collected`, `not_collected`. La tabla `RESOLUTIONS` del servicio indica cuáles admite cada tipo.
   - El cierre es atómico: si dos personas resuelven a la vez, la segunda recibe 409.
 
+## 5b. Avisos Telegram al propietario
+
+- **Pedido nuevo**: uno por cada pedido real confirmado (no `is_test`, solo en producción, sin email de QA), sea cual sea el resultado del despacho (`MANUAL_LOGISTICS`, `AUTOMATION_OFF`, `sourcing_required`/`BLOCKED`, `DISPATCHED`) y también al pagar 100 % con créditos. Lleva id, total, unidades, ciudad, método de pago, estado de envío y enlace al panel; nunca nombre, teléfono, correo ni dirección.
+- Idempotencia: `orders.owner_alerted_at` (migración aditiva `20261020000004`), fijado con `UPDATE … WHERE owner_alerted_at IS NULL` antes de enviar. Es *at-most-once*: si Telegram falla tras el claim, el aviso se pierde (queda en logs) y el pedido no se ve afectado.
+- **Comprobante DeUna**: al subirlo, aviso «pago por revisar» con pedido, total, id del comprobante y los endpoints `POST /api/v1/orders/:id/payment-proof/:proofId/approve|reject` (solo admin/business_owner; auditoría en `payment_proofs.reviewed_by_user_id/reviewed_at/review_note`). La aprobación exige el pedido en `comprada / comprado_pendiente_pago` sin pagar (409 si no, sin marcar el comprobante).
+- Decisión: alternativa descartada — botones aprobar/rechazar en Telegram: el callback no identifica a un usuario de la BD para la auditoría y añade superficie; queda pendiente si el volumen DeUna lo justifica.
+
 ## 6. Activación (requiere autorización del propietario en cada paso)
 
 1. Staging con `DROPI_ORDER_AUTOMATION=supervised` y transporte mock: pedidos sintéticos.
