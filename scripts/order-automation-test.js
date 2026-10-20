@@ -303,6 +303,20 @@ async function partA() {
   assert('producto sin vínculo Dropi → sourcing_required (antes missing_dropi_id)', auto.buildDropiLines({ items: [{ id: 1, name: 'x', OrderProduct: { amount: 1 } }] }).problems[0].type === 'sourcing_required');
 
   assert('BLOCKED / DISPATCH_UNKNOWN / novedad → exception', ['BLOCKED', 'DISPATCH_UNKNOWN'].every((fs) => buildProgress({ state: 'x', stateOrder: 'en_preparacion', fulfillmentStatus: fs }).status === 'exception') && buildProgress({ state: 'x', stateOrder: 'en_transito', dropiStatusHistory: [{ status: 'NOVEDAD', group: 'issue', at: 't' }] }).status === 'exception');
+
+  out('\n▶ A-alert. Aviso «pedido nuevo» al propietario (sin datos personales)');
+  {
+    const o = { id: 77, total: '41.5', paymentMethod: 'cod', fulfillmentStatus: 'AUTOMATION_OFF', isTest: false,
+      customer: { name: 'Ana', lastName: 'Pérez', phone: '0991234567', streetAddress: 'Av. Amazonas N24-03', city: 'Quito <b>x</b>', user: { email: 'ana@cliente.ec' } },
+      items: [{ OrderProduct: { amount: 2 } }, { OrderProduct: { amount: 1 } }] };
+    const t = auto.ownerOrderAlertText(o);
+    assert('incluye id, total, nº de ítems, ciudad, pago y enlace al panel', /#77/.test(t) && /\$41\.50/.test(t) && /3 ítem/.test(t) && /Quito/.test(t) && /cod/.test(t) && t.includes(auto.PANEL_URL));
+    assert('sin nombre, teléfono, correo ni dirección', !/Ana|Pérez|0991234567|Amazonas|@cliente/.test(t));
+    assert('HTML escapado (la ciudad no inyecta etiquetas)', t.includes('Quito &lt;b&gt;x&lt;/b&gt;') && !t.includes('<b>x</b>'));
+    assert('isTestOrder: fuera de prod siempre prueba; en prod, is_test o email QA', auto.isTestOrder(o, false) && !auto.isTestOrder(o, true)
+      && auto.isTestOrder({ ...o, isTest: true }, true) && auto.isTestOrder({ ...o, customer: { user: { email: 'qa+1@x.ec' } } }, true));
+    assert('notifyOwnerNewOrder nunca lanza (pedido de prueba o null → false)', (await auto.notifyOwnerNewOrder(null)) === false && (await auto.notifyOwnerNewOrder(o, { prod: false })) === false);
+  }
 }
 
 // ── Parte B: Postgres real ───────────────────────────────────────────────────
@@ -356,6 +370,11 @@ async function partB({ schema }) {
   await mig.up(qi); await mig.up(qi);
   const migTok = require('../db/migrations/20261020000003-order-tracking-token');
   await migTok.down(qi); await migTok.up(qi); await migTok.up(qi);
+  const migAlert = require('../db/migrations/20261020000004-order-owner-alerted-at');
+  await migAlert.down(qi);
+  assert('down quita owner_alerted_at', !(await cols()).includes('owner_alerted_at'));
+  await migAlert.up(qi); await migAlert.up(qi);
+  assert('up (dos veces) crea owner_alerted_at', (await cols()).includes('owner_alerted_at'));
   assert('up (dos veces) crea columnas y order_exceptions', (await cols()).includes('dropi_status_history') && (await sel("SELECT 1 FROM information_schema.tables WHERE table_schema = :s AND table_name = 'order_exceptions'", { s: schema })).length === 1);
 
   // Dropi simulado bajo control del test.
@@ -382,9 +401,9 @@ async function partB({ schema }) {
   // Datos base
   const cat = await models.Category.create({ name: 'Test', image: 'x' });
   let uSeq = 0;
-  async function customer(over = {}) {
+  async function customer(over = {}, email) {
     uSeq++;
-    const user = await models.User.create({ email: `c${uSeq}@cliente.ec`, password: 'x', role: 'customer' });
+    const user = await models.User.create({ email: email || `c${uSeq}@cliente.ec`, password: 'x', role: 'customer' });
     return models.Customer.create({ name: 'Ana', lastName: 'Pérez', phone: '0991234567', city: 'Quito', province: 'Pichincha', streetAddress: 'Av. Amazonas N24-03', userId: user.id, ...over });
   }
   const P = (o) => models.Product.create({ name: 'Prod', image: 'x', description: 'd', categoryId: cat.id, stock: 100, price: 40, costPrice: 8, dropiProductId: '1001', ...o });
@@ -755,6 +774,55 @@ async function partB({ schema }) {
       assert('bloqueado (oP) y novedad (o4) → exception', (await pr(oP.id)).status === 'exception' && (await pr(o4.id)).status === 'exception');
     } finally {
       server.close();
+    }
+  }
+
+  out('\n▶ B17. Aviso «pedido nuevo» al propietario: uno por pedido real, en todos los caminos');
+  {
+    const wait = () => new Promise((r) => setTimeout(r, 300));
+    const prevMode = process.env.DROPI_ORDER_AUTOMATION;
+    const alerts = (id) => tg.filter((m) => m.method === 'sendMessage' && String(m.body?.text).startsWith(`🛒 <b>Pedido nuevo #${id}</b>`));
+    env({ DROPI_ORDER_AUTOMATION: undefined });
+    const cS = await customer();
+    const oS = await order(cS, [[good, 2]]);
+    await svc.confirmCod(oS.id, cS.userId); await wait();
+    assert('staging: pedido de prueba → sin aviso', alerts(oS.id).length === 0 && (await reload(oS.id)).ownerAlertedAt === null);
+    env({ RAILWAY_ENVIRONMENT_NAME: 'production' });
+    try {
+      const cOff = await customer();
+      const oOff = await order(cOff, [[good, 2]]);
+      await svc.confirmCod(oOff.id, cOff.userId); await wait();
+      const a = alerts(oOff.id);
+      assert('prod + AUTOMATION_OFF → 1 aviso con estado y sin PII', a.length === 1 && /AUTOMATION_OFF/.test(a[0].body.text) && /2 ítem/.test(a[0].body.text) && !/Ana|Pérez|0991234567|Amazonas|@cliente/.test(a[0].body.text));
+      assert('owner_alerted_at fijado', (await reload(oOff.id)).ownerAlertedAt instanceof Date);
+      const full = await svc.findOne(oOff.id);
+      assert('segunda llamada (y concurrentes) → no se repite', (await Promise.all([auto.notifyOwnerNewOrder(full), auto.notifyOwnerNewOrder(full)])).every((x) => x === false) && alerts(oOff.id).length === 1);
+      const cSrc = await customer();
+      const oSrc = await order(cSrc, [[noLink, 1]]);
+      await svc.confirmCod(oSrc.id, cSrc.userId); await wait();
+      assert('prod + sourcing_required → aviso de abastecimiento + aviso de pedido', alerts(oSrc.id).length === 1 && (await exTypes(oSrc.id)).includes('sourcing_required'));
+      env({ DROPI_ORDER_AUTOMATION: 'auto' });
+      const cB = await customer();
+      const oB = await order(cB, [[good, 1]]);
+      await svc.confirmCod(oB.id, cB.userId); await wait();
+      assert('prod + automatización activa (aquí BLOCKED por mock) → 1 aviso', alerts(oB.id).length === 1);
+      const cQ = await customer({}, 'qa+alert@cliente.ec');
+      const oQ = await order(cQ, [[good, 1]]);
+      await svc.confirmCod(oQ.id, cQ.userId); await wait();
+      assert('prod + email de QA → sin aviso', alerts(oQ.id).length === 0);
+      // Telegram caído: el pedido se confirma igual.
+      const prevFetch = global.fetch;
+      global.fetch = async (url, opts) => (new URL(String(url)).hostname === 'api.telegram.org' ? Promise.reject(new Error('telegram caído')) : prevFetch(url, opts));
+      env({ DROPI_ORDER_AUTOMATION: undefined });
+      const cF = await customer();
+      const oF = await order(cF, [[good, 1]]);
+      let threw = null;
+      try { await svc.confirmCod(oF.id, cF.userId); await wait(); } catch (e) { threw = e; }
+      global.fetch = prevFetch;
+      const rF = await reload(oF.id);
+      assert('Telegram caído → el pedido se confirma igual', !threw && rF.state === 'pendiente_envio' && rF.fulfillmentStatus === 'AUTOMATION_OFF');
+    } finally {
+      env({ RAILWAY_ENVIRONMENT_NAME: 'staging', DROPI_ORDER_AUTOMATION: prevMode });
     }
   }
 

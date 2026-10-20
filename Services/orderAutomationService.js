@@ -515,14 +515,52 @@ async function notifyAdmin(text) {
   await sendTelegramNotification(text).catch(() => {});
 }
 
+// ── Aviso «pedido nuevo» al propietario (todos los caminos: COD, DeUna aprobado, créditos) ──
+const PANEL_URL = 'https://circular-merchant.aynimar.com/';
+const escHtml = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** Prueba ≠ real: fuera de producción, marcado is_test o email de QA. */
+function isTestOrder(order, prod = isProductionEnv()) {
+  return Boolean(order.isTest) || !prod || TEST_EMAIL_RE.test(order.customer?.user?.email || '');
+}
+
+/** Texto del aviso: sin nombre, teléfono, correo ni dirección (solo la ciudad). */
+function ownerOrderAlertText(order) {
+  const units = (order.items || []).reduce((n, it) => n + (Number(it.OrderProduct?.amount) || 0), 0);
+  return `🛒 <b>Pedido nuevo #${escHtml(order.id)}</b>\n` +
+    `Total: $${escHtml(Number(order.total ?? 0).toFixed(2))} · ${units} ítem(s)\n` +
+    `Ciudad: ${escHtml(order.customer?.city || '?')} · Pago: ${escHtml(order.paymentMethod || '?')}\n` +
+    `Estado de envío: ${escHtml(order.fulfillmentStatus || '?')}\n` +
+    `Panel: ${PANEL_URL}`;
+}
+
+/**
+ * Un aviso por pedido real (claim atómico sobre owner_alerted_at). Nunca lanza:
+ * si Telegram o la BD fallan, el pedido sigue igual.
+ * ponytail: at-most-once — si Telegram falla tras el claim, ese aviso se pierde (queda en logs);
+ * añadir reintento si se ve en la práctica.
+ * @returns {Promise<boolean>} true si se envió (o intentó enviar) el aviso.
+ */
+async function notifyOwnerNewOrder(order, { prod = isProductionEnv() } = {}) {
+  try {
+    if (!order || isTestOrder(order, prod)) return false;
+    const [claimed] = await models.Order.update({ ownerAlertedAt: new Date() }, { where: { id: order.id, ownerAlertedAt: null } });
+    if (!claimed) return false;
+    await sendTelegramNotification(ownerOrderAlertText(order));
+    return true;
+  } catch (err) {
+    console.warn(`[OrderAutomation] aviso de pedido #${order?.id} no enviado: ${err.message}`);
+    return false;
+  }
+}
+
 /**
  * @returns {Promise<null | {status: string, problems?: object}>}
  *   null → se puede enviar (order.__dropiPayload queda preparado).
  */
 async function preDispatch(order, cfg = getConfig()) {
   // Prueba ≠ real: fuera de producción o con email de QA, el pedido es de prueba.
-  const email = order.customer?.user?.email || '';
-  if (!order.isTest && (!isProductionEnv() || TEST_EMAIL_RE.test(email))) await order.update({ isTest: true });
+  if (!order.isTest && isTestOrder(order)) await order.update({ isTest: true });
   if (cfg.mode === 'off') {
     // Aun con el interruptor apagado, un producto sin proveedor confirmado entra en la cola de
     // abastecimiento manual (decisión del propietario, 20-oct). No se envía nada a Dropi.
@@ -820,6 +858,11 @@ module.exports = {
   applyDropiStatus,
   handleTelegramCallback,
   onCancelled,
+  isTestOrder,
+  ownerOrderAlertText,
+  notifyOwnerNewOrder,
+  PANEL_URL,
+  escHtml,
   realDispatchedCount,
   realDispatchedToday,
   ecuadorDayStart,
