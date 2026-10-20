@@ -1,6 +1,6 @@
 'use strict';
 /* eslint-disable no-console */
-/* global Headers */
+/* global Headers, FormData */
 /**
  * Social Publisher Test Suite — calendario + aprobación por Telegram + cola Postgres.
  *
@@ -29,7 +29,9 @@ const FAKE = {
 };
 const VIDEO = Buffer.from('fake mp4 bytes for the approved piece');
 const VIDEO_SHA = crypto.createHash('sha256').update(VIDEO).digest('hex');
-const VIDEO_URL = 'https://firebasestorage.googleapis.com/v0/b/test/o/videos%2Fpiece.mp4?alt=media&token=t';
+// M1: ruta direccionada por contenido (contiene el sha256).
+const VIDEO_URL = `https://firebasestorage.googleapis.com/v0/b/test/o/videos%2F${VIDEO_SHA}.mp4?alt=media&token=t`;
+const tampered = new Set(); // rutas de Storage que devuelven OTROS bytes (archivo cambiado tras subirlo)
 
 if (!IS_WORKER) {
   for (const k of Object.keys(process.env)) if (/^(TELEGRAM_|RAILWAY_|META_|BUFFER_|YOUTUBE_|SOCIAL_)/.test(k) && k !== 'SOCIAL_TEST_DATABASE_URL' || k === 'REDIS_URL' || k === 'STORE_BASE_URL') delete process.env[k];
@@ -81,14 +83,18 @@ global.fetch = async (url, opts = {}) => {
   const u = new URL(s);
   if (u.hostname === 'api.telegram.org') {
     const method = s.split('/').pop();
-    const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : null;
+    let body = typeof opts.body === 'string' ? JSON.parse(opts.body) : null;
+    if (opts.body instanceof FormData) { // subida multipart: campos + sha256 de los bytes subidos
+      const f = opts.body.get('video');
+      body = { chat_id: opts.body.get('chat_id'), caption: opts.body.get('caption'), videoSha: f && typeof f !== 'string' ? crypto.createHash('sha256').update(Buffer.from(await f.arrayBuffer())).digest('hex') : f };
+    }
     tg.push({ method, body });
-    const result = ['sendVideo', 'sendMessage'].includes(method) ? { message_id: ++seq } : true;
+    const result = ['sendVideo', 'sendMessage'].includes(method) ? { message_id: ++seq, ...(method === 'sendVideo' ? { video: { file_id: `TGFILE-${seq}` } } : {}) } : true;
     return jsonResp(200, { ok: true, result });
   }
   api.push({ host: u.hostname, path: u.pathname, search: u.search, method: opts.method || 'GET', headers: opts.headers || {}, body: opts.body });
   if (u.hostname === 'firebasestorage.googleapis.com') {
-    const buf = u.pathname.includes('tampered') ? Buffer.from('otro archivo') : VIDEO;
+    const buf = tampered.has(u.pathname) ? Buffer.from('otro archivo') : VIDEO;
     return { ok: true, status: 200, headers: new Headers({ 'content-length': String(buf.length) }), arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length) };
   }
   if (u.hostname === 'graph.facebook.com') {
@@ -217,6 +223,11 @@ async function partA() {
   const ytMeta = JSON.parse(ytCalls[1].body);
   assert('YT: refresh token → subida reanudable → PUT bytes → URL de Short', yt.url === 'https://www.youtube.com/shorts/yt_1' && ytCalls[2].method === 'PUT' && ytCalls[2].body === VIDEO);
   assert('YT: título = 1ª línea, privacidad por defecto private', ytMeta.snippet.title === 'Fuente Pro' && ytMeta.status.privacyStatus === 'private');
+  const ytNoStatus = async () => {
+    const f = async (url) => (String(url).includes('oauth2') ? jsonResp(200, { access_token: 'FAKE-yt-access' }) : jsonResp(200, { items: [] }));
+    return social.getAdapter('youtube', 'api').verify({ externalId: 'yt_1' }, { ...ctx, env: envYt, fetch: f });
+  };
+  assert('B8: YT recién subido sin status → null (pendiente), no false', (await ytNoStatus()) === null);
   n = api.length;
   const bf = await social.getAdapter('tiktok', 'buffer').publish({ post: { ...post, network: 'tiktok' }, piece: {}, video }, ctx);
   const bfBody = JSON.parse(api[n].body);
@@ -332,10 +343,12 @@ async function partB({ raw, schema }) {
       const id = `cq-${action}-${ref}-${i}`;
       assert(`callback ${id} respondido`, await until(async () => tg.some((c) => c.method === 'answerCallbackQuery' && c.body.callback_query_id === id)));
     };
+    const msg = (text, reply) => fetch(`${base}/ai/telegram/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Telegram-Bot-Api-Secret-Token': FAKE.SECRET }, body: JSON.stringify({ update_id: 99, message: { message_id: ++seq, chat: { id: ADMIN }, from: { id: ADMIN }, text, reply_to_message: reply } }) }).then((r) => r.text());
     const answers = (from) => tg.slice(from).filter((c) => c.method === 'answerCallbackQuery').map((c) => c.body.text);
     const review = async (ref) => (await sel('SELECT * FROM creative_reviews WHERE ref = :ref', { ref }))[0];
     const postsOf = async (pieceId) => sel('SELECT * FROM social_posts WHERE piece_id = :id ORDER BY network', { id: pieceId });
-    const setEnabled = (on) => exec("INSERT INTO app_settings (key, value) VALUES ('social.enabled', :v) ON CONFLICT (key) DO UPDATE SET value = :v", { v: on ? 'true' : 'false' });
+    const setKey = (key, on) => exec('INSERT INTO app_settings (key, value) VALUES (:key, :v) ON CONFLICT (key) DO UPDATE SET value = :v', { key, v: on ? 'true' : 'false' });
+    const setEnabled = (on) => setKey('social.publisher.enabled', on);
     const when = (min) => new Date(Date.now() + min * 60000).toISOString();
 
     out('\n▶ B1. Endpoints admin: auth y calendario');
@@ -347,6 +360,7 @@ async function partB({ raw, schema }) {
     const pc = await callApi('POST', `/campaigns/${camp.body.id}/pieces`, pieceBody);
     assert('crear pieza (ref + versión + sha256) → 201', pc.status === 201 && pc.body.video_sha256 === VIDEO_SHA);
     assert('misma ref + versión → 409', (await callApi('POST', `/campaigns/${camp.body.id}/pieces`, pieceBody)).status === 409);
+    assert('M1: video_url sin el sha256 en la ruta → 400', (await callApi('POST', `/campaigns/${camp.body.id}/pieces`, { ...pieceBody, version: 8, videoUrl: 'https://firebasestorage.googleapis.com/v0/b/test/o/videos%2Fpiece.mp4' })).status === 400);
     assert('video_url de host no permitido → 400', (await callApi('POST', `/campaigns/${camp.body.id}/pieces`, { ...pieceBody, version: 9, videoUrl: 'https://evil.example/v.mp4' })).status === 400);
     const P1 = pc.body.id;
     const add = (pieceId, b) => callApi('POST', `/pieces/${pieceId}/posts`, b);
@@ -380,7 +394,8 @@ async function partB({ raw, schema }) {
     const sent = tg.slice(n);
     const REF = rv.body.ref;
     assert('review → 202 con ref y hash', rv.status === 202 && svc.isPackageRef(REF) && /^[0-9a-f]{64}$/.test(rv.body.packageHash));
-    assert('vídeo enviado por file_id con Ref', sent[0].method === 'sendVideo' && sent[0].body.video === 'FILEID-1' && sent[0].body.caption.includes(`Ref: ${REF}`));
+    assert('A1: se SUBEN los bytes de video_url (sha256 = el aprobado), no el telegram_file_id de la API', sent[0].method === 'sendVideo' && sent[0].body.videoSha === VIDEO_SHA && sent[0].body.caption.includes(`Ref: ${REF}`) && !JSON.stringify(sent).includes('FILEID-1'));
+    assert('A1: creative_reviews guarda el file_id que devuelve Telegram', /^TGFILE-/.test((await review(REF)).telegram_file_id || ''));
     const cards = sent.filter((c) => c.method === 'sendMessage' && c.body.text.startsWith('📅'));
     assert('una ficha por red con texto COMPLETO, fecha local y vía', cards.length === 5 && cards.some((c) => c.body.text.includes('Fuente Pro para IG #aynimar') && c.body.text.includes('INSTAGRAM · vía api')) && cards.some((c) => c.body.text.includes('TIKTOK · vía buffer')));
     const fin = sent.at(-1);
@@ -401,7 +416,9 @@ async function partB({ raw, schema }) {
 
     // Pausa: interruptor OFF (por defecto) → el worker no reclama nada.
     const paused = await worker.runOnce({ notify: async () => {} });
-    assert('pausa (social.enabled ausente) → 0 reclamadas, 0 publicadas', paused.length === 0 && pubs().length === 0);
+    assert('pausa (social.publisher.enabled ausente) → 0 reclamadas, 0 publicadas', paused.length === 0 && pubs().length === 0);
+    await setKey('social.enabled', true); // interruptor heredado de F2 ya en 'true'
+    assert('M3: social.enabled (F2) = true NO enciende el publicador → 0 reclamadas', (await worker.runOnce({ notify: async () => {} })).length === 0 && pubs().length === 0);
     await setEnabled(false);
     assert('pausa (/stop = false) → 0 reclamadas', (await worker.runOnce({ notify: async () => {} })).length === 0);
     // 2 workers hijo arrancan y sondean EN PAUSA; al quitar la pausa compiten los 3 procesos.
@@ -409,7 +426,8 @@ async function partB({ raw, schema }) {
     const w1 = spawnWorker(childEnv), w2 = spawnWorker(childEnv);
     await Promise.all([w1.ready, w2.ready]);
     assert('pausa con 2 workers hijo sondeando → 0 publicadas', pubs().length === 0 && (await postsOf(P1)).filter((p) => p.status === 'queued').length === 4);
-    await setEnabled(true);
+    await msg('/reanudar'); // M3: el publicador solo se enciende con un /reanudar consciente
+    assert('M3: /reanudar → social.publisher.enabled = true', await until(async () => svc.isEnabled()));
 
     const alerts = [];
     const notify = async (t) => { alerts.push(t); };
@@ -450,9 +468,9 @@ async function partB({ raw, schema }) {
 
     // Pieza auxiliar: planifica 1 publicación mock y la envía a revisión.
     let k = 1;
-    const piece = async (caption, extra = {}) => {
+    const piece = async (caption, extra = {}, postExtra = {}) => {
       const p = await svc.createPiece(camp.body.id, { ref: `v82xaux${k++}`, version: 1, videoSha256: VIDEO_SHA, videoUrl: VIDEO_URL, width: 1080, height: 1920, durationS: 14, bytes: VIDEO.length, ...extra });
-      const post = await svc.addPost(p.id, { network: 'mock', scheduledAt: when(-1), caption });
+      const post = await svc.addPost(p.id, { network: 'mock', scheduledAt: when(-1), caption, ...postExtra });
       const { ref } = await svc.sendForReview(p.id, 'test');
       return { id: p.id, post, ref };
     };
@@ -468,7 +486,6 @@ async function partB({ raw, schema }) {
     assert('cambios → posts en draft y 0 publicaciones', (await postsOf(C.id))[0].status === 'draft' && pubsOf(C.post.id) === 0);
     await settled('ap', R.ref, 9);
     assert('aprobar tras rechazar → no cambia nada', (await review(R.ref)).status === 'rejected' && (await postsOf(R.id))[0].status === 'draft');
-    const msg = (text, reply) => fetch(`${base}/ai/telegram/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Telegram-Bot-Api-Secret-Token': FAKE.SECRET }, body: JSON.stringify({ update_id: 99, message: { message_id: ++seq, chat: { id: ADMIN }, from: { id: ADMIN }, text, reply_to_message: reply } }) }).then((r) => r.text());
     await msg('Cambia el precio del texto', { message_id: 777, from: { id: 111111, is_bot: true }, text: `Ref: ${C.ref}` });
     await msg('No encaja con la marca', { message_id: 778, from: { id: 111111, is_bot: true }, text: `❌ Ref: ${R.ref} rechazada.` });
     await until(async () => (await review(C.ref)).change_request && (await review(R.ref)).change_request);
@@ -510,8 +527,10 @@ async function partB({ raw, schema }) {
     const F = await piece('pieza [mock-fail:permanent]');
     const U = await piece('pieza [mock-fail:unknown]');
     const M = await piece('pieza [mock-fail:temporary:9]');
-    const H = await piece('pieza con vídeo alterado', { videoUrl: 'https://firebasestorage.googleapis.com/v0/b/test/o/tampered.mp4' });
+    const H_PATH = `/v0/b/test/o/h%2F${VIDEO_SHA}.mp4`;
+    const H = await piece('pieza con vídeo alterado', { videoUrl: `https://firebasestorage.googleapis.com${H_PATH}` });
     for (const x of [F, U, M, H]) { await callback('ap', x.ref); await until(async () => (await review(x.ref)).status === 'approved'); }
+    tampered.add(H_PATH); // el archivo cambia DESPUÉS de verificarse y aprobarse
     for (let i = 0; i < 40; i++) {
       await worker.runOnce({ notify });
       const [{ n: left }] = await sel("SELECT count(*)::int AS n FROM social_posts WHERE status = 'queued'");
@@ -537,6 +556,42 @@ async function partB({ raw, schema }) {
     const wp = (await postsOf(W.id))[0];
     assert('publishing caducado → manual_required + alerta, 0 publicaciones', wp.status === 'manual_required' && alerts.some((a) => a.includes('interrumpió')) && pubsOf(W.post.id) === 0);
 
+    out('\n▶ B9. Correcciones de seguridad (A1, M2, M4, B3, B6)');
+    // A1: si video_url ya no tiene los bytes del sha declarado, no se envía nada a revisión.
+    const A_PATH = `/v0/b/test/o/a1%2F${VIDEO_SHA}.mp4`;
+    const ap = await svc.createPiece(camp.body.id, { ref: 'v82xa1', version: 1, videoSha256: VIDEO_SHA, videoUrl: `https://firebasestorage.googleapis.com${A_PATH}`, telegramFileId: 'FILEID-OTRO-VIDEO', width: 1080, height: 1920, durationS: 14, bytes: VIDEO.length });
+    await svc.addPost(ap.id, { network: 'mock', scheduledAt: when(-1), caption: 'a1' });
+    tampered.add(A_PATH);
+    n = tg.length;
+    const a1 = await callApi('POST', `/pieces/${ap.id}/review`);
+    assert('A1: vídeo cuyo sha256 no coincide → 409 y nada enviado a Telegram', a1.status === 409 && tg.length === n && (await sel('SELECT approval_status FROM social_pieces WHERE id = :id', { id: ap.id }))[0].approval_status === 'draft', `${a1.status}`);
+    // M2: aprobado 7 h tarde → manual_required, no se publica al instante.
+    alerts.length = 0;
+    const L = await piece('pieza caducada', {}, { scheduledAt: when(-7 * 60) });
+    await callback('ap', L.ref); await until(async () => (await review(L.ref)).status === 'approved');
+    await worker.runOnce({ notify });
+    const lp = (await postsOf(L.id))[0];
+    assert('M2: retraso > 6 h respecto a scheduled_at → manual_required, 0 publicaciones', lp.status === 'manual_required' && lp.last_error.includes('retraso') && pubsOf(L.post.id) === 0 && alerts.some((a) => a.includes('retraso')));
+    // M4: otra instancia marca manual_required mientras publicamos → se guarda external_id y se avisa.
+    alerts.length = 0;
+    const X = await piece('pieza lock perdido');
+    await callback('ap', X.ref); await until(async () => (await review(X.ref)).status === 'approved');
+    await worker.runOnce({ notify, fetchVideo: async (pc, d) => {
+      const v = await worker.downloadVideo(pc.video_url, d);
+      await exec("UPDATE social_posts SET status = 'manual_required', locked_by = NULL, locked_at = NULL WHERE id = :id", { id: X.post.id });
+      return v;
+    } });
+    const xp = (await postsOf(X.id))[0];
+    assert('M4: finish falla (lock perdido) → manual_required CON external_id + alerta, 1 sola publicación', xp.status === 'manual_required' && xp.external_id === `mock_${X.post.id}` && pubsOf(X.post.id) === 1 && alerts.some((a) => a.includes('lock había caducado')));
+    // B3: mock rechazada en production.
+    const envName = process.env.RAILWAY_ENVIRONMENT_NAME;
+    process.env.RAILWAY_ENVIRONMENT_NAME = 'production';
+    let b3 = null;
+    try { await svc.addPost(ap.id, { network: 'mock', scheduledAt: when(5), caption: 'x' }); } catch (e) { b3 = e.status; } finally { process.env.RAILWAY_ENVIRONMENT_NAME = envName; }
+    assert('B3: red mock en production → 400', b3 === 400);
+    // B6: rango del calendario acotado.
+    assert('B6: /calendar con rango > 92 días → 400; rango invertido → 400', (await callApi('GET', '/calendar?from=2026-01-01&to=2026-12-31')).status === 400 && (await callApi('GET', '/calendar?from=2026-12-01&to=2026-11-01')).status === 400);
+
     out('\n▶ B8. Panel y /estado');
     const st = await callApi('GET', '/status');
     const stJson = JSON.stringify(st.body);
@@ -545,7 +600,7 @@ async function partB({ raw, schema }) {
     n = tg.length;
     await msg('/estado');
     await until(async () => tg.slice(n).some((c) => c.method === 'sendMessage'));
-    assert('/estado incluye la cola social', tg.slice(n).some((c) => c.method === 'sendMessage' && c.body.text.includes('Cola social:') && c.body.text.includes('published=')));
+    assert('/estado incluye la cola social y el interruptor del publicador', tg.slice(n).some((c) => c.method === 'sendMessage' && c.body.text.includes('Cola social:') && c.body.text.includes('published=') && c.body.text.includes('social.publisher.enabled): ON')));
   } finally {
     if (server) server.close();
     await sequelize.close().catch(() => {});

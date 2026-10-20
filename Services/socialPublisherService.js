@@ -1,4 +1,5 @@
 'use strict';
+/* global FormData, Blob */
 /**
  * Social publisher — calendario editorial, paquetes de aprobación y cola en Postgres.
  * Ver docs/SOCIAL_PUBLISHER.md. SQL explícito: la exclusión mutua (FOR UPDATE) y las
@@ -11,11 +12,16 @@
 const crypto = require('crypto');
 const { QueryTypes } = require('sequelize');
 const sequelize = require('../libs/sequelize');
+const { models } = sequelize;
 const social = require('../integrations/social');
 const { storeLink } = require('../integrations/videoService');
-const { signCallbackData, getAdminChatId } = require('../libs/telegramSecurity');
+const { signCallbackData, getAdminChatId, isProductionEnv } = require('../libs/telegramSecurity');
 
 const DEFAULT_TZ = 'America/Guayaquil';
+// Pausa global PROPIA del publicador (M3): clave nueva que arranca ausente = OFF, aunque la
+// clave F2 'social.enabled' ya esté en 'true'. /reanudar y /stop escriben ambas.
+const PUBLISHER_KEY = 'social.publisher.enabled';
+const MAX_CALENDAR_DAYS = 92;
 const REF_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const DEFAULT_VIDEO_HOSTS = ['firebasestorage.googleapis.com', 'storage.googleapis.com'];
 
@@ -83,6 +89,11 @@ function isAllowedVideoUrl(url, env = process.env) {
   } catch { return false; }
 }
 
+/** M1: nombre direccionado por contenido — la ruta de video_url debe contener su sha256. */
+function urlHasSha(url, sha) {
+  try { return !!sha && decodeURIComponent(new URL(url).pathname).toLowerCase().includes(String(sha).toLowerCase()); } catch { return false; }
+}
+
 const isPackageRef = (ref) => /^s\d+x/.test(String(ref || ''));
 const newReviewRef = (pieceId) => `s${pieceId}x${Date.now().toString(36)}${crypto.randomBytes(2).toString('hex')}`;
 
@@ -142,6 +153,7 @@ function listCampaigns() {
 async function createPiece(campaignId, v) {
   if (!REF_RE.test(v.ref || '')) throw httpError(400, 'ref inválido');
   if (v.videoUrl && !isAllowedVideoUrl(v.videoUrl)) throw httpError(400, `video_url debe ser https en: ${videoHosts().join(', ')}`);
+  if (v.videoUrl && !urlHasSha(v.videoUrl, v.videoSha256)) throw httpError(400, 'la ruta de video_url debe contener su sha256 (archivo direccionado por contenido)');
   const [c] = await select('SELECT id FROM social_campaigns WHERE id = :id', { id: campaignId });
   if (!c) throw httpError(404, 'campaña no encontrada');
   try {
@@ -165,6 +177,7 @@ function utmLink(piece, network, campaign) {
 function checkPost(piece, { network, channel, caption, timezone }) {
   const route = social.networkRoutes()[network];
   if (!route) throw httpError(400, `red desconocida: ${network}`);
+  if (network === 'mock' && isProductionEnv()) throw httpError(400, 'la red mock no existe en production');
   if (channel !== route && channel !== 'manual') throw httpError(400, `${network} solo admite la vía configurada (${route}) o manual`);
   if (!isValidTimeZone(timezone)) throw httpError(400, 'zona horaria inválida');
   const errs = social.validateFormat(network, { width: piece.width, height: piece.height, durationS: piece.duration_s, bytes: piece.bytes }, caption);
@@ -239,9 +252,18 @@ function chunks(text, size = 3900) {
  * final con botones firmados. Reenviar anula los botones anteriores.
  */
 async function sendForReview(pieceId, actor, { callTelegram = require('../utils/telegramNotify').callTelegram } = {}) {
+  // A1: el propietario ve EXACTAMENTE los bytes de video_url con el sha256 aprobado. Nunca el
+  // telegram_file_id que llega por la API. Los campos de vídeo de una pieza son inmutables.
+  const { piece: head0 } = await loadPackage(pieceId);
+  if (!head0) throw httpError(404, 'pieza no encontrada');
+  if (!head0.video_url) throw httpError(409, 'la pieza no tiene video_url: no se puede verificar el vídeo');
+  let video;
+  try { video = await require('../workers/socialPublishWorker').downloadVideo(head0.video_url); } catch (err) { throw httpError(502, `no se pudo descargar el vídeo para revisión: ${err.message}`); }
+  if (video.sha256 !== head0.video_sha256) throw httpError(409, 'el archivo de video_url no coincide con video_sha256');
+
   const { ref, piece, posts, hash } = await sequelize.transaction(async (t) => {
     const { piece, posts } = await loadPackage(pieceId, t, { lock: true });
-    if (!piece) throw httpError(404, 'pieza no encontrada');
+    if (!piece || piece.video_sha256 !== video.sha256) throw httpError(409, 'la pieza cambió durante la revisión');
     if (!posts.some((p) => p.status === 'draft')) throw httpError(409, 'no hay publicaciones en borrador para revisar');
     for (const p of posts) checkPost(piece, p);
     const hash = packageHash(piece, posts);
@@ -249,8 +271,8 @@ async function sendForReview(pieceId, actor, { callTelegram = require('../utils/
     await sequelize.query('UPDATE creative_reviews SET superseded_at = now(), updated_at = now() WHERE piece_id = :id AND superseded_at IS NULL AND status = \'pending\'', { replacements: { id: pieceId }, transaction: t });
     await sequelize.query(
       `INSERT INTO creative_reviews (ref, product_id, network, telegram_file_id, status, piece_id, package_hash)
-       VALUES (:ref, :productId, 'paquete', :fileId, 'pending', :pieceId, :hash)`,
-      { replacements: { ref, productId: piece.product_id ?? null, fileId: piece.telegram_file_id ?? null, pieceId, hash }, transaction: t }
+       VALUES (:ref, :productId, 'paquete', NULL, 'pending', :pieceId, :hash)`,
+      { replacements: { ref, productId: piece.product_id ?? null, pieceId, hash }, transaction: t }
     );
     await sequelize.query("UPDATE social_pieces SET approval_status = 'pending', review_ref = :ref, approved_hash = NULL, updated_at = now() WHERE id = :id", { replacements: { ref, id: pieceId }, transaction: t });
     await addEvent(t, { pieceId, reviewRef: ref, event: 'sent', hash, actor });
@@ -260,10 +282,15 @@ async function sendForReview(pieceId, actor, { callTelegram = require('../utils/
   const chat = getAdminChatId();
   const buttons = [['ap', 'Aprobar'], ['rj', 'Rechazar'], ['ch', 'Cambios']].map(([a, text]) => ({ text, callback_data: signCallbackData(a, ref) }));
   if (!chat || !buttons.every((b) => b.callback_data)) throw httpError(503, 'Telegram no configurado (chat admin o TELEGRAM_WEBHOOK_SECRET)');
-  const video = piece.telegram_file_id || piece.video_url;
-  const head = `Paquete para revisión\nRef: ${ref}\nPieza ${piece.ref} v${piece.version}\nVídeo sha256 ${piece.video_sha256.slice(0, 16)}…`;
-  const v = video ? await callTelegram('sendVideo', { chat_id: chat, video, caption: head }) : await callTelegram('sendMessage', { chat_id: chat, text: `${head}\n(sin vídeo adjunto)` });
+  const head = `Paquete para revisión\nRef: ${ref}\nPieza ${piece.ref} v${piece.version}\nVídeo sha256 ${piece.video_sha256.slice(0, 16)}… (verificado)`;
+  const form = new FormData();
+  form.append('chat_id', String(chat));
+  form.append('caption', head);
+  form.append('supports_streaming', 'true');
+  form.append('video', new Blob([video.buffer], { type: 'video/mp4' }), 'video.mp4');
+  const v = await callTelegram('sendVideo', form);
   if (!v) throw httpError(502, 'Telegram no aceptó el vídeo');
+  await sequelize.query('UPDATE creative_reviews SET telegram_file_id = :fid WHERE ref = :ref', { replacements: { fid: v.video?.file_id ?? null, ref } });
   for (const p of posts.filter((x) => x.status === 'draft')) {
     const card = `📅 ${p.network.toUpperCase()} · vía ${p.channel}\n${localTime(p.scheduled_at, p.timezone)} (${p.timezone})\n${p.utm_link || ''}\n\nTexto exacto:\n${p.caption}`;
     for (const part of chunks(card)) {
@@ -326,18 +353,24 @@ async function decidePackage(ref, action, adminId) {
 // ── Panel ────────────────────────────────────────────────────────────────────
 
 function calendar({ from, to } = {}) {
+  from = from || new Date(Date.now() - 7 * 864e5);
+  to = to || new Date(Date.now() + 60 * 864e5);
+  if (to < from || to - from > MAX_CALENDAR_DAYS * 864e5) throw httpError(400, `rango de calendario inválido (máximo ${MAX_CALENDAR_DAYS} días)`);
   return select(
     `SELECT s.id, s.network, s.channel, s.scheduled_at, s.timezone, s.status, s.attempts, s.last_error, s.external_url,
             p.id AS piece_id, p.ref, p.version, p.approval_status, c.id AS campaign_id, c.name AS campaign
        FROM social_posts s JOIN social_pieces p ON p.id = s.piece_id JOIN social_campaigns c ON c.id = p.campaign_id
-      WHERE s.scheduled_at >= :from AND s.scheduled_at < :to ORDER BY s.scheduled_at`,
-    { from: from || new Date(Date.now() - 7 * 864e5), to: to || new Date(Date.now() + 60 * 864e5) }
+      WHERE s.scheduled_at >= :from AND s.scheduled_at < :to ORDER BY s.scheduled_at LIMIT 1000`,
+    { from, to }
   );
 }
 
 async function isEnabled() {
-  const [r] = await select("SELECT value FROM app_settings WHERE key = 'social.enabled'");
+  const r = await models.AppSetting.findOne({ where: { key: PUBLISHER_KEY } });
   return r?.value === 'true';
+}
+function setEnabled(enabled) {
+  return models.AppSetting.upsert({ key: PUBLISHER_KEY, value: enabled ? 'true' : 'false', updatedAt: new Date() });
 }
 
 async function statusPanel() {
@@ -369,5 +402,5 @@ async function queueSummary() {
 module.exports = {
   DEFAULT_TZ, packageHash, toUtc, localTime, isValidTimeZone, isAllowedVideoUrl, isPackageRef, newReviewRef,
   loadPackage, createCampaign, listCampaigns, createPiece, addPost, updatePost, sendForReview, decidePackage,
-  calendar, statusPanel, queueSummary, isEnabled, ACTION_STATUS,
+  calendar, statusPanel, queueSummary, isEnabled, setEnabled, urlHasSha, ACTION_STATUS, PUBLISHER_KEY,
 };

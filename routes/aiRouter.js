@@ -1236,14 +1236,14 @@ async function saveChangeRequestSafe(ref, text, messageId) {
 async function handleAdminCommand(cmd) {
   try {
     if (cmd === 'estado') {
-      const [rows, social, queue] = await Promise.all([reviews.latest(10), reviews.isSocialEnabled(), socialPub.queueSummary().catch(() => 'no disponible')]);
+      const [rows, social, publisher, queue] = await Promise.all([reviews.latest(10), reviews.isSocialEnabled(), socialPub.isEnabled().catch(() => false), socialPub.queueSummary().catch(() => 'no disponible')]);
       const lines = rows.map((r) => `• ${r.ref} · producto ${r.productId} · ${r.variant || '-'} · ${r.network || '-'} — ${reviews.STATUS_LABEL[r.status] || r.status}`);
-      await adminMessage(`Últimas piezas:\n${lines.join('\n') || '(ninguna)'}\n\nInterruptor de publicación (${reviews.SOCIAL_KEY}): ${social ? 'ON' : 'OFF'}\nCola social: ${queue}`);
+      await adminMessage(`Últimas piezas:\n${lines.join('\n') || '(ninguna)'}\n\nInterruptor de publicación (${reviews.SOCIAL_KEY}): ${social ? 'ON' : 'OFF'}\nPublicador social (${socialPub.PUBLISHER_KEY}): ${publisher ? 'ON' : 'OFF'}\nCola social: ${queue}`);
       return;
     }
     // /start lo envía Telegram al abrir el bot: no puede encender la publicación.
     const enabled = cmd === 'reanudar';
-    await reviews.setSocialEnabled(enabled);
+    await Promise.all([reviews.setSocialEnabled(enabled), socialPub.setEnabled(enabled)]);
     console.log(`[Social] interruptor de publicación → ${enabled ? 'ON' : 'OFF'} (admin vía Telegram).`);
     await adminMessage(`Interruptor de publicación: ${enabled ? 'ON' : 'OFF'}.\n${enabled
       ? 'Solo se publican paquetes aprobados, en redes de la lista blanca y con credenciales configuradas.'

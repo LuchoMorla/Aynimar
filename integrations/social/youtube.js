@@ -65,7 +65,7 @@ module.exports = {
       headers: { Authorization: `Bearer ${token}` },
     }, { step: 'yt:verify' });
     const st = data.items?.[0]?.status;
-    if (!st) return false;
+    if (!st) return null; // recién subido puede no aparecer aún: pendiente, nunca "error" (B8)
     if (st.uploadStatus === 'rejected' || st.uploadStatus === 'failed') return false;
     return st.uploadStatus === 'processed' ? true : null;
   },

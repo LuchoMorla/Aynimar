@@ -59,12 +59,12 @@ async function claimNext(workerId) {
      WHERE id = (
        SELECT id FROM social_posts
         WHERE status = 'queued' AND next_attempt_at <= now()
-          AND EXISTS (SELECT 1 FROM app_settings WHERE key = 'social.enabled' AND value = 'true')
+          AND EXISTS (SELECT 1 FROM app_settings WHERE key = :key AND value = 'true')
         ORDER BY next_attempt_at, id
         FOR UPDATE SKIP LOCKED
         LIMIT 1)
        AND status = 'queued'
-    RETURNING *`, { replacements: { w: workerId } });
+    RETURNING *`, { replacements: { w: workerId, key: svc.PUBLISHER_KEY } });
   return rows[0] || null;
 }
 
@@ -97,6 +97,10 @@ async function processPost(post, deps) {
 
   if (!piece || piece.approval_status !== 'approved' || !post.approved_hash || piece.approved_hash !== post.approved_hash) return block('la aprobación ya no es válida');
   if (svc.packageHash(piece, posts) !== post.approved_hash) return block('el paquete cambió después de aprobarse: requiere nueva aprobación');
+  if (!svc.urlHasSha(piece.video_url, piece.video_sha256)) return block('video_url no está direccionada por su sha256');
+  // M2: nunca publicar fuera del horario aprobado (botón aprobado tarde o /reanudar tras una pausa larga).
+  const lateMs = Date.now() - new Date(post.scheduled_at).getTime();
+  if (lateMs > num(env.SOCIAL_MAX_LATE_MS, 6 * 3600000)) return manual(`retraso de ${Math.round(lateMs / 60000)} min respecto a la hora aprobada (SOCIAL_MAX_LATE_MS): publicar a mano o reprogramar`);
   if (!social.allowedNetworks(env).includes(post.network)) return manual(`red ${post.network} no autorizada (SOCIAL_ALLOWED_NETWORKS)`);
   const adapter = social.getAdapter(post.network, post.channel);
   if (!adapter || social.networkRoutes(env)[post.network] !== post.channel) return manual(`vía ${post.channel} no habilitada para ${post.network}`);
@@ -113,7 +117,14 @@ async function processPost(post, deps) {
     const video = await deps.fetchVideo(piece, deps);
     if (video.sha256 !== piece.video_sha256) return block('el archivo de vídeo no coincide con el sha256 aprobado');
     const res = await adapter.publish({ post, piece, video }, ctx);
-    await finish(post, workerId, 'published', { external_id: String(res.externalId), external_url: res.url || null, published_at: new Date(), last_error: null });
+    const fields = { external_id: String(res.externalId), external_url: res.url || null };
+    if (!(await finish(post, workerId, 'published', { ...fields, published_at: new Date(), last_error: null }))) {
+      // M4: otra instancia nos quitó la fila (lock caducado → manual_required) mientras publicábamos.
+      // Salió en la red: se conserva el id externo para la verificación manual.
+      await sequelize.query("UPDATE social_posts SET external_id = :external_id, external_url = :external_url, published_at = now(), updated_at = now() WHERE id = :id AND status = 'manual_required'", { replacements: { ...fields, id: post.id } });
+      await notify(`⚠️ <b>Publicada, pero el lock había caducado</b> ${label(post)} (id ${esc(fields.external_id)}). Queda en manual_required: verifica en la red.`);
+      return 'published_lock_lost';
+    }
     let verified = null;
     try { verified = await adapter.verify({ externalId: String(res.externalId), network: post.network }, ctx); } catch (err) { console.warn(`[Social] verificación de #${post.id} falló: ${err.message}`); }
     if (verified === true) await sequelize.query('UPDATE social_posts SET verified_at = now() WHERE id = :id', { replacements: { id: post.id } });
@@ -142,7 +153,7 @@ async function recoverStale(deps) {
     UPDATE social_posts SET status = 'manual_required', locked_at = NULL, locked_by = NULL, updated_at = now(),
            last_error = 'worker interrumpido durante la publicación: verificar manualmente'
      WHERE status = 'publishing' AND locked_at < now() - (:ms || ' milliseconds')::interval RETURNING id, network`,
-  { replacements: { ms: String(num(deps.env.SOCIAL_LOCK_TIMEOUT_MS, 15 * 60000)) } });
+  { replacements: { ms: String(num(deps.env.SOCIAL_LOCK_TIMEOUT_MS, 30 * 60000)) } });
   for (const p of rows) await deps.notify(`🖐 <b>Paso manual requerido</b> ${label(p)}: el worker se interrumpió durante la publicación. Verifica en la red si salió.`);
   return rows.length;
 }

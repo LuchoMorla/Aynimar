@@ -261,9 +261,9 @@ async function main() {
     await post(msg('/reanudar', { from: 555555555, chat: 555555555 }));
     assert('/estado y /reanudar desde otro chat → sin respuesta ni cambios', since(n).length === 0 && !settings.has('social.enabled'));
     await post(msg('/reanudar'));
-    assert('/reanudar (admin) → social.enabled = true', settings.get('social.enabled') === 'true');
+    assert('/reanudar (admin) → social.enabled = true y social.publisher.enabled = true', settings.get('social.enabled') === 'true' && settings.get('social.publisher.enabled') === 'true');
     await post(msg('/stop'));
-    assert('/stop (admin) → social.enabled = false', settings.get('social.enabled') === 'false');
+    assert('/stop (admin) → social.enabled = false y social.publisher.enabled = false', settings.get('social.enabled') === 'false' && settings.get('social.publisher.enabled') === 'false');
     assert('cambio del interruptor queda en el log', logs.some((l) => l.includes('interruptor de publicación → ON')) && logs.some((l) => l.includes('interruptor de publicación → OFF')));
     await post(msg('/stop', { from: 555555555, chat: 555555555 }));
     await post(msg('/reanudar', { from: 555555555, chat: ADMIN }));
