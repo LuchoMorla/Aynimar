@@ -108,6 +108,20 @@ async function main() {
     assert('admin → datos', (await ask(10, { userId: 1, role: 'admin' })).guia === 'G1');
     assert('pedido de invitado (sin customer), cliente → «no encontrado»', JSON.stringify(await ask(10, { userId: 'x' })) === JSON.stringify(nf));
 
+    console.log('\n▶ NutrIA alertar_telegram escapa HTML');
+    Object.assign(process.env, { TELEGRAM_BOT_TOKEN: '123:test', TELEGRAM_NONPROD_BOT_ID: '123', TELEGRAM_CHAT_ID: '1' });
+    const realFetch = global.fetch;
+    let sentText = null;
+    global.fetch = async (url, opts) => { sentText = JSON.parse(opts.body).text; return { json: async () => ({ ok: true }) }; };
+    try {
+      await executeTool('alertar_telegram', { tipo: 'venta', mensaje: 'Hola <a href="http://x">y</a> & <b>' }, [], {});
+    } finally {
+      global.fetch = realFetch;
+      for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_NONPROD_BOT_ID', 'TELEGRAM_CHAT_ID']) delete process.env[k];
+    }
+    assert('texto del usuario escapado', sentText && sentText.includes('Hola &lt;a href="http://x"&gt;y&lt;/a&gt; &amp; &lt;b&gt;') && !sentText.includes('<a '), String(sentText));
+    assert('formato propio intacto', sentText && sentText.includes('<b>OPORTUNIDAD DE VENTA</b>'));
+
     console.log('\n▶ DELETE /orders/:id');
     assert('customer (aunque sea dueño) → 403', (await call('DELETE', 10, tok(2, 'customer'))).status === 403);
     assert('recycler → 403', (await call('DELETE', 10, tok(2, 'recycler'))).status === 403);
