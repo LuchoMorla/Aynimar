@@ -13,7 +13,7 @@
 // dentro de la ventana la frena el dedupe por msgId.
 // Sesión SIEMPRE anónima: el hub no envía permisos ni JWT, así que
 // obtener_estado_orden nunca devuelve pedidos (remite a la cuenta de la tienda).
-// Privacidad: `phone` solo sirve de clave (HMAC con el secreto) del historial en
+// Privacidad: `phone` solo sirve de clave (HMAC con SUPPORT_PHONE_PEPPER, o HUB_SHARED_SECRET de respaldo) del historial en
 // memoria; nunca se registra ni se manda al LLM. Los logs solo llevan origen y conteos.
 
 const crypto = require('crypto');
@@ -54,7 +54,8 @@ const schema = Joi.object({
 const sessions = new Map(); // HMAC(phone) → { history, contexto, ts, turns:[ms] }
 const seen = new Map();     // msgId → ms
 function sessionFor(phone, now) {
-  const key = crypto.createHmac('sha256', process.env.HUB_SHARED_SECRET).update(`ae:${phone}`).digest('hex');
+  // Pepper estable (compartido con AyniMachine): rotar HUB_SHARED_SECRET no pierde sesiones.
+  const key = crypto.createHmac('sha256', process.env.SUPPORT_PHONE_PEPPER || process.env.HUB_SHARED_SECRET).update(`ae:${phone}`).digest('hex');
   let s = sessions.get(key);
   if (!s || now - s.ts > SESSION_TTL_MS) s = { history: [], contexto: {}, turns: [] };
   s.ts = now;

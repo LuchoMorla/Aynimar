@@ -18,7 +18,7 @@ Object.assign(process.env, {
   NEXT_PUBLIC_FRONTEND_URL: 'https://tienda.test',
   NUTRIA_SHOP_URL: 'https://tienda-compra.test/',
 });
-for (const k of Object.keys(process.env)) if (k.startsWith('TELEGRAM_') || k.startsWith('GROQ_') || k === 'REDIS_URL') delete process.env[k];
+for (const k of Object.keys(process.env)) if (k.startsWith('TELEGRAM_') || k.startsWith('GROQ_') || k === 'REDIS_URL' || k === 'SUPPORT_PHONE_PEPPER') delete process.env[k];
 delete process.env.FLAG_NUTRIA_HUB;
 
 let passed = 0, failed = 0;
@@ -153,6 +153,17 @@ async function main() {
     console.log('\n▶ Privacidad');
     assert('el teléfono no aparece en ningún log', !logs.some((l) => l.includes(PHONE)), logs.find((l) => l.includes(PHONE)));
     assert('la clave de sesión no es el teléfono', ![...hubRouter._sessions.keys()].some((k) => k.includes(PHONE)));
+    const keyWith = (secret) => crypto.createHmac('sha256', secret).update(`ae:${PHONE}`).digest('hex');
+    assert('sin SUPPORT_PHONE_PEPPER: clave derivada de HUB_SHARED_SECRET (respaldo)', hubRouter._sessions.has(keyWith(process.env.HUB_SHARED_SECRET)));
+    process.env.SUPPORT_PHONE_PEPPER = 'pepper-estable-de-prueba-0123456789';
+    script = [{ content: 'Hola de nuevo.' }];
+    await post(payload('hola otra vez'));
+    assert('con SUPPORT_PHONE_PEPPER: clave derivada del pepper', hubRouter._sessions.has(keyWith(process.env.SUPPORT_PHONE_PEPPER)));
+    const turnsBefore = llmCalls.length;
+    process.env.HUB_SHARED_SECRET = 'secreto-hub-rotado-9876543210';
+    script = [{ content: 'Sigo aquí.' }];
+    await post(payload('¿sigues?'));
+    assert('rotar HUB_SHARED_SECRET con pepper conserva la sesión (historial)', llmCalls.length === turnsBefore + 1 && llmCalls.at(-1).some((m) => m.role === 'assistant' && m.content === 'Hola de nuevo.'));
     assert('verify(): ventana ±5 min (futuro también)', !hubRouter.verify(Buffer.from('{}'), String(Math.floor(Date.now() / 1000) + 360), 'sha256=00'));
   } finally {
     console.log = origLog; console.error = origErr; console.warn = origWarn;

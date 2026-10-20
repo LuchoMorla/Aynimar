@@ -19,9 +19,17 @@
   ids numéricos, cantidades 1–10 (más ⇒ 10, 0/inválida ⇒ fuera), máx. 10 ítems; sin precios,
   nombres, teléfonos ni tokens. La tienda recalcula precio y stock; el checkout del backend lo
   hace desde BD con bloqueo de fila (orderService.checkout). El carrito se acumula por sesión.
-- Historial (6 mensajes) y contexto en memoria, clave = HMAC(secreto, teléfono), TTL 24 h,
+- Historial (6 mensajes) y contexto en memoria, clave = HMAC(SUPPORT_PHONE_PEPPER o, de respaldo, HUB_SHARED_SECRET; teléfono), TTL 24 h,
   tope 30 mensajes/hora por remitente. El teléfono no se registra ni va al LLM.
 
 **Descartado.**
 - Sesión/dedupe en BD: requiere migración (coordinar con DATABASE) — innecesario con una réplica.
 - Verificar pedido por teléfono del pedido vs `wa_id` firmado: opcional, pendiente de decisión.
+
+**Deuda conocida / orden de despliegue** (revisión del CTO de Aynimar, 2026-10-20).
+- El handoff por la palabra «persona» (además de «humano»/«asesor») puede dar falsos
+  positivos («para una persona mayor…»).
+- Orden obligatorio: página `/comprar` de la tienda en PRODUCCIÓN **antes** de activar
+  `FLAG_NUTRIA_HUB`; si no, el enlace de compra da 404.
+- Definir `SUPPORT_PHONE_PEPPER` (estable, compartido con AyniMachine) antes de activar:
+  sin él, rotar `HUB_SHARED_SECRET` reinicia las sesiones.
