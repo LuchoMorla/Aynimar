@@ -87,6 +87,8 @@ CR.findByPk = async (ref) => (store.has(ref) ? { ...store.get(ref) } : null);
 CR.findAll = async ({ limit }) => [...store.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
 models.AppSetting.findOne = async ({ where }) => (settings.has(where.key) ? { key: where.key, value: settings.get(where.key) } : null);
 models.AppSetting.upsert = async ({ key, value }) => { settings.set(key, value); return [{}]; };
+// Cola social (SQL directo): sin BD en esta suite; se prueba en scripts/social-publisher-test.js.
+require('../Services/socialPublisherService').queueSummary = async () => 'vacía';
 
 const sec = require('../libs/telegramSecurity');
 const vs = require('../integrations/videoService');
