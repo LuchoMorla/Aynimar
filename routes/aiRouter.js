@@ -829,6 +829,9 @@ router.post('/nutria/chat', optionalAuth, async (req, res) => {
     if (!message || typeof message !== 'string' || message.trim().length < 1) {
       return res.status(400).json({ message: 'Se requiere el campo "message".' });
     }
+    if (message.length > 2000) {
+      return res.status(400).json({ message: 'El mensaje es demasiado largo (máx. 2000 caracteres).' });
+    }
 
     const groq = getGroqClient();
     if (!groq) {
@@ -839,7 +842,8 @@ router.post('/nutria/chat', optionalAuth, async (req, res) => {
     // Pick model based on message complexity; 8B handles most sales chats
     const model = process.env.GROQ_MODEL || pickModel(message.trim());
 
-    // Keep last 6 turns (12 messages) — enough context without burning tokens
+    // Últimos 6 mensajes, máx. 2000 caracteres cada uno (endpoint público:
+    // sin tope, un historial enorme dispara coste/latencia del LLM).
     const safeHistory = Array.isArray(history)
       ? history
           .filter(
@@ -847,6 +851,7 @@ router.post('/nutria/chat', optionalAuth, async (req, res) => {
               && ['user', 'assistant'].includes(m.role)
           )
           .slice(-6)
+          .map((m) => ({ role: m.role, content: m.content.slice(0, 2000) }))
       : [];
 
     const clientActions     = [];

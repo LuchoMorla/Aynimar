@@ -55,12 +55,14 @@ async function main() {
   require('../utils/auth');
   const orderRouter = require('../routes/orderRouter');
   // Se carga antes de levantar el servidor: tarda y el keep-alive del cliente caducaría.
-  const { executeTool } = require('../routes/aiRouter');
+  const aiRouter = require('../routes/aiRouter');
+  const { executeTool } = aiRouter;
   const { logErrors, ormErrorHandler, boomErrorHandler, errorHandler } = require('../middlewares/errorsHandler');
   const app = express();
   app.use(express.json());
   app.use('/api/v1/orders', orderRouter);
   app.use('/api/v1/payments', require('../routes/paymentRouter'));
+  app.use('/api/v1/ai', aiRouter);
   app.use(logErrors); app.use(ormErrorHandler); app.use(boomErrorHandler); app.use(errorHandler);
   const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
   const base = `http://127.0.0.1:${server.address().port}/api/v1/orders`;
@@ -121,6 +123,11 @@ async function main() {
     }
     assert('texto del usuario escapado', sentText && sentText.includes('Hola &lt;a href="http://x"&gt;y&lt;/a&gt; &amp; &lt;b&gt;') && !sentText.includes('<a '), String(sentText));
     assert('formato propio intacto', sentText && sentText.includes('<b>OPORTUNIDAD DE VENTA</b>'));
+
+    console.log('\n▶ NutrIA /nutria/chat tope de tamaño (hallazgo c, antes del LLM)');
+    const ai = base.replace('/orders', '/ai');
+    const big = await call('POST', 'nutria/chat', null, { message: 'x'.repeat(2001) }, ai);
+    assert('message > 2000 caracteres → 400', big.status === 400, String(big.status));
 
     console.log('\n▶ DELETE /orders/:id');
     assert('customer (aunque sea dueño) → 403', (await call('DELETE', 10, tok(2, 'customer'))).status === 403);
