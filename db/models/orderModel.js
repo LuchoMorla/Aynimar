@@ -170,6 +170,8 @@ const OrderSchema = {
   providerFees: { field: 'provider_fees', allowNull: true, type: DataTypes.DECIMAL(10, 2) },
   // [{status, group, at}] — fechas por estado de Dropi (plazo real confirmación → entrega).
   dropiStatusHistory: { field: 'dropi_status_history', allowNull: true, type: DataTypes.JSONB },
+  // Token opaco del seguimiento público (db/migrations/20261020000003-order-tracking-token.js).
+  trackingToken: { field: 'tracking_token', allowNull: true, type: DataTypes.STRING(64) },
   total: {
     field: 'total',
     allowNull: false,

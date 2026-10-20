@@ -8,6 +8,8 @@ const { computeOrderTotals, computeCreditRedemption, isTerminalStateOrder } = re
 // Objeto (no desestructurado) para que los tests puedan sustituir las llamadas a Dropi.
 const dropi = require('../integrations/dropi/dropiAdapter');
 const automation = require('./orderAutomationService');
+const crypto = require('crypto');
+const { buildProgress } = require('./orderProgress');
 const { createOrderInEffi }  = require('../integrations/effi/effiAdapter');
 const { sendTelegramNotification } = require('../utils/telegramNotify');
 const { buildDispatchDescription } = require('../utils/variantAdapter');
@@ -225,6 +227,43 @@ class OrderService {
     }
     // La función ahora devuelve la orden sin fallar, incluso si es de un invitado.
     return order;
+  }
+
+  // ── Seguimiento visual (orderProgress) ─────────────────────────────────────
+  // Token opaco (144 bits, base64url de 24 caracteres): el seguimiento público
+  // no usa el id secuencial (enumerable).
+  async findByTrackingToken(token) {
+    return models.Order.findOne({ where: { trackingToken: token } });
+  }
+
+  async _ensureTrackingToken(order) {
+    if (order.trackingToken) return order.trackingToken;
+    const token = crypto.randomBytes(18).toString('base64url');
+    // Condicional: si otra petición lo generó a la vez, gana la primera.
+    const [n] = await models.Order.update({ trackingToken: token }, { where: { id: order.id, trackingToken: null } });
+    return n ? token : (await models.Order.findByPk(order.id, { attributes: ['trackingToken'] })).trackingToken;
+  }
+
+  /** "Mis pedidos": progreso real de los pedidos confirmados del usuario (sin datos personales). */
+  async progressForUser(userId, limit = 50) {
+    const orders = await models.Order.findAll({
+      where: { state: { [Op.ne]: 'carrito' } },
+      include: [{ association: 'customer', attributes: [], where: { userId }, required: true }],
+      order: [['id', 'DESC']],
+      limit,
+    });
+    const out = [];
+    for (const o of orders) {
+      out.push({
+        orderId: o.id,
+        createdAt: o.createdAt,
+        total: o.total,
+        paymentMethod: o.paymentMethod,
+        trackingToken: await this._ensureTrackingToken(o),
+        progress: buildProgress(o),
+      });
+    }
+    return out;
   }
 
   //super llamado por user id filtrando estado de orden

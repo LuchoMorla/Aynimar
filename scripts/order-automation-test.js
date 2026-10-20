@@ -124,6 +124,19 @@ async function partA() {
   process.env.DROPI_MOCK = 'true';
   assert('DROPI_MOCK=true fuerza mock aunque DROPI_ORDER_TRANSPORT=http', real.orderTransportName() === 'mock');
   delete process.env.DROPI_ORDER_API_URL; delete process.env.DROPI_ORDER_TOKEN; delete process.env.DROPI_ORDER_TRANSPORT; dropiHttp = null;
+
+  out('\n▶ A5. Seguimiento visual: etapas derivadas del estado real (sin simular)');
+  const { buildProgress } = require('../Services/orderProgress');
+  const legacy = buildProgress({ state: 'pendiente_envio', stateOrder: 'en_transito', confirmedAt: '2026-10-01T10:00:00Z', fulfillmentStatus: 'MANUAL_LOGISTICS', trackingNumber: 'G1' });
+  assert('pedido sin eventos en tránsito: etapas hechas pero SIN fecha inventada', legacy.currentStage === 'in_transit' && legacy.stages[4].done && legacy.stages[4].at === null && legacy.stages[1].at === null && legacy.stages[0].at === '2026-10-01T10:00:00.000Z' && !legacy.stages[5].done);
+  const fresh = buildProgress({ state: 'pendiente_envio', stateOrder: 'comprado_pendiente_pago', confirmedAt: new Date(), fulfillmentStatus: 'AUTOMATION_OFF', carrierName: 'X' });
+  assert('recién confirmado: solo "confirmado", sin transportadora', fresh.currentStage === 'confirmed' && fresh.stages.filter((x) => x.done).length === 1 && fresh.carrierName === null && fresh.status === 'in_progress');
+  assert('carrito → status cart, ninguna etapa', buildProgress({ state: 'carrito', stateOrder: 'comprado_pendiente_pago' }).status === 'cart');
+  const rej = buildProgress({ state: 'x', stateOrder: 'cancelado', dropiOrderId: 'D', dropiStatusHistory: [{ status: 'EN TRANSITO', group: 'transit', at: 't1' }, { status: 'RECHAZADO', group: 'rejected', at: 't2' }] });
+  assert('rechazado → rama rejected con su fecha', rej.status === 'rejected' && rej.branch.at === 't2' && rej.branch.label);
+  assert('cancelado sin rechazo → cancelled', buildProgress({ state: 'x', stateOrder: 'cancelado' }).status === 'cancelled');
+  assert('por_devolver → returned', buildProgress({ state: 'x', stateOrder: 'por_devolver', dropiStatusHistory: [{ status: 'DEVOLUCION EN TRANSITO', group: 'returning', at: 't3' }] }).branch.at === 't3');
+  assert('BLOCKED / DISPATCH_UNKNOWN / novedad → exception', ['BLOCKED', 'DISPATCH_UNKNOWN'].every((fs) => buildProgress({ state: 'x', stateOrder: 'en_preparacion', fulfillmentStatus: fs }).status === 'exception') && buildProgress({ state: 'x', stateOrder: 'en_transito', dropiStatusHistory: [{ status: 'NOVEDAD', group: 'issue', at: 't' }] }).status === 'exception');
 }
 
 // ── Parte B: Postgres real ───────────────────────────────────────────────────
@@ -175,6 +188,8 @@ async function partB({ schema }) {
   const cols = async () => (await sel("SELECT column_name FROM information_schema.columns WHERE table_schema = :s AND table_name = 'orders'", { s: schema })).map((r) => r.column_name);
   assert('down quita columnas y tabla', !(await cols()).includes('is_test') && !(await sel("SELECT 1 FROM information_schema.tables WHERE table_schema = :s AND table_name = 'order_exceptions'", { s: schema })).length);
   await mig.up(qi); await mig.up(qi);
+  const migTok = require('../db/migrations/20261020000003-order-tracking-token');
+  await migTok.down(qi); await migTok.up(qi); await migTok.up(qi);
   assert('up (dos veces) crea columnas y order_exceptions', (await cols()).includes('dropi_status_history') && (await sel("SELECT 1 FROM information_schema.tables WHERE table_schema = :s AND table_name = 'order_exceptions'", { s: schema })).length === 1);
 
   // Dropi simulado bajo control del test.
@@ -478,6 +493,57 @@ async function partB({ schema }) {
   assert('DEVOLUCION → devuelto, COD not_collected, pago failed', rRv.stateOrder === 'devuelto' && rRv.codStatus === 'not_collected' && rRv.paymentStatus === 'failed');
   await sync(oRv.id, 'ENTREGADO');
   assert('devuelto → ENTREGADO: no cambia (unknown_status), sigue sin cobrar', (await reload(oRv.id)).stateOrder === 'devuelto' && (await reload(oRv.id)).paymentStatus === 'failed' && (await exTypes(oRv.id)).includes('unknown_status'));
+
+  out('\n▶ B16. Seguimiento: /orders/mine/progress (JWT) y /orders/track/:token (público, sin PII)');
+  {
+    const express = require('express');
+    require('../utils/auth');
+    const jwt = require('jsonwebtoken');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/v1/orders', require('../routes/orderRouter'));
+    app.use((err, req, res, next) => (err.isBoom ? res.status(err.output.statusCode).json(err.output.payload) : res.status(500).json({ message: err.message }))); // eslint-disable-line no-unused-vars
+    const server = await new Promise((r) => { const sv = app.listen(0, '127.0.0.1', () => r(sv)); });
+    const base = `http://127.0.0.1:${server.address().port}/api/v1/orders`;
+    const get = async (url, uid) => {
+      const res = await fetch(url, { headers: uid ? { Authorization: `Bearer ${jwt.sign({ sub: uid, role: 'customer' }, process.env.JWT_SECRET)}` } : {} });
+      return { status: res.status, json: await res.json().catch(() => null), cache: res.headers.get('cache-control') };
+    };
+    try {
+      // Pedido con guía real
+      const cG = await customer();
+      const oG = await order(cG, [[good, 1]]);
+      await svc.confirmCod(oG.id, cG.userId);
+      statusFeed[(await reload(oG.id)).dropiOrderId] = { status: 'GUIA_GENERADA', trackingNumber: 'G-77', carrierName: 'SERVIENTREGA' };
+      await svc.syncDropiDeliveryStatus(oG.id);
+      statusFeed[(await reload(oG.id)).dropiOrderId] = { status: 'EN TRÁNSITO' };
+      await svc.syncDropiDeliveryStatus(oG.id);
+
+      assert('sin token → 401', (await get(`${base}/mine/progress`)).status === 401);
+      const mine = await get(`${base}/mine/progress`, cG.userId);
+      const item = mine.json?.items?.[0];
+      assert('mis pedidos → 200, solo los del usuario, no-store', mine.status === 200 && mine.json.items.length === 1 && item.orderId === oG.id && mine.cache === 'no-store');
+      assert('trackingToken opaco de 24 caracteres y estable', /^[A-Za-z0-9_-]{24}$/.test(item.trackingToken) && (await get(`${base}/mine/progress`, cG.userId)).json.items[0].trackingToken === item.trackingToken);
+      const st = item.progress.stages;
+      assert('etapas reales con fechas: confirmado, validado, enviado, guía, en camino', item.progress.currentStage === 'in_transit' && st.slice(0, 5).every((x) => x.done && x.at) && !st[5].done && st[5].at === null);
+      assert('guía y transportadora reales', item.progress.trackingNumber === 'G-77' && item.progress.carrierName === 'SERVIENTREGA');
+
+      const pub = await get(`${base}/track/${item.trackingToken}`);
+      assert('público por token → 200 con el contrato previo + progress', pub.status === 200 && pub.json.id === oG.id && pub.json.stateOrder === 'en_transito' && pub.json.trackingNumber === 'G-77' && 'createdAt' in pub.json && pub.json.customerName === null && pub.json.progress.currentStage === 'in_transit');
+      assert('público sin datos personales', !JSON.stringify(pub.json).match(/Ana|Pérez|0991234567|Amazonas|@cliente|total/i));
+      assert('id secuencial → 404 (no enumerable)', (await get(`${base}/track/${oG.id}`)).status === 404);
+      assert('token inexistente o mal formado → 404', (await get(`${base}/track/AAAAAAAAAAAAAAAAAAAAAAAA`)).status === 404 && (await get(`${base}/track/x'--`)).status === 404);
+
+      const { buildProgress } = require('../Services/orderProgress');
+      const pr = async (id) => buildProgress(await reload(id));
+      assert('entregado → delivered (o2)', (await pr(o2.id)).status === 'delivered');
+      assert('rechazado (o3) → rejected; devuelto (oRv) → returned', (await pr(o3.id)).status === 'rejected' && (await pr(oRv.id)).status === 'returned');
+      assert('cancelado tras envío (oA) → cancelled; interruptor OFF (o1) → solo confirmado', (await pr(oA.id)).status === 'cancelled' && (await pr(o1.id)).currentStage === 'confirmed');
+      assert('bloqueado (oP) y novedad (o4) → exception', (await pr(oP.id)).status === 'exception' && (await pr(o4.id)).status === 'exception');
+    } finally {
+      server.close();
+    }
+  }
 
   out('\n▶ B11. API /api/v1/order-exceptions (JWT + admin)');
   const express = require('express');
