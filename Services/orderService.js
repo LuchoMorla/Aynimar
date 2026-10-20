@@ -842,8 +842,11 @@ class OrderService {
   // Reemplaza el antiguo PATCH /orders/:id {state:'pendiente_envio'}.
   // Toda la lógica (transacción + stock + despacho idempotente) vive en
   // _finalizeAndDispatch.
+  // trackingToken: solo tras pasar el control de propiedad de _finalizeAndDispatch
+  // (el dueño que confirma); /gracias lo usa para /orders/track/:token.
   async confirmCod(orderId, userId, attribution) {
-    return this._finalizeAndDispatch(orderId, { userId, attribution });
+    const result = await this._finalizeAndDispatch(orderId, { userId, attribution });
+    return { ...result, trackingToken: await this._ensureTrackingToken({ id: result.orderId }) };
   }
 
   // ── Confirmar pago DeUna aprobado — Paso 11 ────────────────────────────────
@@ -1155,7 +1158,7 @@ class OrderService {
   async checkout(orderId, userId, creditsToApply = 0, attribution) {
     const walletService = new WalletService();
 
-    return sequelize.transaction(async (t) => {
+    const summary = await sequelize.transaction(async (t) => {
 
       // ── 1. Load order with a row-level lock ────────────────────────────────
       // The lock prevents a second concurrent checkout on the same cart from
@@ -1308,6 +1311,8 @@ class OrderService {
         itemCount: cartItems.length,
       };
     });
+    // Post-commit y solo tras el guard de propiedad (paso 2): el dueño recibe el token.
+    return { ...summary, trackingToken: await this._ensureTrackingToken({ id: summary.orderId }) };
   }
 }
 module.exports = OrderService;

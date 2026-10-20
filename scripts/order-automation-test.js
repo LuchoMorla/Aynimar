@@ -670,7 +670,7 @@ async function partB({ schema }) {
       // Pedido con guía real
       const cG = await customer();
       const oG = await order(cG, [[good, 1]]);
-      await svc.confirmCod(oG.id, cG.userId);
+      const confG = await svc.confirmCod(oG.id, cG.userId);
       statusFeed[(await reload(oG.id)).dropiOrderId] = { status: 'GUIA_GENERADA', trackingNumber: 'G-77', carrierName: 'SERVIENTREGA' };
       await svc.syncDropiDeliveryStatus(oG.id);
       statusFeed[(await reload(oG.id)).dropiOrderId] = { status: 'EN TRÁNSITO' };
@@ -681,6 +681,13 @@ async function partB({ schema }) {
       const item = mine.json?.items?.[0];
       assert('mis pedidos → 200, solo los del usuario, no-store', mine.status === 200 && mine.json.items.length === 1 && item.orderId === oG.id && mine.cache === 'no-store');
       assert('trackingToken opaco de 24 caracteres y estable', /^[A-Za-z0-9_-]{24}$/.test(item.trackingToken) && (await get(`${base}/mine/progress`, cG.userId)).json.items[0].trackingToken === item.trackingToken);
+      assert('confirmCod devuelve el mismo trackingToken (idempotente)', confG.trackingToken === item.trackingToken);
+      const cK2 = await customer();
+      const oK2 = await order(cK2, [[good, 1]]);
+      const chk = await svc.checkout(oK2.id, cK2.userId, 0);
+      assert('checkout devuelve trackingToken opaco y estable', /^[A-Za-z0-9_-]{24}$/.test(chk.trackingToken) && (await reload(oK2.id)).trackingToken === chk.trackingToken && chk.orderId === oK2.id);
+      const chkOther = await svc.checkout(oK2.id, cG.userId, 0).catch((e) => e);
+      assert('checkout de un tercero → 403 (sin token)', chkOther.output?.statusCode === 403);
       const st = item.progress.stages;
       assert('etapas reales con fechas: confirmado, validado, enviado, guía, en camino', item.progress.currentStage === 'in_transit' && st.slice(0, 5).every((x) => x.done && x.at) && !st[5].done && st[5].at === null);
       assert('guía y transportadora reales', item.progress.trackingNumber === 'G-77' && item.progress.carrierName === 'SERVIENTREGA');

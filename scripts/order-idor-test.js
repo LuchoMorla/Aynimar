@@ -1,7 +1,8 @@
 'use strict';
 /* eslint-disable no-console */
 /**
- * IDOR de órdenes: GET /orders/:id y DELETE /orders/:id.
+ * IDOR de órdenes: GET /orders/:id, DELETE /orders/:id y trackingToken de
+ * POST /orders/:id/confirm-cod y /orders/checkout.
  * Sin BD: se sustituyen findOne / isOrderOfBusinessOwner del servicio real.
  * Usage: node scripts/order-idor-test.js
  */
@@ -29,6 +30,16 @@ OrderService.prototype.findOne = async (id) => {
   return o ? { ...o, destroy: async () => { destroyed.push(o.id); } } : null;
 };
 OrderService.prototype.isOrderOfBusinessOwner = async (orderId, userId) => Number(orderId) === 11 && Number(userId) === 7;
+
+// confirm-cod / checkout: código REAL del servicio (guards de propiedad) sobre modelos
+// y transacción sustituidos. La orden 12 es un carrito del customer 20 (userId 2).
+const sequelize = require('../libs/sequelize');
+const { models } = sequelize;
+sequelize.transaction = async (fn) => fn({ LOCK: { UPDATE: 'UPDATE' } });
+models.Order.findByPk = async (id) => (Number(id) === 12 ? { id: 12, customerId: 20, state: 'carrito' } : null);
+models.Customer.findByPk = async (id) => (Number(id) === 20 ? { id: 20, userId: 2 } : null);
+const tokenCalls = [];
+OrderService.prototype._ensureTrackingToken = async (o) => { tokenCalls.push(o.id); return 'TOKEN_SOLO_DEL_DUENO_XXXX'; };
 
 async function main() {
   const express = require('express');
@@ -69,6 +80,19 @@ async function main() {
     assert('business_owner sobre orden de su negocio → 201', (await call('DELETE', 11, tok(7, 'business_owner'))).status === 201 && destroyed.includes(11));
     assert('admin → 201', (await call('DELETE', 10, tok(1, 'admin'))).status === 201 && destroyed.includes(10));
     assert('admin sobre inexistente → 404 (antes 500)', (await call('DELETE', 999, tok(1, 'admin'))).status === 404);
+
+    console.log('\n▶ trackingToken en confirm-cod / checkout: un tercero no lo obtiene');
+    const post = async (url, token, body = {}) => {
+      const r = await fetch(`${base}${url}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+      return { status: r.status, body: await r.text() };
+    };
+    const cod = await post('/12/confirm-cod', tok(5, 'customer'));
+    assert('confirm-cod de un tercero → 403 sin token', cod.status === 403 && !cod.body.includes('TOKEN_'), String(cod.status));
+    const codAdmin = await post('/12/confirm-cod', tok(1, 'admin'));
+    assert('confirm-cod de admin no dueño → 403 sin token', codAdmin.status === 403 && !codAdmin.body.includes('TOKEN_'), String(codAdmin.status));
+    const chk = await post('/checkout', tok(5, 'customer'), { orderId: 12 });
+    assert('checkout de un tercero → 403 sin token', chk.status === 403 && !chk.body.includes('TOKEN_'), String(chk.status));
+    assert('no se generó ningún token para terceros', tokenCalls.length === 0);
   } finally {
     console.error = origError;
     server.close();
