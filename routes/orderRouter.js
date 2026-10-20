@@ -32,6 +32,7 @@ const {
   reviewProofSchema,
 } = require('../schemaODtos/paymentProofSchema');
 const paymentProofService = require('../Services/paymentProofService');
+const { buildProgress } = require('../Services/orderProgress');
 
 const router = express.Router();
 const service = new OrderService();
@@ -40,34 +41,52 @@ const recyclerService = new RecyclerService();
 
 // --- RUTAS PÚBLICAS (sin autenticación) ---
 
-// GET /api/v1/orders/track/:orderId
-// Public order tracking — returns only tracking-safe fields (no PII beyond first name).
+// GET /api/v1/orders/track/:ref
+// Seguimiento público. :ref es el TOKEN OPACO de seguimiento (GET /orders/mine/progress),
+// no el id secuencial: con ids se podían enumerar todos los pedidos. Un id numérico o un
+// token inexistente → 404 (mismo mensaje). Mismos campos que antes + progress; sin datos
+// personales (customerName se mantiene en el contrato pero siempre es null).
 // Placed before /:id to avoid Express treating "track" as an id param.
+const TRACKING_TOKEN_RE = /^[A-Za-z0-9_-]{24}$/;
 router.get('/track/:orderId', async (req, res, next) => {
   try {
-    const orderId = Number(req.params.orderId);
-    if (isNaN(orderId)) {
-      return res.status(400).json({ message: 'ID de orden inválido.' });
-    }
-
-    const order = await service.findOne(orderId);
+    const ref = String(req.params.orderId);
+    const order = TRACKING_TOKEN_RE.test(ref) ? await service.findByTrackingToken(ref) : null;
 
     if (!order) {
       return res.status(404).json({ message: 'Orden no encontrada.' });
     }
 
+    const progress = buildProgress(order);
+    res.set('Cache-Control', 'no-store');
     res.json({
       id:             order.id,
       stateOrder:     order.stateOrder,
-      trackingNumber: order.trackingNumber ?? null,
-      carrierName:    order.carrierName    ?? null,
+      trackingNumber: progress.trackingNumber,
+      carrierName:    progress.carrierName,
       createdAt:      order.createdAt,
-      customerName:   order.customer?.name ?? null,
+      customerName:   null,
+      progress,
     });
   } catch (err) {
     next(err);
   }
 });
+
+// GET /api/v1/orders/mine/progress — "Mis pedidos": barra de progreso real de los pedidos
+// del usuario autenticado (solo los suyos: se filtra por req.user.sub, sin parámetro de id).
+router.get(
+  '/mine/progress',
+  passport.authenticate('jwt', { session: false }),
+  async (req, res, next) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      res.json({ items: await service.progressForUser(Number(req.user.sub)) });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 // Ruta para que un invitado cree su carrito inicial
 router.post(

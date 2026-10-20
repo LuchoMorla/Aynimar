@@ -104,11 +104,13 @@ app.get('/', (req, res) => {
 // ── Health check — no auth, no DB hit — Railway uses this for uptime monitoring ──
 app.get('/health', (req, res) => {
   const groqKey    = !!(process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY);
-  const orderToken = !!(process.env.DROPI_ORDER_TOKEN || process.env.WOO_CONSUMER_SECRET);
+  const orderToken = !!process.env.DROPI_INTEGRATION_KEY;
   const jwtSecret  = !!process.env.JWT_SECRET;
   const worker     = !!(process.env.DROPI_WORKER_URL && process.env.DROPI_WORKER_KEY);
 
-  const degraded = !groqKey || !orderToken || !jwtSecret;
+  // El token de integración solo hace falta con el transporte http (ni WOO_CONSUMER_SECRET ni
+  // DROPI_ORDER_TOKEN cuentan). Con transporte mock (por defecto) su ausencia no degrada.
+  const degraded = !groqKey || !jwtSecret || (process.env.DROPI_ORDER_TRANSPORT === 'http' && !orderToken);
 
   res.status(degraded ? 200 : 200).json({
     status:    degraded ? 'degraded' : 'ok',
@@ -116,7 +118,7 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     checks: {
       jwt_secret:         jwtSecret,
-      dropi_order_token:  orderToken,
+      dropi_integration_key: orderToken,
       groq_api_key:       groqKey,
       cloudflare_worker:  worker,
     },
@@ -228,7 +230,7 @@ async function notifyDeployHealth() {
 
   const checks = {
     jwt_secret:        !!process.env.JWT_SECRET,
-    dropi_order_token: !!(process.env.DROPI_ORDER_TOKEN || process.env.WOO_CONSUMER_SECRET),
+    dropi_integration_key: !!process.env.DROPI_INTEGRATION_KEY,
     groq_api_key:      !!(process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY),
     telegram_bot:      !!process.env.TELEGRAM_BOT_TOKEN,
   };
@@ -277,13 +279,15 @@ const server = app.listen(puerto, '0.0.0.0', () => {
   console.log(`[OK] Start time: ${new Date().toISOString()}`);
 
   // ── Critical env-var checks ───────────────────────────────────────────────
-  if (!process.env.DROPI_ORDER_TOKEN && !process.env.WOO_CONSUMER_SECRET) {
-    console.error(
-      '[CRITICAL] DROPI_ORDER_TOKEN no está configurado en Railway. ' +
-      'Las órdenes de Dropi FALLARÁN y quedarán en PENDING_DROPI_FULFILLMENT. ' +
-      'Ve a Variables en Railway y añade DROPI_ORDER_TOKEN con el JWT Bearer de tu cuenta Dropi.'
-    );
-  }
+  // Automatización de pedidos (docs/ORDER_AUTOMATION.md): sin interruptor no se envía nada a Dropi.
+  const orderMode = (process.env.DROPI_ORDER_AUTOMATION || 'off').toLowerCase();
+  // Host .co, /api/v1/orders, sin flag o sin DROPI_INTEGRATION_KEY → http rechazado al arrancar
+  // (preDispatch bloquea cada pedido con esa misma razón; nunca se llama a Dropi).
+  const dropiOrders = require('./integrations/dropi/dropiAdapter');
+  const transportError = dropiOrders.orderTransportError();
+  const orderTransport = dropiOrders.orderTransportName() === 'mock' ? 'mock' : (transportError ? 'http RECHAZADO' : 'http (api.dropi.ec)');
+  console.log(`[OrderAutomation] DROPI_ORDER_AUTOMATION=${orderMode} · transporte de órdenes Dropi: ${orderTransport}`);
+  if (transportError) console.error(`[OrderAutomation] ${transportError}`);
 
   notifyDeployHealth();   // deploy health report to Telegram on every Railway restart
   registerTelegramWebhook(); // non-blocking — failures are logged, never crash the server

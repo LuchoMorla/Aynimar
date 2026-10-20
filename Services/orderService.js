@@ -5,7 +5,11 @@ const { models } = sequelize;
 const { Op } = require('sequelize');
 const WalletService = require('./walletService');
 const { computeOrderTotals, computeCreditRedemption, isTerminalStateOrder } = require('./orderTotals');
-const { createOrderInDropi, fetchDropiOrderStatus } = require('../integrations/dropi/dropiAdapter');
+// Objeto (no desestructurado) para que los tests puedan sustituir las llamadas a Dropi.
+const dropi = require('../integrations/dropi/dropiAdapter');
+const automation = require('./orderAutomationService');
+const crypto = require('crypto');
+const { buildProgress } = require('./orderProgress');
 const { createOrderInEffi }  = require('../integrations/effi/effiAdapter');
 const { sendTelegramNotification } = require('../utils/telegramNotify');
 const { buildDispatchDescription } = require('../utils/variantAdapter');
@@ -225,6 +229,43 @@ class OrderService {
     return order;
   }
 
+  // ── Seguimiento visual (orderProgress) ─────────────────────────────────────
+  // Token opaco (144 bits, base64url de 24 caracteres): el seguimiento público
+  // no usa el id secuencial (enumerable).
+  async findByTrackingToken(token) {
+    return models.Order.findOne({ where: { trackingToken: token } });
+  }
+
+  async _ensureTrackingToken(order) {
+    if (order.trackingToken) return order.trackingToken;
+    const token = crypto.randomBytes(18).toString('base64url');
+    // Condicional: si otra petición lo generó a la vez, gana la primera.
+    const [n] = await models.Order.update({ trackingToken: token }, { where: { id: order.id, trackingToken: null } });
+    return n ? token : (await models.Order.findByPk(order.id, { attributes: ['trackingToken'] })).trackingToken;
+  }
+
+  /** "Mis pedidos": progreso real de los pedidos confirmados del usuario (sin datos personales). */
+  async progressForUser(userId, limit = 50) {
+    const orders = await models.Order.findAll({
+      where: { state: { [Op.ne]: 'carrito' } },
+      include: [{ association: 'customer', attributes: [], where: { userId }, required: true }],
+      order: [['id', 'DESC']],
+      limit,
+    });
+    const out = [];
+    for (const o of orders) {
+      out.push({
+        orderId: o.id,
+        createdAt: o.createdAt,
+        total: o.total,
+        paymentMethod: o.paymentMethod,
+        trackingToken: await this._ensureTrackingToken(o),
+        progress: buildProgress(o),
+      });
+    }
+    return out;
+  }
+
   //super llamado por user id filtrando estado de orden
   async findOrderByUserIdAndState(userId, state) {
     const orders = await this.findByUser(userId);
@@ -317,7 +358,10 @@ class OrderService {
     if (changes.stateOrder) {
       this._assertStateOrderTransition(order.stateOrder, changes.stateOrder, userRole);
     }
+    const wasCancelled = order.stateOrder === 'cancelado';
     const rta = await order.update(changes);
+    // Cancelación: detiene el envío a Dropi o abre excepción si Dropi ya la recibió.
+    if (changes.stateOrder === 'cancelado' && !wasCancelled) await automation.onCancelled(order.id);
     return { id, changes, rta };
   }
 
@@ -459,16 +503,21 @@ class OrderService {
   }
 
   // ── _dispatchOrder — despacho externo, SIEMPRE fuera de transacción ────────
-  // Único punto de despacho: lo llaman la FASE 2 de _finalizeAndDispatch y el
-  // dropiRetryWorker. Nunca lanza (salvo error de programación).
+  // Único punto de despacho: lo llaman la FASE 2 de _finalizeAndDispatch, el
+  // dropiRetryWorker, la confirmación por Telegram y la resolución de
+  // excepciones. Nunca lanza (salvo error de programación).
   //
-  // Claim atómico: `fulfillmentRetryCount` funciona como optimistic-lock. Sólo
-  // un actor incrementa el contador y despacha un intento a la vez. Si el
-  // proceso muere durante el intento, la orden sigue PENDING_DISPATCH /
-  // PENDING_DROPI_FULFILLMENT con dropiOrderId=null y el worker la retoma en el
-  // siguiente tick (no queda ningún estado "atascado").
+  // 1. automation.preDispatch: interruptor DROPI_ORDER_AUTOMATION (off por
+  //    defecto), prueba ≠ real, validación → excepciones, modo supervisado.
+  // 2. Claim atómico (optimistic-lock sobre fulfillmentRetryCount) que deja la
+  //    orden en SENDING + dispatchStartedAt ANTES de llamar a Dropi.
+  // 3. Resultado: id → DISPATCHED. Error AMBIGUO (timeout/red/5xx: Dropi pudo
+  //    crearla) → DISPATCH_UNKNOWN + excepción, SIN reintento. Error definitivo
+  //    (4xx / sin configurar: Dropi no la creó) → reintento acotado y, al
+  //    agotarse, FAILED + excepción provider_error. Un SENDING colgado (proceso
+  //    muerto) lo pasa el worker a DISPATCH_UNKNOWN: nunca se reintenta a ciegas.
   //
-  // @returns {{status:'DISPATCHED'|'MANUAL_LOGISTICS'|'RETRY_PENDING'|'FAILED'|'SKIPPED', dropiOrderId?:string}}
+  // @returns {{status:string, dropiOrderId?:string}}
   async _dispatchOrder(order) {
     if (order.dropiOrderId) {
       if (order.fulfillmentStatus !== 'DISPATCHED') {
@@ -476,17 +525,29 @@ class OrderService {
       }
       return { status: 'DISPATCHED', dropiOrderId: order.dropiOrderId };
     }
+    if (!['PENDING_DISPATCH', 'PENDING_DROPI_FULFILLMENT', 'CONFIRMED'].includes(order.fulfillmentStatus)) {
+      return { status: 'SKIPPED' };
+    }
+    let gate;
+    try {
+      gate = await automation.preDispatch(order);
+    } catch (err) {
+      console.error(`[OrderService] preDispatch falló para orden ${order.id}: ${err.message}`);
+      return { status: 'SKIPPED' }; // queda en su estado; el worker lo reintenta
+    }
+    if (gate) return { status: gate.status };
 
     const prevCount = order.fulfillmentRetryCount ?? 0;
     const attempt = prevCount + 1;
     const [claimed] = await models.Order.update(
-      { fulfillmentRetryCount: attempt },
+      { fulfillmentRetryCount: attempt, fulfillmentStatus: 'SENDING', dispatchStartedAt: new Date() },
       {
         where: {
           id:                    order.id,
           fulfillmentRetryCount: prevCount,
           dropiOrderId:          null,
-          fulfillmentStatus:     { [Op.in]: ['PENDING_DISPATCH', 'PENDING_DROPI_FULFILLMENT'] },
+          stateOrder:            { [Op.ne]: 'cancelado' }, // una cancelación previa gana al claim
+          fulfillmentStatus:     { [Op.in]: ['PENDING_DISPATCH', 'PENDING_DROPI_FULFILLMENT', 'CONFIRMED'] },
         },
       }
     );
@@ -494,44 +555,62 @@ class OrderService {
       console.log(`[OrderService] Order ${order.id}: dispatch ya reclamado/completado por otro proceso — omitido`);
       return { status: 'SKIPPED' };
     }
+    // Reflejar el claim en la instancia: si no, order.update() no detectaría el cambio
+    // SENDING → PENDING_DROPI_FULFILLMENT (mismo valor que antes del claim) y no lo guardaría.
     order.fulfillmentRetryCount = attempt;
+    order.fulfillmentStatus = 'SENDING';
 
     try {
       const dispatchResult = await this.dispatchToProviders(order);
       if (dispatchResult?.dropiOrderId) {
+        const history = Array.isArray(order.dropiStatusHistory) ? order.dropiStatusHistory : [];
         await order.update({
           dropiOrderId:      dispatchResult.dropiOrderId,
           fulfillmentStatus: 'DISPATCHED',
           fulfillmentError:  null,
           stateOrder:        'en_preparacion',
+          ...(order.paymentMethod === 'cod' ? { codStatus: 'pending' } : {}),
+          dropiStatusHistory: [...history, { status: 'ENVIADO_A_DROPI', group: 'dispatched', at: new Date().toISOString() }],
         });
         return { status: 'DISPATCHED', dropiOrderId: dispatchResult.dropiOrderId };
       }
-      if (dispatchResult === undefined) {
-        await order.update({ fulfillmentStatus: 'MANUAL_LOGISTICS', fulfillmentError: null });
-        console.log(`[OrderService] Order ${order.id} sin ítems Dropi — MANUAL_LOGISTICS`);
-        return { status: 'MANUAL_LOGISTICS' };
-      }
-      return { status: 'SKIPPED' };
+      await order.update({ fulfillmentStatus: 'MANUAL_LOGISTICS', fulfillmentError: null });
+      return { status: 'MANUAL_LOGISTICS' };
     } catch (dispatchError) {
-      const exhausted = attempt >= MAX_DISPATCH_ATTEMPTS;
+      const msg = String(dispatchError.message || dispatchError).slice(0, 1000);
+      if (dispatchError.ambiguous) {
+        console.error(`[OrderService] resultado DESCONOCIDO al despachar orden ${order.id}: ${msg}`);
+        await order.update({ fulfillmentStatus: 'DISPATCH_UNKNOWN', fulfillmentError: msg }).catch(() => {});
+        await automation.openException(order.id, 'dispatch_unknown', {
+          error: msg, shopOrderId: `AYNIMAR-${order.id}`, attempt,
+          action: `Buscar AYNIMAR-${order.id} en el panel de Dropi ANTES de cualquier reenvío; resolver con link (existe) o not_created + nota (no existe). El reenvío es manual y queda auditado.`,
+        }).catch(() => {});
+        sendTelegramNotification(
+          `❓ <b>Orden #${order.id}: envío a Dropi con resultado desconocido</b>\n` +
+          `No se reintenta. Busca en Dropi el pedido AYNIMAR-${order.id} y resuelve la excepción (link / not_created).`
+        ).catch(() => {});
+        return { status: 'UNKNOWN' };
+      }
+      // permanent = Dropi respondió isSuccess=false: la rechazó, reintentar no cambia nada.
+      const exhausted = attempt >= MAX_DISPATCH_ATTEMPTS || dispatchError.permanent === true;
       console.error(
-        `[OrderService] dispatch falló para orden ${order.id} (intento ${attempt}/${MAX_DISPATCH_ATTEMPTS}): ${dispatchError.message}`
+        `[OrderService] dispatch falló para orden ${order.id} (intento ${attempt}/${MAX_DISPATCH_ATTEMPTS}): ${msg}`
       );
       await order.update({
         stateOrder:        'error_api_proveedor',
         fulfillmentStatus: exhausted ? 'FAILED_DROPI_FULFILLMENT' : 'PENDING_DROPI_FULFILLMENT',
-        fulfillmentError:  dispatchError.message.slice(0, 1000),
+        fulfillmentError:  msg,
       }).catch((e) =>
         console.error(`[OrderService] no se pudo marcar error en orden ${order.id}: ${e.message}`)
       );
 
       if (exhausted) {
+        await automation.openException(order.id, 'provider_error', { error: msg, attempts: attempt }).catch(() => {});
         sendTelegramNotification(
           `🚨 <b>FALLO DROPI — Orden #${order.id}</b>\n` +
           `Agotados ${MAX_DISPATCH_ATTEMPTS} intentos de despacho.\n` +
-          `Error: ${dispatchError.message.slice(0, 300)}\n` +
-          `⚠️ Intervención manual: POST /orders/${order.id}/retry-fulfillment`
+          `Error: ${msg.slice(0, 300)}\n` +
+          `⚠️ Revisar en /api/v1/order-exceptions`
         ).catch((tErr) => console.error('[OrderService] Telegram alert failed:', tErr.message));
       }
       return { status: exhausted ? 'FAILED' : 'RETRY_PENDING' };
@@ -780,8 +859,11 @@ class OrderService {
   // Reemplaza el antiguo PATCH /orders/:id {state:'pendiente_envio'}.
   // Toda la lógica (transacción + stock + despacho idempotente) vive en
   // _finalizeAndDispatch.
+  // trackingToken: solo tras pasar el control de propiedad de _finalizeAndDispatch
+  // (el dueño que confirma); /gracias lo usa para /orders/track/:token.
   async confirmCod(orderId, userId, attribution) {
-    return this._finalizeAndDispatch(orderId, { userId, attribution });
+    const result = await this._finalizeAndDispatch(orderId, { userId, attribution });
+    return { ...result, trackingToken: await this._ensureTrackingToken({ id: result.orderId }) };
   }
 
   // ── Confirmar pago DeUna aprobado — Paso 11 ────────────────────────────────
@@ -959,29 +1041,24 @@ class OrderService {
     let dropiOrderId = null;
 
     if (byProvider.dropi) {
+      // El payload validado lo prepara automation.preDispatch (contrato oficial
+      // de Dropi: precio, variation_id, rate_type, ciudad verificada, shop_order_id).
+      if (!order.__dropiPayload) throw new Error('Payload Dropi no validado (preDispatch no se ejecutó)');
       try {
-        const result = await createOrderInDropi({
-          referenceId:     `AYNIMAR-${order.id}`,
-          items:           byProvider.dropi,
-          shippingAddress,
-        });
+        const result = await dropi.createOrderInDropi(order.__dropiPayload);
         dropiOrderId = result.externalOrderId ?? null;
-        console.log(
-          `[Dispatch] Dropi order created for Aynimar #${order.id}: ${dropiOrderId}`
-        );
-        const customerName = order.customer
-          ? `${order.customer.name ?? ''} ${order.customer.lastName ?? ''}`.trim()
-          : 'Invitado';
+        console.log(`[Dispatch] Dropi order created for Aynimar #${order.id}: ${dropiOrderId}`);
         const itemLines = byProvider.dropi
           .map((d) => `  • ${d.dispatchDescription || d.externalId} ×${d.quantity}`)
           .join('\n');
         await sendTelegramNotification(
-          `✅ <b>Orden #${order.id} enviada a Dropi</b>\n` +
+          `✅ <b>Orden #${order.id} enviada a Dropi</b>${order.isTest ? ' (PRUEBA)' : ''}\n` +
           `ID Dropi: <code>${dropiOrderId}</code>\n` +
-          `Cliente: ${customerName}\n` +
           `Productos:\n${itemLines}`
         );
       } catch (err) {
+        // Ambiguo: puede haberse creado → se propaga tal cual (sin mezclar con Effi).
+        if (err.ambiguous) throw err;
         errors.push(`dropi: ${err.message}`);
         console.error(`[Dispatch] Dropi error for order ${order.id}:`, err.message);
       }
@@ -1032,6 +1109,10 @@ class OrderService {
     if (order.fulfillmentStatus === 'DISPATCHED') {
       throw boom.conflict(`Order ${id} is already dispatched to Dropi`);
     }
+    // Resultado desconocido / envío en curso: reintentar podría duplicar el pedido.
+    if (['SENDING', 'DISPATCH_UNKNOWN', 'AWAITING_CONFIRMATION'].includes(order.fulfillmentStatus)) {
+      throw boom.conflict(`Order ${id} está en ${order.fulfillmentStatus}: resuélvela en /api/v1/order-exceptions (no se reintenta a ciegas)`);
+    }
 
     // Reset para permitir el reintento manual (rompe cuenta agotada / atasco).
     await order.update({
@@ -1049,6 +1130,10 @@ class OrderService {
     if (r.status === 'MANUAL_LOGISTICS') {
       return { success: true, manualLogistics: true, orderId: id };
     }
+    // Retenida por la automatización (interruptor, excepción, supervisión): no es un fallo de Dropi.
+    if (['BLOCKED', 'AWAITING_CONFIRMATION', 'AUTOMATION_OFF', 'TEST_NOT_SENT', 'CANCELLED', 'UNKNOWN'].includes(r.status)) {
+      return { success: false, status: r.status, orderId: id };
+    }
     throw boom.badGateway(`Retry falló (estado: ${r.status})`);
   }
 
@@ -1063,27 +1148,11 @@ class OrderService {
       throw boom.badRequest('This order has no Dropi order ID — dispatch it first.');
     }
 
-    const deliveryStatus = await fetchDropiOrderStatus(order.dropiOrderId);
+    // Transiciones coherentes + COD + excepciones: orderAutomationService.applyDropiStatus.
+    const info = await dropi.fetchDropiOrderStatus(order.dropiOrderId);
+    if (info) await automation.applyDropiStatus(order, info);
 
-    if (deliveryStatus) {
-      // Mirror Dropi status into our stateOrder when we can map it
-      const stateMap = {
-        'entregado':    'entregado',
-        'Entregado':    'entregado',
-        'en transito':  'en_transito',
-        'En transito':  'en_transito',
-        'En tránsito':  'en_transito',
-        'enviado':      'enviado',
-        'Enviado':      'enviado',
-      };
-      const mappedState = stateMap[deliveryStatus];
-
-      const update = { deliveryStatus };
-      if (mappedState) update.stateOrder = mappedState;
-      await order.update(update);
-    }
-
-    return { dropiOrderId: order.dropiOrderId, deliveryStatus: deliveryStatus ?? order.deliveryStatus };
+    return { dropiOrderId: order.dropiOrderId, deliveryStatus: info?.status ?? order.deliveryStatus };
   }
 
   /**
@@ -1106,7 +1175,7 @@ class OrderService {
   async checkout(orderId, userId, creditsToApply = 0, attribution) {
     const walletService = new WalletService();
 
-    return sequelize.transaction(async (t) => {
+    const summary = await sequelize.transaction(async (t) => {
 
       // ── 1. Load order with a row-level lock ────────────────────────────────
       // The lock prevents a second concurrent checkout on the same cart from
@@ -1259,6 +1328,8 @@ class OrderService {
         itemCount: cartItems.length,
       };
     });
+    // Post-commit y solo tras el guard de propiedad (paso 2): el dueño recibe el token.
+    return { ...summary, trackingToken: await this._ensureTrackingToken({ id: summary.orderId }) };
   }
 }
 module.exports = OrderService;

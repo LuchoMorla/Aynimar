@@ -157,6 +157,21 @@ const OrderSchema = {
     allowNull: true,
     type: DataTypes.DATE,
   },
+  // Automatización de pedidos — db/migrations/20261020000002-order-automation.js
+  // is_test: pedido de prueba, nunca va al Dropi real.
+  isTest: { field: 'is_test', allowNull: false, type: DataTypes.BOOLEAN, defaultValue: false },
+  // Inicio del envío en curso (fulfillmentStatus='SENDING'); si queda colgado → DISPATCH_UNKNOWN.
+  dispatchStartedAt: { field: 'dispatch_started_at', allowNull: true, type: DataTypes.DATE },
+  // COD: null (no aplica) | pending (en ruta) | pending_settlement (entregado, falta liquidación
+  // de Dropi) | collected (conciliado) | not_collected (rechazado/devuelto/cancelado).
+  codStatus: { field: 'cod_status', allowNull: true, type: DataTypes.STRING(20) },
+  codCollectedAmount: { field: 'cod_collected_amount', allowNull: true, type: DataTypes.DECIMAL(10, 2) },
+  shippingCost: { field: 'shipping_cost', allowNull: true, type: DataTypes.DECIMAL(10, 2) },
+  providerFees: { field: 'provider_fees', allowNull: true, type: DataTypes.DECIMAL(10, 2) },
+  // [{status, group, at}] — fechas por estado de Dropi (plazo real confirmación → entrega).
+  dropiStatusHistory: { field: 'dropi_status_history', allowNull: true, type: DataTypes.JSONB },
+  // Token opaco del seguimiento público (db/migrations/20261020000003-order-tracking-token.js).
+  trackingToken: { field: 'tracking_token', allowNull: true, type: DataTypes.STRING(64) },
   total: {
     field: 'total',
     allowNull: false,
