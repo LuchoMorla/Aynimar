@@ -121,6 +121,8 @@ async function safeGroqCall(groq, params) {
 }
 
 // ── Telegram helper ───────────────────────────────────────────────────────────
+// sendTelegram usa parse_mode HTML: todo texto que venga del usuario o del LLM
+// pasa por escHtml (definido más abajo, sección F2) para no inyectar HTML.
 // Priority: TELEGRAM_OWNER_ID → TELEGRAM_CHAT_ID. Sin auto-descubrimiento: el
 // primer desconocido que escribiera al bot recibiría las alertas (F0).
 async function sendTelegram(text) {
@@ -755,7 +757,7 @@ async function executeTool(name, args, clientActions, estadoActualizado, ctx = {
   if (name === 'alertar_telegram') {
     const emoji  = args.tipo === 'critico' ? '⚠️' : '🚀';
     const titulo = args.tipo === 'critico' ? 'SOPORTE CRÍTICO' : 'OPORTUNIDAD DE VENTA';
-    const sent   = await sendTelegram(`${emoji} <b>${titulo}</b>\n\n${args.mensaje}`);
+    const sent   = await sendTelegram(`${emoji} <b>${titulo}</b>\n\n${escHtml(args.mensaje.slice(0, 1500))}`);
 
     // Extract profile data from the message if available
     const extracted = extractProfileFromMensaje(args.mensaje);
