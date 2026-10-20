@@ -6,7 +6,7 @@ const passport = require('passport');
 const OpenAI   = require('openai');
 const { Op }   = require('sequelize');
 const Joi      = require('joi');
-const { checkRoles }          = require('../middlewares/authHandler');
+const { checkRoles, optionalAuth } = require('../middlewares/authHandler');
 const validatorHandler        = require('../middlewares/validatorHandler');
 const { enqueueVideo }        = require('../libs/videoQueue');
 const { newRef }              = require('../integrations/videoService');
@@ -638,7 +638,8 @@ function evaluarNecesidadesCliente(mensaje) {
 }
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
-async function executeTool(name, args, clientActions, estadoActualizado) {
+// ctx = { userId, role } del JWT de la conversación (optionalAuth); vacío si es anónimo.
+async function executeTool(name, args, clientActions, estadoActualizado, ctx = {}) {
   const { models } = sequelize;
 
   if (name === 'buscar_producto') {
@@ -705,7 +706,12 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
 
   if (name === 'obtener_estado_orden') {
     try {
-      const hit = cachedOrder(args.orden_id);
+      // IDOR: solo pedidos del usuario autenticado (admin, cualquiera). Anónimo o
+      // ajeno → el mismo error que «no existe». La caché va por usuario+pedido.
+      const notFound = { error: 'Pedido no encontrado. Verifica el número.' };
+      if (!ctx.userId) return notFound;
+      const cacheKey = `${ctx.userId}:${args.orden_id}`;
+      const hit = cachedOrder(cacheKey);
       if (hit) {
         estadoActualizado.trackingSoporte = {
           ordenId: hit.id, estado: hit.estado, guia: hit.guia, transportista: hit.transportista,
@@ -715,8 +721,10 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
 
       const order = await models.Order.findByPk(args.orden_id, {
         attributes: ['id', 'state', 'stateOrder', 'createdAt', 'trackingNumber', 'carrierName'],
+        include: [{ association: 'customer', attributes: ['userId'] }],
       });
-      if (!order) return { error: 'Pedido no encontrado. Verifica el número.' };
+      if (!order) return notFound;
+      if (ctx.role !== 'admin' && Number(order.customer?.userId) !== Number(ctx.userId)) return notFound;
 
       const result = {
         id:            order.id,
@@ -726,7 +734,7 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
         transportista: order.carrierName    ?? null,
         creado:        order.createdAt,
       };
-      cacheOrder(args.orden_id, result);
+      cacheOrder(cacheKey, result);
       estadoActualizado.trackingSoporte = {
         ordenId:       order.id,
         estado:        order.state,
@@ -812,7 +820,7 @@ async function executeTool(name, args, clientActions, estadoActualizado) {
 // ── POST /api/v1/ai/nutria/chat ───────────────────────────────────────────────
 // Accepts: { message: string, history: array, contexto: object }
 // Returns: { reply: string, actions: array, estadoActualizado: object }
-router.post('/nutria/chat', async (req, res) => {
+router.post('/nutria/chat', optionalAuth, async (req, res) => {
   try {
     const { message, history, contexto } = req.body;
 
@@ -939,7 +947,7 @@ router.post('/nutria/chat', async (req, res) => {
 
           let result;
           try {
-            result = await executeTool(tc.function.name, args, clientActions, estadoActualizado);
+            result = await executeTool(tc.function.name, args, clientActions, estadoActualizado, { userId: req.user?.sub, role: req.user?.role });
           } catch (toolErr) {
             console.error(`[NutrIA] Tool error (${tc.function.name}):`, toolErr.message);
             result = { error: 'Herramienta no disponible temporalmente.' };
@@ -1610,3 +1618,4 @@ router.post(
 );
 
 module.exports = router;
+module.exports.executeTool = executeTool; // tests (order-idor-test) sin LLM
