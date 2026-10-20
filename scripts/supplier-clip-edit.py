@@ -16,6 +16,8 @@ guion.json (rutas relativas al propio guion; tiempos en segundos del montaje):
                                                  # x/y = posición del recorte 9:16 (0 izq/arriba … 1 der/abajo);
                                                  # encajar = clip entero sobre fondo desenfocado (cuadrado/horizontal);
                                                  # foto (.jpg/.png/.webp) = plano fijo encajado, SIN zoom (cuenta como estático)
+                                                 # delogo = [x,y,w,h] o [[x,y,w,h],...] en px del clip/foto original:
+                                                 #   tapa la marca de agua del proveedor (caja manual; mírala en un fotograma)
   "subtitulos": [{"ini": 0.2, "fin": 2.0, "texto": "¿Tu gato toma agua del {inodoro}?"}],  # {x} = amarillo
   "cta": {"texto": "Pídelo en {aynimar.com}", "dur": 2.5, "cola": 1.0}  # cola = s extra tras la voz
 }
@@ -105,10 +107,22 @@ def load_guion(path, musica):
         p['clip'] = rel(p['clip'])
         if float(p.get('vel', 1)) <= 0 or not 0 <= float(p.get('x', .5)) <= 1 or not 0 <= float(p.get('y', .5)) <= 1:
             raise ValueError(f'plano inválido: {p}')
+        try:
+            ok = all(len(c) == 4 and c[0] >= 1 and c[1] >= 1 and c[2] > 0 and c[3] > 0 for c in _boxes(p))
+        except (TypeError, ValueError):
+            ok = False
+        if not ok:   # delogo de ffmpeg exige la caja dentro del cuadro, sin tocar el borde
+            raise ValueError(f'delogo inválido (x≥1, y≥1, w>0, h>0 en px del clip original): {p}')
     for s in g.get('subtitulos', []):
         if not (0 <= float(s['ini']) < float(s['fin'])) or not str(s.get('texto', '')).strip():
             raise ValueError(f'subtítulo inválido: {s}')
     return g
+
+
+def _boxes(p):
+    """"delogo": [x, y, w, h] o lista de cajas → lista de tuplas de enteros (ya validadas en load_guion)."""
+    b = p.get('delogo') or []
+    return [tuple(int(v) for v in c) for c in (b if b and isinstance(b[0], list) else [b] if b else [])]
 
 
 def clip_duration(path):
@@ -142,6 +156,8 @@ def render(g, out, work):
                 avisos.append(f'plano {i}: el clip se queda corto ({desde + need:.2f}s pedidos); se congela el final')
             args += ['-ss', f'{desde:.3f}', '-t', f'{need + 0.1:.3f}', '-i', p['clip']]   # busca en entrada: no decodifica lo previo
             src = f'[{i}:v]setpts=(PTS-STARTPTS)/{vel},'
+        # Marca de agua del proveedor: delogo con cajas en píxeles del clip ORIGINAL (antes de recortar/escalar).
+        src += ''.join(f'delogo=x={x0}:y={y0}:w={w0}:h={h0},' for x0, y0, w0, h0 in _boxes(p))
         tail = (f'fps={FPS},tpad=stop_mode=clone:stop_duration={dur:.3f},trim=duration={dur:.3f},'
                 f'setpts=N/{FPS}/TB,setsar=1,format=yuv420p[v{i}]')
         if p.get('encajar', p['clip'].lower().endswith(IMG_EXT)):

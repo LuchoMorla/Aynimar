@@ -69,6 +69,9 @@ No corren en Railway ni en `npm test`: necesitan python3 con `opencv-python` y `
 - `scripts/supplier-clip-edit.py guion.json salida.mp4` → 1080x1920 con vídeos/fotos del proveedor y clips pagados
   o genéricos, subtítulos ASS, ducking, −14 LUFS y CTA; ejecuta el QA y sale con 1 si la pieza no es apta.
   Las fotos entran como plano fijo (sin Ken Burns) y el QA las cuenta como estáticas.
+- Marca de agua del proveedor: `"delogo": [x, y, w, h]` (o lista de cajas) por plano, en píxeles del clip/foto original
+  (delogo de ffmpeg, como `WM_A` en v82d). Caja manual: la detección automática (región estática de alto contraste)
+  se probó y no aísla la marca semitransparente del producto/fondo, también estáticos.
 - Prueba: `python3 scripts/motion-qa-test.py` (sintética; con `FFMPEG_PATH` prueba también el montaje).
 
 | Qué | Por qué | Descartado |
