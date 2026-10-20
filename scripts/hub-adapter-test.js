@@ -29,6 +29,8 @@ function assert(label, cond, detail = '') {
 const { models } = require('../libs/sequelize');
 const orderLookups = [];
 models.Order.findByPk = async (id) => { orderLookups.push(id); return { id, state: 'x', customer: { userId: 2 } }; };
+const productFinds = [];
+models.Product.findOne = async ({ where }) => { productFinds.push(where); return where.id === 42 && where.isDeleted === false ? { id: 42, name: 'Kit Solar Camping', price: 59.9 } : null; };
 models.Product.findAll = async () => [{ id: 5, name: 'Powerbank Solar 20000', price: 24.9, stock: 3, description: 'Carga', image: null }];
 models.SalesPerformance.create = async () => ({});
 
@@ -149,6 +151,22 @@ async function main() {
     script = [{ content: 'Te paso con el equipo.' }];
     r = await post(payload('quiero hablar con un asesor'));
     assert('pedir asesor ⇒ handoff = true', r.json?.handoff === true);
+
+    console.log('\n▶ Código [AE-PROD-<id>] (campo product)');
+    assert('machine en el body → 400 (no aplica a AE)', (await post({ ...payload('hola'), machine: 'M-01' })).status === 400);
+    assert('product con formato inválido → 400', (await post({ ...payload('hola'), product: '42;drop' })).status === 400);
+    script = [{ content: '¡Ese kit es top!' }];
+    r = await post(payload('', { entry: true, product: '42' }));
+    assert('product numérico en la entrada → ficha primero con enlace', r.status === 200 && r.json.messages[0].text === 'Kit Solar Camping — $59.9\nhttps://tienda.test/store/42'.replace(/^/, '• '), JSON.stringify(r.json));
+    assert('el motor recibe el producto (contexto y mensaje)', /Kit Solar Camping/.test(llmCalls.at(-1).at(-1).content) && /id:42/.test(llmCalls.at(-1)[0].content));
+    assert('solo productos no eliminados', productFinds.at(-1).isDeleted === false && productFinds.at(-1).id === 42);
+    const finds = productFinds.length;
+    script = [{ content: 'Hola.' }];
+    r = await post(payload('', { entry: true, product: 'SKU-ABC' }));
+    assert('product no numérico → se ignora (200, sin consulta ni ficha)', r.status === 200 && productFinds.length === finds && !/store\//.test(r.json.messages.map((m) => m.text).join()));
+    script = [{ content: 'Hola.' }];
+    r = await post(payload('', { entry: true, product: '999' }));
+    assert('product inexistente → sin ficha, sigue el saludo', r.status === 200 && r.json.messages.length === 1 && llmCalls.at(-1).at(-1).content === 'hola');
 
     console.log('\n▶ Privacidad');
     assert('el teléfono no aparece en ningún log', !logs.some((l) => l.includes(PHONE)), logs.find((l) => l.includes(PHONE)));

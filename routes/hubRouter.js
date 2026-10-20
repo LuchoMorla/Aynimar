@@ -47,10 +47,14 @@ const schema = Joi.object({
   msgId: Joi.string().max(120).required(),
   text: Joi.string().max(1000).allow(''),
   replyId: Joi.string().max(200).allow(null, ''),
+  // Código [AE-PROD-<id>] (hub 9220516). Para Aynimar solo valen ids numéricos; el resto se ignora.
+  product: Joi.string().pattern(/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/).allow(null, ''),
+  machine: Joi.forbidden(), // AV (AyniMachine), no aplica a AE ⇒ 400
 }).unknown(false);
 
 // ponytail: sesiones y dedupe en memoria (una instancia; se pierden al reiniciar).
 // Pasar a BD/Redis si se escala a varias réplicas.
+const { models } = require('../libs/sequelize');
 const sessions = new Map(); // HMAC(phone) → { history, contexto, ts, turns:[ms] }
 const seen = new Map();     // msgId → ms
 function sessionFor(phone, now) {
@@ -124,8 +128,19 @@ router.post('/handle', (req, res, next) => (enabled() ? next() : res.sendStatus(
 
   const groq = router.llm || ai.getGroqClient();
   if (!groq) return res.sendStatus(503);
-  const message = b.text || 'hola'; // entrada sin texto (código, anuncio, menú) ⇒ saludo
+  let message = b.text || 'hola'; // entrada sin texto (código, anuncio, menú) ⇒ saludo
   try {
+    // Entrada con [AE-PROD-<id>]: ficha real primero (solo productos no eliminados) y el
+    // motor la recibe en el contexto como "último producto mostrado".
+    let ficha = null;
+    if (b.entry && /^[1-9]\d{0,9}$/.test(b.product || '')) {
+      const p = await models.Product.findOne({ where: { id: Number(b.product), isDeleted: false }, attributes: ['id', 'name', 'price'] });
+      if (p) {
+        ficha = { type: 'text', text: `• ${p.name} — $${p.price}\n${ai.STORE_URL}/store/${p.id}` };
+        s.contexto.ultimosProductos = [{ id: p.id, nombre: p.name, precio: p.price }];
+        if (!b.text) message = `Hola, me interesa el producto "${p.name}"`;
+      }
+    }
     const { body, toolCallNames } = await ai.runNutriaTurn(
       { message, history: s.history, contexto: s.contexto, sessionId: `hub-${now}`, channel: 'whatsapp' },
       groq,
@@ -135,7 +150,7 @@ router.post('/handle', (req, res, next) => (enabled() ? next() : res.sendStatus(
     const { estadoCarrito, ...rest } = body.estadoActualizado || {};
     Object.assign(s.contexto, rest);
     if (estadoCarrito) s.contexto.estadoCarrito = { ...s.contexto.estadoCarrito, ...estadoCarrito };
-    const messages = toWhatsApp(body, s.contexto.estadoCarrito);
+    const messages = [...(ficha ? [ficha] : []), ...toWhatsApp(body, s.contexto.estadoCarrito)];
     const handoff = toolCallNames.includes('alertar_telegram') || /\b(humano|asesor|persona)\b/i.test(b.text || '');
     log.info('hub_handle', { origin: b.origin || null, count: messages.length, handoff });
     return res.json({ messages, handoff });
