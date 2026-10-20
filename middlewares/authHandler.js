@@ -47,4 +47,11 @@ function checkRoles(...roles) {
 
 
 
-module.exports = { checkApiKey, checkAdminRole, checkRoles, optionalAuth }
+// IDOR: admin accede a lo de cualquiera; el resto solo a lo suyo (userId = su
+// sub). Si no, 404: no revela si el recurso existe. Lo usan orders y payments.
+function assertUserAccess(userId, { sub, role }) {
+  if (role === 'admin' || (userId != null && Number(userId) === Number(sub))) return;
+  throw boom.notFound('No encontrado');
+}
+
+module.exports = { checkApiKey, checkAdminRole, checkRoles, optionalAuth, assertUserAccess }

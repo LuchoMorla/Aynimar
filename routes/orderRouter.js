@@ -2,7 +2,7 @@ const express = require('express');
 
 const passport = require('passport');
 
-const { checkRoles, optionalAuth } = require('../middlewares/authHandler');
+const { checkRoles, optionalAuth, assertUserAccess } = require('../middlewares/authHandler');
 
 const OrderService = require('../Services/orderService');
 const CustomerService = require('../Services/customerService');
@@ -250,7 +250,8 @@ router.get(
   async (req, res, next) => {
     try {
       const { businessId } = req.params;
-
+      // IDOR: un business_owner solo ve los pedidos de sus negocios.
+      await service.assertBusinessAccess(businessId, req.user);
       const orders = await service.findOrdersByBusinessId(businessId);
       res.json(orders);
     } catch (error) {
@@ -307,6 +308,8 @@ router.get(
   async (req, res, next) => {
     try {
       const { id } = req.params;
+      // IDOR: solo los pedidos propios (admin, los de cualquiera).
+      assertUserAccess(id, req.user);
       const orders = await service.findByUser(id);
       res.json(orders);
     } catch (error) {
@@ -323,6 +326,7 @@ router.get(
   async (req, res, next) => {
     try {
       const { id, businessId } = req.params;
+      await service.assertBusinessAccess(businessId, req.user);
 
       const isVerified = await service.verifyProductIsInOrderActive(
         id,
