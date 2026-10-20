@@ -41,9 +41,11 @@ const recyclerService = new RecyclerService();
 // --- RUTAS PÚBLICAS (sin autenticación) ---
 
 // GET /api/v1/orders/track/:orderId
-// Public order tracking — returns only tracking-safe fields (no PII beyond first name).
+// Seguimiento: solo el cliente dueño (JWT) o un admin. IDOR: antes era público y
+// los ids secuenciales permitían enumerar pedidos ajenos. Sin JWT o pedido
+// ajeno → el mismo 404 que «no existe» (no revela existencia, nunca 403).
 // Placed before /:id to avoid Express treating "track" as an id param.
-router.get('/track/:orderId', async (req, res, next) => {
+router.get('/track/:orderId', optionalAuth, async (req, res, next) => {
   try {
     const orderId = Number(req.params.orderId);
     if (isNaN(orderId)) {
@@ -52,7 +54,10 @@ router.get('/track/:orderId', async (req, res, next) => {
 
     const order = await service.findOne(orderId);
 
-    if (!order) {
+    const user = req.user;
+    const allowed = order && user
+      && (user.role === 'admin' || (order.customer?.userId != null && Number(order.customer.userId) === Number(user.sub)));
+    if (!allowed) {
       return res.status(404).json({ message: 'Orden no encontrada.' });
     }
 

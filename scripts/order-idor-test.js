@@ -54,6 +54,8 @@ async function main() {
   const jwt = require('jsonwebtoken');
   require('../utils/auth');
   const orderRouter = require('../routes/orderRouter');
+  // Se carga antes de levantar el servidor: tarda y el keep-alive del cliente caducaría.
+  const { executeTool } = require('../routes/aiRouter');
   const { logErrors, ormErrorHandler, boomErrorHandler, errorHandler } = require('../middlewares/errorsHandler');
   const app = express();
   app.use(express.json());
@@ -82,6 +84,29 @@ async function main() {
     assert('business_owner ajeno → 404', (await call('GET', 10, tok(7, 'business_owner'))).status === 404);
     assert('orden inexistente → 404', (await call('GET', 999, tok(1, 'admin'))).status === 404);
     assert('sin JWT → 401', (await call('GET', 10)).status === 401);
+
+    console.log('\n▶ GET /orders/track/:orderId');
+    const notFound = await call('GET', 'track/999', tok(1, 'admin'));
+    const anonTrack = await call('GET', 'track/10');
+    assert('anónimo → 404 idéntico a «no existe»', anonTrack.status === 404 && anonTrack.body === notFound.body, anonTrack.body);
+    const otherTrack = await call('GET', 'track/10', tok(5, 'customer'));
+    assert('otro usuario → 404 idéntico a «no existe»', otherTrack.status === 404 && otherTrack.body === notFound.body, otherTrack.body);
+    assert('JWT inválido → 404', (await call('GET', 'track/10', 'basura')).status === 404);
+    const ownTrack = await call('GET', 'track/10', tok(2, 'customer'));
+    assert('dueño → 200', ownTrack.status === 200 && JSON.parse(ownTrack.body).id === 10, String(ownTrack.status));
+    assert('admin → 200', (await call('GET', 'track/10', tok(1, 'admin'))).status === 200);
+    assert('id no numérico → 400', (await call('GET', 'track/abc')).status === 400);
+
+    console.log('\n▶ NutrIA obtener_estado_orden (sin LLM)');
+    models.Order.findByPk = async (id) => (ORDERS[id] ? { id: Number(id), state: 'enviado', stateOrder: 'x', trackingNumber: 'G1', carrierName: 'C', customer: ORDERS[id].customer } : null);
+    const ask = (id, ctx) => executeTool('obtener_estado_orden', { orden_id: id }, [], {}, ctx);
+    const nf = await ask(999, { userId: 1, role: 'admin' });
+    // El dueño primero: deja el pedido 10 en caché para comprobar que no se filtra a otros.
+    assert('dueño → datos', (await ask(10, { userId: 2, role: 'customer' })).guia === 'G1');
+    assert('anónimo → «no encontrado» (con caché caliente)', JSON.stringify(await ask(10, {})) === JSON.stringify(nf));
+    assert('otro usuario → «no encontrado» (con caché caliente)', JSON.stringify(await ask(10, { userId: 5, role: 'customer' })) === JSON.stringify(nf));
+    assert('admin → datos', (await ask(10, { userId: 1, role: 'admin' })).guia === 'G1');
+    assert('pedido de invitado (sin customer), cliente → «no encontrado»', JSON.stringify(await ask(10, { userId: 'x' })) === JSON.stringify(nf));
 
     console.log('\n▶ DELETE /orders/:id');
     assert('customer (aunque sea dueño) → 403', (await call('DELETE', 10, tok(2, 'customer'))).status === 403);
