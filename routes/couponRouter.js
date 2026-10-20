@@ -3,11 +3,26 @@
 const express    = require('express');
 const Joi        = require('joi');
 const { Op }     = require('sequelize');
+const passport   = require('passport');
 
 const validatorHandler = require('../middlewares/validatorHandler');
 const { models }       = require('../libs/sequelize');
+const { checkRoles }   = require('../middlewares/authHandler');
+const OrderService     = require('../Services/orderService');
 
 const router = express.Router();
+const orderService = new OrderService();
+
+// Gestión de cupones (todo salvo /validate): admin sobre cualquier negocio;
+// business_owner solo sobre los suyos. Ajeno → 404, igual que inexistente.
+const auth = [passport.authenticate('jwt', { session: false }), checkRoles('admin', 'business_owner')];
+
+async function findOwnCoupon(id, user) {
+  const coupon = await models.Coupon.findByPk(Number(id));
+  if (!coupon) return null;
+  if (user.role === 'admin' || (await orderService.isBusinessOfOwner(coupon.businessId, user.sub))) return coupon;
+  return null;
+}
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -30,9 +45,10 @@ const validateCouponSchema = Joi.object({
 
 // ── GET /api/v1/coupons/business/:businessId ──────────────────────────────────
 
-router.get('/business/:businessId', async (req, res, next) => {
+router.get('/business/:businessId', ...auth, async (req, res, next) => {
   try {
     const { businessId } = req.params;
+    await orderService.assertBusinessAccess(businessId, req.user);
     const coupons = await models.Coupon.findAll({
       where: { businessId: Number(businessId) },
       order: [['created_at', 'DESC']],
@@ -101,10 +117,12 @@ router.post(
 
 router.post(
   '/',
+  ...auth,
   validatorHandler(createCouponSchema, 'body'),
   async (req, res, next) => {
     try {
       let { businessId, code, type, value, minOrderAmount, startDate, endDate, isActive } = req.body;
+      await orderService.assertBusinessAccess(businessId, req.user);
 
       code = code.trim().toUpperCase().replace(/\s+/g, '');
 
@@ -133,9 +151,9 @@ router.post(
 
 // ── PATCH /api/v1/coupons/:id/toggle ─────────────────────────────────────────
 
-router.patch('/:id/toggle', async (req, res, next) => {
+router.patch('/:id/toggle', ...auth, async (req, res, next) => {
   try {
-    const coupon = await models.Coupon.findByPk(Number(req.params.id));
+    const coupon = await findOwnCoupon(req.params.id, req.user);
     if (!coupon) return res.status(404).json({ message: 'Cupón no encontrado.' });
 
     await coupon.update({ isActive: !coupon.isActive });
@@ -147,9 +165,9 @@ router.patch('/:id/toggle', async (req, res, next) => {
 
 // ── DELETE /api/v1/coupons/:id ────────────────────────────────────────────────
 
-router.delete('/:id', async (req, res, next) => {
+router.delete('/:id', ...auth, async (req, res, next) => {
   try {
-    const coupon = await models.Coupon.findByPk(Number(req.params.id));
+    const coupon = await findOwnCoupon(req.params.id, req.user);
     if (!coupon) return res.status(404).json({ message: 'Cupón no encontrado.' });
 
     await coupon.destroy();
