@@ -22,8 +22,9 @@ const WEBHOOK_SECRET_RE = /^[A-Za-z0-9_-]{1,256}$/;
 
 const KNOWN_UPDATE_TYPES = ['message', 'edited_message', 'channel_post', 'callback_query'];
 
-// Acciones admitidas en callback_data: aprobar, rechazar, solicitar cambios.
-const CALLBACK_ACTIONS = ['ap', 'rj', 'ch'];
+// Acciones admitidas en callback_data: aprobar, rechazar, solicitar cambios,
+// y 'cq' = opción de una pregunta del CTO (ref "<qid>_<n>", Services/ctoInboxService.js).
+const CALLBACK_ACTIONS = ['ap', 'rj', 'ch', 'cq'];
 // mk:<accion>:<ref>:<firma> — ref = id opaco de la autorización (F2).
 const CALLBACK_RE = /^mk:([a-z]{2}):([A-Za-z0-9_-]{1,32}):([A-Za-z0-9_-]{16})$/;
 
@@ -136,6 +137,19 @@ function verifyCallbackQuery(cq, env = process.env) {
   return { ok: true, action, ref };
 }
 
+/** Clave del header X-CTO-Key (hex) de GET /api/v1/ai/cto/inbox; null sin secreto. */
+function ctoInboxKey(env = process.env) {
+  const secret = env.TELEGRAM_WEBHOOK_SECRET;
+  if (!secret) return null;
+  return crypto.createHmac('sha256', secret).update('aynimar-cto-inbox-v1').digest('hex');
+}
+
+/** true solo si hay secreto y el header X-CTO-Key coincide (tiempo constante). */
+function isValidCtoKey(headerValue, env = process.env) {
+  const expected = ctoInboxKey(env);
+  return !!expected && !!headerValue && safeEqual(String(headerValue), expected);
+}
+
 /** Muestra solo los 4 últimos dígitos de un id. */
 function maskId(id) {
   if (id == null || id === '') return null;
@@ -155,6 +169,8 @@ module.exports = {
   signCallbackData,
   verifyCallbackQuery,
   maskId,
+  ctoInboxKey,
+  isValidCtoKey,
   CALLBACK_ACTIONS,
   KNOWN_UPDATE_TYPES,
 };
