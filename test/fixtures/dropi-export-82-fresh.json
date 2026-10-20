@@ -1,0 +1,138 @@
+{
+  "exportedAt": "2026-10-20T17:40:00Z",
+  "source": "Dropi Ecuador list_products (MCP, solo lectura, get_stock=true). Búsquedas: 'fuente de agua' y '2 en 1' en Mascotas. Sin datos de verificado/premium.",
+  "products": [
+    {
+      "productId": 82,
+      "storeImageHash": "e871c0cce4cc0ece",
+      "freight": {
+        "value": 5.54,
+        "source": "ESTIMADO (como patillera 9822, margenes.csv)"
+      },
+      "items": [
+        {
+          "id": 176296,
+          "name": "FUENTE DE AGUA Y COMEDOR  MASCOTA 2 EN 1",
+          "sku": "IJ7307",
+          "sale_price": 18.5,
+          "suggested_price": 38,
+          "stock": 98,
+          "supplier_id": 46384,
+          "categories": [
+            "Mascotas",
+            "Natural Home"
+          ],
+          "gallery": [
+            {
+              "urlS3": "https://d39ru7awumhhs2.cloudfront.net/ecuador/products/176296/f0916977-38c0-4e2b-a879-0d19bb40353f.png"
+            }
+          ],
+          "variations": [],
+          "imageHash": "9f0fe7f09ef64c3c"
+        },
+        {
+          "id": 123170,
+          "name": "Fuente De Agua Y Comida Mascotas 2 En 1",
+          "sale_price": 16,
+          "suggested_price": 25,
+          "stock": 17,
+          "supplier_id": 70383,
+          "gallery": [
+            {
+              "urlS3": "https://d39ru7awumhhs2.cloudfront.net/ecuador/products/123170/284979a6-38b0-4681-8f13-ccd9a656f757.jpg"
+            }
+          ],
+          "variations": [],
+          "imageHash": "8686ccccb88c0983"
+        },
+        {
+          "id": 189358,
+          "name": "PLATO MASCOTA 2 EN 1 COMEDERO BEBEDERO",
+          "sku": "AMC-3615",
+          "sale_price": 15.25,
+          "suggested_price": 46,
+          "stock": 10,
+          "supplier_id": 23918,
+          "gallery": [
+            {
+              "urlS3": "https://d39ru7awumhhs2.cloudfront.net/ecuador/products/189358/d9116d2b-5639-43ae-935a-f796993838d7.png"
+            }
+          ],
+          "variations": [],
+          "imageHash": "23c8996b2c0c03ac"
+        },
+        {
+          "id": 184802,
+          "name": "Fuente de agua para mascota flor",
+          "sku": "DA123",
+          "sale_price": 18,
+          "suggested_price": 25,
+          "stock": 6,
+          "supplier_id": 87312,
+          "gallery": [
+            {
+              "urlS3": "https://d39ru7awumhhs2.cloudfront.net/ecuador/products/184802/9b965d25-ef2e-45a1-ae0f-d866a0d3b62d.jpeg"
+            }
+          ],
+          "variations": [],
+          "imageHash": "d0c4968ac6e6f4f8"
+        },
+        {
+          "id": 73340,
+          "name": "FUENTE DE AGUA AUTOMATICA PARA MASCOTAS",
+          "sale_price": 12.5,
+          "suggested_price": 27,
+          "stock": 27,
+          "supplier_id": 28349,
+          "gallery": [
+            {
+              "urlS3": "https://d39ru7awumhhs2.cloudfront.net/ecuador/products/73340/1778184709FUENTE_DE_AGUA_AUTOMATICA_PARA_MASCOTAS_73340.gif"
+            }
+          ],
+          "variations": [],
+          "imageHash": "5b53271f75752533"
+        },
+        {
+          "id": 174539,
+          "name": "Dispensador y Fuente de Agua Automática",
+          "sku": "LD-1133",
+          "sale_price": 20,
+          "suggested_price": 21,
+          "stock": 145,
+          "supplier_id": 27249,
+          "gallery": [
+            {
+              "urlS3": "https://d39ru7awumhhs2.cloudfront.net/ecuador/products/174539/57a8f5c6-230b-494a-97b4-593e7ff85b29.png"
+            }
+          ],
+          "variations": [
+            {
+              "id": 68627,
+              "stock": 63,
+              "sale_price": 20,
+              "attributes": [
+                {
+                  "name": "COLOR",
+                  "value": "BLANCO"
+                }
+              ]
+            },
+            {
+              "id": 68626,
+              "stock": 82,
+              "sale_price": 20,
+              "attributes": [
+                {
+                  "name": "COLOR",
+                  "value": "NEGRO"
+                }
+              ]
+            }
+          ],
+          "imageHash": "e060e4e0e4f8cce5"
+        }
+      ]
+    }
+  ],
+  "imageNote": "dHash (scripts/supplier-image-dhash.py) de la imagen principal del CDN de Dropi; tienda = imagen principal del producto 82 (foto antigua 81542)."
+}

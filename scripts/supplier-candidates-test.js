@@ -122,6 +122,13 @@ async function partA() {
   const c82 = b82.products[0].candidates;
   assert('fixture 82: 4 candidatos, flete 5.54 con fuente, fecha de stock propia del 189358', c82.length === 4 && c82.every((c) => c.freight === 5.54 && /ESTIMADO/.test(c.freightSource))
     && c82.find((c) => c.dropiProductId === '189358').stockCheckedAt === '2026-10-19T15:54:00Z' && b82.products[0].currentFreight === 5.54);
+  const fresh = buildBody(['--dropi-json', path.join(__dirname, '../test/fixtures/dropi-export-82-fresh.json'), '--checked-at', FRESH], s).products[0];
+  const P82 = { ...FUENTE, imageHash: fresh.storeImageHash };
+  const scored = fresh.candidates.map((c) => ({ c, r: s.scoreCandidate(P82, c, {}, NOW) }));
+  assert('export real del 82 (17:40Z) con dHash: 7 filas (174539 variable → 2 colores), imagen comparada en todas',
+    scored.length === 7 && scored.filter(({ c }) => c.dropiProductId === '174539').length === 2 && scored.every(({ r }) => r.scores.image.status !== 'sin_comparar'));
+  assert('export real del 82: ninguno EXACTO; 123170/176296 pasan a DISTINTO por imagen (Hamming 26/36)', scored.every(({ r }) => r.classification === 'DISTINTO')
+    && scored.find(({ c }) => c.dropiProductId === '123170').r.scores.image.distance === 26);
   assert('el body del fixture pasa el esquema del refresh', !s.refreshSchema.validate(b82, { allowUnknown: true }).error);
   if (process.env.SUPPLIER_EQUIV_CSV) {
     const be = buildBody(['--equivalencias', process.env.SUPPLIER_EQUIV_CSV], s);
