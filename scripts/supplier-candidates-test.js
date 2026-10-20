@@ -44,6 +44,7 @@ async function partA() {
   out('\n▶ A1. Texto');
   assert('tokens: sin tildes/plurales/vacías, «2 en1» → 2en1, F-01 → f01, 30 kg → 30kg, x2',
     JSON.stringify(s.tokenize('Gafas de sol F-01 2 en1 30 kg Cámara x2')) === JSON.stringify(['gafa', 'sol', 'f01', '2en1', '30kg', 'camara', 'x2']), JSON.stringify(s.tokenize('Gafas de sol F-01 2 en1 30 kg Cámara x2')));
+  assert('«De 10000» no se une como modelo (palabra vacía)', s.tokenize('Cigarrillos De Sabores De 10000 Legend').join() === 'cigarrillo,sabor,10000,legend', s.tokenize('Cigarrillos De Sabores De 10000 Legend').join());
   assert('sinónimos: comedor/comida → comedero; mascotas → mascota', s.tokenize('comedor comida mascotas').join() === 'comedero,comedero,mascota');
   const t1 = s.compareText(FUENTE.name, 'FUENTE DE AGUA Y COMEDOR  MASCOTA 2 EN 1');
   assert('176296: Jaccard 0.667, sin conflictos ni faltantes, sinónimo registrado', t1.score === 0.667 && !t1.conflicts.length && !t1.missing.length && t1.synonyms.includes('comedor→comedero'), JSON.stringify(t1));

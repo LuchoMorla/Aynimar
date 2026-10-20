@@ -71,7 +71,7 @@ function singular(t) {
 function tokenize(text) {
   let s = deaccent(text)
     .replace(/(\d)\s*en\s*(\d)/g, '$1en$2')                            // «2 en 1», «2 en1» → 2en1
-    .replace(/\b([a-z]{1,4})[-\s](\d{1,5})\b/g, (m, a, d) => (UNITS[a] ? m : `${a}${d}`)) // F-01 → f01, V 13 → v13
+    .replace(/\b([a-z]{1,4})[-\s](\d{1,5})\b/g, (m, a, d) => (UNITS[a] || STOP.has(a) ? m : `${a}${d}`)) // F-01 → f01, V 13 → v13 («de 6000» no)
     .replace(/(\d+(?:[.,]\d+)?)\s*(kg|kilos?|grs?|g|ml|lts?|litros?|l|cm|mm|mts?|metros?|m|watts?|w|mah|v|pulgadas|pulg)\b/g,
       (m, n, u) => `${n.replace(',', '.')}${UNITS[u]}`)
     .replace(/\bx\s*(\d{1,3})\b/g, 'x$1');
