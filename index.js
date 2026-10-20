@@ -104,11 +104,13 @@ app.get('/', (req, res) => {
 // ── Health check — no auth, no DB hit — Railway uses this for uptime monitoring ──
 app.get('/health', (req, res) => {
   const groqKey    = !!(process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY);
-  const orderToken = !!(process.env.DROPI_ORDER_TOKEN || process.env.WOO_CONSUMER_SECRET);
+  const orderToken = !!process.env.DROPI_ORDER_TOKEN;
   const jwtSecret  = !!process.env.JWT_SECRET;
   const worker     = !!(process.env.DROPI_WORKER_URL && process.env.DROPI_WORKER_KEY);
 
-  const degraded = !groqKey || !orderToken || !jwtSecret;
+  // El token de órdenes solo hace falta con el transporte http (WOO_CONSUMER_SECRET ya no cuenta:
+  // no es un token de Dropi). Con transporte mock (por defecto) su ausencia no degrada.
+  const degraded = !groqKey || !jwtSecret || (process.env.DROPI_ORDER_TRANSPORT === 'http' && !orderToken);
 
   res.status(degraded ? 200 : 200).json({
     status:    degraded ? 'degraded' : 'ok',
@@ -228,7 +230,7 @@ async function notifyDeployHealth() {
 
   const checks = {
     jwt_secret:        !!process.env.JWT_SECRET,
-    dropi_order_token: !!(process.env.DROPI_ORDER_TOKEN || process.env.WOO_CONSUMER_SECRET),
+    dropi_order_token: !!process.env.DROPI_ORDER_TOKEN,
     groq_api_key:      !!(process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY),
     telegram_bot:      !!process.env.TELEGRAM_BOT_TOKEN,
   };
@@ -277,13 +279,11 @@ const server = app.listen(puerto, '0.0.0.0', () => {
   console.log(`[OK] Start time: ${new Date().toISOString()}`);
 
   // ── Critical env-var checks ───────────────────────────────────────────────
-  if (!process.env.DROPI_ORDER_TOKEN && !process.env.WOO_CONSUMER_SECRET) {
-    console.error(
-      '[CRITICAL] DROPI_ORDER_TOKEN no está configurado en Railway. ' +
-      'Las órdenes de Dropi FALLARÁN y quedarán en PENDING_DROPI_FULFILLMENT. ' +
-      'Ve a Variables en Railway y añade DROPI_ORDER_TOKEN con el JWT Bearer de tu cuenta Dropi.'
-    );
-  }
+  // Automatización de pedidos (docs/ORDER_AUTOMATION.md): sin interruptor no se envía nada a Dropi.
+  const orderMode = (process.env.DROPI_ORDER_AUTOMATION || 'off').toLowerCase();
+  const orderTransport = require('./integrations/dropi/dropiAdapter').orderTransportName() === 'mock' ? 'mock'
+    : (process.env.DROPI_ORDER_API_URL && process.env.DROPI_ORDER_TOKEN ? 'http (configurado)' : 'http (NO CONFIGURADO)');
+  console.log(`[OrderAutomation] DROPI_ORDER_AUTOMATION=${orderMode} · transporte de órdenes Dropi: ${orderTransport}`);
 
   notifyDeployHealth();   // deploy health report to Telegram on every Railway restart
   registerTelegramWebhook(); // non-blocking — failures are logged, never crash the server

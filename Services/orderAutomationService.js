@@ -1,0 +1,661 @@
+'use strict';
+/* eslint-disable no-console */
+
+/**
+ * Automatización de pedidos hacia Dropi — reglas, excepciones y conciliación.
+ * Contrato y plan de activación: docs/ORDER_AUTOMATION.md.
+ *
+ * Lo llama OrderService._dispatchOrder ANTES de enviar nada a Dropi:
+ *   preDispatch(order) → null (adelante) | { status } (no se envía).
+ * Nunca sustituye productos ni cambia precios: si algo no cuadra, abre una
+ * excepción (order_exceptions) para revisión humana.
+ */
+
+const boom = require('@hapi/boom');
+const { QueryTypes, Op } = require('sequelize');
+const sequelize = require('../libs/sequelize');
+const { contributionPerOrder } = require('./financeContribution');
+const { isProductionEnv, signCallbackData } = require('../libs/telegramSecurity');
+const { sendTelegramNotification, callTelegram } = require('../utils/telegramNotify');
+const { getAdminChatId } = require('../libs/telegramSecurity');
+const dropi = require('../integrations/dropi/dropiAdapter');
+
+const { models } = sequelize;
+const sel = (sql, replacements = {}) => sequelize.query(sql, { replacements, type: QueryTypes.SELECT });
+
+// ── Configuración (todo por variable de entorno; valores por defecto = staging) ──
+const num = (v, d) => (v === undefined || v === '' || !Number.isFinite(Number(v)) ? d : Number(v));
+function range(v, d) {
+  const parts = String(v ?? d).split(':').map(Number);
+  if (parts.some((x) => !Number.isFinite(x) || x < 0)) return d.split(':').map(Number);
+  return parts.length === 1 ? [parts[0], parts[0]] : [parts[0], parts[1]];
+}
+function getConfig(env = process.env) {
+  const mode = String(env.DROPI_ORDER_AUTOMATION || 'off').toLowerCase();
+  return {
+    mode: ['off', 'supervised', 'auto'].includes(mode) ? mode : 'off',
+    supervisedMin: Math.max(0, Math.floor(num(env.DROPI_ORDER_SUPERVISED_MIN, 20))),
+    maxQty: Math.max(1, Math.floor(num(env.ORDER_MAX_QTY_PER_LINE, 10))),
+    duplicateWindowH: num(env.ORDER_DUPLICATE_WINDOW_HOURS, 24),
+    stuckSendingMin: num(env.ORDER_SENDING_TIMEOUT_MIN, 10),
+    // Pisos de margen (configurables). Contribución esperada con rejectRate de rechazo
+    // ≥ max(minContribution, minMarginOnNet × venta neta esperada).
+    //  - pilotFloor: mientras el pedido requiere confirmación (piloto supervisado). Decisión del propietario: ≥ USD 1.
+    //  - autoFloor:  envío automático sin confirmación. Propuesta CEO-003: ≥ USD 5 y ≥ 15 % (PROVISIONAL).
+    pilotFloor: { minContribution: num(env.ORDER_PILOT_MIN_CONTRIBUTION_USD, 1), minMarginOnNet: num(env.ORDER_PILOT_MIN_MARGIN_ON_NET, 0) },
+    autoFloor: { minContribution: num(env.ORDER_AUTO_MIN_CONTRIBUTION_USD, 5), minMarginOnNet: num(env.ORDER_AUTO_MIN_MARGIN_ON_NET, 0.15) },
+    margin: {
+      rejectRate: Math.min(1, num(env.ORDER_MARGIN_REJECT_RATE, 0.30)),
+      shipping: range(env.ORDER_SHIPPING_COST_USD, '3.5:6'),
+      returnCost: range(env.ORDER_RETURN_COST_USD, '3.5:6'),
+      commissionRate: range(env.ORDER_COD_COMMISSION_RATE, '0:0.05'),
+    },
+  };
+}
+
+const EXCEPTION_TYPES = [
+  'out_of_stock', 'incomplete_address', 'missing_dropi_id', 'variant_mismatch', 'margin_insufficient',
+  'possible_duplicate', 'inconsistent_data', 'provider_error', 'dispatch_unknown', 'unknown_status',
+  'delivery_issue', 'cod_unreconciled', 'held_by_supervisor', 'cancelled_after_dispatch',
+];
+// No bloquean el envío: avisan de algo que ya ocurrió (estado, entrega, cobro, cancelación tardía).
+const NON_BLOCKING = ['unknown_status', 'delivery_issue', 'cod_unreconciled', 'cancelled_after_dispatch'];
+// Resoluciones admitidas por tipo (POST /order-exceptions/:id/resolve).
+const RESOLUTIONS = {
+  retry: EXCEPTION_TYPES.filter((t) => !['dispatch_unknown', 'cod_unreconciled', 'cancelled_after_dispatch'].includes(t)),
+  // accept en unknown_status/delivery_issue/cancelled_after_dispatch = "revisado" (solo registra costes).
+  accept: ['margin_insufficient', 'possible_duplicate', 'inconsistent_data', 'incomplete_address', 'held_by_supervisor', 'unknown_status', 'delivery_issue', 'cancelled_after_dispatch'],
+  manual: EXCEPTION_TYPES.filter((t) => !['cod_unreconciled', 'cancelled_after_dispatch'].includes(t)),
+  link: ['dispatch_unknown', 'provider_error'],
+  not_created: ['dispatch_unknown'],
+  collected: ['cod_unreconciled'],
+  not_collected: ['cod_unreconciled'],
+};
+// Excepciones que impiden el envío mientras estén abiertas.
+const BLOCKING_TYPES = EXCEPTION_TYPES.filter((t) => !NON_BLOCKING.includes(t));
+
+// ── Excepciones ──────────────────────────────────────────────────────────────
+/** Abre (o actualiza) la excepción abierta (order, type). Idempotente. @returns {boolean} true si es nueva. */
+async function openException(orderId, type, details = {}) {
+  if (!EXCEPTION_TYPES.includes(type)) throw new Error(`tipo de excepción desconocido: ${type}`);
+  const rows = await sel(`
+    INSERT INTO order_exceptions (order_id, type, details, status, created_at, updated_at)
+    VALUES (:orderId, :type, CAST(:details AS jsonb), 'open', now(), now())
+    ON CONFLICT (order_id, type) WHERE status = 'open'
+    DO UPDATE SET details = EXCLUDED.details, updated_at = now()
+    RETURNING (xmax = 0) AS inserted`, { orderId, type, details: JSON.stringify(details) });
+  return Boolean(rows[0]?.inserted);
+}
+
+async function openExceptionTypes(orderId) {
+  const rows = await sel("SELECT type FROM order_exceptions WHERE order_id = :orderId AND status = 'open'", { orderId });
+  return rows.map((r) => r.type);
+}
+
+async function acceptedTypes(orderId) {
+  const rows = await sel("SELECT DISTINCT type FROM order_exceptions WHERE order_id = :orderId AND status = 'resolved' AND resolution = 'accept'", { orderId });
+  return new Set(rows.map((r) => r.type));
+}
+
+async function listExceptions({ status = 'open', type, limit = 100 } = {}) {
+  const where = [];
+  if (status !== 'all') where.push('e.status = :status');
+  if (type) where.push('e.type = :type');
+  return sel(`
+    SELECT e.id, e.order_id AS "orderId", e.type, e.details, e.status, e.resolution, e.note,
+           e.resolved_by AS "resolvedBy", e.resolved_at AS "resolvedAt", e.created_at AS "createdAt",
+           o.total, o.payment_method AS "paymentMethod", o.payment_status AS "paymentStatus",
+           o.state_order AS "stateOrder", o.fulfillment_status AS "fulfillmentStatus",
+           o.dropi_order_id AS "dropiOrderId", o.cod_status AS "codStatus", o.is_test AS "isTest"
+      FROM order_exceptions e JOIN orders o ON o.id = e.order_id
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY e.created_at DESC, e.id DESC
+     LIMIT :limit`, { status, type, limit: Math.min(500, Math.max(1, Number(limit) || 100)) });
+}
+
+// ── Salud del catálogo (rama feat/catalog-health) — interfaz desacoplada ─────
+// Tipos de catalog_issues que bloquean el envío y la excepción a la que se traducen.
+const CATALOG_BLOCKING = {
+  dropi_not_found: 'missing_dropi_id',
+  missing_dropi_id: 'missing_dropi_id',
+  dropi_out_of_stock: 'out_of_stock',
+  negative_margin: 'margin_insufficient',
+  missing_cost: 'margin_insufficient',
+};
+let catalogTableWarned = false;
+/**
+ * Issues abiertos bloqueantes por producto. Fallback seguro: si la tabla
+ * catalog_issues aún no existe (rama no desplegada) devuelve [] — las
+ * validaciones propias (ID Dropi, variante, coste/margen) siguen aplicando.
+ * @returns {Promise<Array<{productId:number, type:string}>>}
+ */
+async function blockingCatalogIssues(productIds) {
+  if (!productIds.length) return [];
+  try {
+    return await sel(`SELECT product_id AS "productId", type FROM catalog_issues
+                       WHERE status = 'open' AND product_id IN (:productIds) AND type IN (:types)`,
+    { productIds, types: Object.keys(CATALOG_BLOCKING) });
+  } catch (err) {
+    if (err.original?.code === '42P01' || err.parent?.code === '42P01') {
+      if (!catalogTableWarned) console.warn('[OrderAutomation] catalog_issues no existe todavía: se omiten esos bloqueos.');
+      catalogTableWarned = true;
+      return [];
+    }
+    throw err;
+  }
+}
+async function hasBlockingIssue(productId) {
+  return (await blockingCatalogIssues([productId])).length > 0;
+}
+
+// ── Ciudades Dropi ───────────────────────────────────────────────────────────
+// El backend no puede llamar a search_cities (solo existe en el conector MCP).
+// Lista verificada con search_cities (2026-10-20) + las que un operador añade al
+// resolver una excepción incomplete_address (AppSetting dropi_cities).
+const CITY_KEY = 'dropi_cities';
+const SEED_CITIES = [
+  { id: 802, name: 'QUITO', departmentId: 43, department: 'PICHINCHA' },
+  { id: 732, name: 'GUAYAQUIL', departmentId: 44, department: 'GUAYAS' },
+];
+const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[\r\n\t]/g, ' ')
+  .replace(/\s+/g, ' ').trim().toUpperCase();
+async function knownCities() {
+  const row = await models.AppSetting.findOne({ where: { key: CITY_KEY } }).catch(() => null);
+  let extra = [];
+  try { extra = JSON.parse(row?.value || '[]'); } catch { extra = []; }
+  return [...SEED_CITIES, ...(Array.isArray(extra) ? extra : [])];
+}
+async function addCity(city) {
+  const c = { id: Number(city?.id), name: norm(city?.name), departmentId: Number(city?.departmentId) || null, department: norm(city?.department) || null };
+  if (!Number.isInteger(c.id) || c.id < 1 || !c.name) throw boom.badRequest('dropiCity requiere id (entero) y name, de search_cities');
+  const row = await models.AppSetting.findOne({ where: { key: CITY_KEY } });
+  let list = [];
+  try { list = JSON.parse(row?.value || '[]'); } catch { list = []; }
+  list = list.filter((x) => norm(x.name) !== c.name).concat(c);
+  await models.AppSetting.upsert({ key: CITY_KEY, value: JSON.stringify(list), updatedAt: new Date() });
+  return c;
+}
+
+// ── Validación previa ────────────────────────────────────────────────────────
+const TEST_EMAIL_RE = /(^qa\+)|@(example\.(com|org|net)|test\.[a-z]+|mailinator\.com)$/i;
+function normalizePhoneEC(raw) {
+  let d = String(raw ?? '').replace(/[\s().-]/g, '');
+  if (d.startsWith('+593')) d = `0${d.slice(4)}`;
+  else if (d.startsWith('593') && d.length === 12) d = `0${d.slice(3)}`;
+  if (/^9\d{8}$/.test(d)) d = `0${d}`;
+  return /^0\d{9}$/.test(d) || /^0[2-7]\d{7}$/.test(d) ? d : null;
+}
+const isDropiId = (v) => /^\d{1,12}$/.test(String(v ?? '').trim()) && Number(v) >= 1;
+
+/** Líneas Dropi del pedido (sin sustituir nada). @returns {{lines, problems}} */
+function buildDropiLines(order) {
+  const lines = [];
+  const problems = [];
+  const items = order.items || [];
+  const isDropiItem = (it) => Boolean(it.dropiProductId) || it.sourceProvider === 'dropi' || (Array.isArray(it.dropiItems) && it.dropiItems.length > 0);
+  for (const it of items) {
+    const qty = it.OrderProduct?.amount;
+    const price = Number(it.OrderProduct?.unitPriceGross ?? it.price);
+    const productId = it.dropiProductId || (it.sourceProvider === 'dropi' ? it.externalId : null);
+    if (!isDropiItem(it)) {
+      problems.push({ type: 'missing_dropi_id', details: { productId: it.id, reason: 'producto sin vínculo Dropi en un pedido Dropi' } });
+      continue;
+    }
+    const dropiItems = Array.isArray(it.dropiItems) ? it.dropiItems : [];
+    if (it.isBundle === true && dropiItems.length > 0) {
+      dropiItems.forEach((b, i) => {
+        if (!isDropiId(b?.id)) problems.push({ type: 'missing_dropi_id', details: { productId: it.id, reason: `componente ${i} sin id Dropi válido` } });
+        // El PVP del kit va en el primer componente (Dropi exige precio ≥ 0 por línea).
+        lines.push({ productId: it.id, id: Number(b?.id), quantity: (b?.qty ?? 1) * qty, price: i === 0 ? price : 0 });
+      });
+      continue;
+    }
+    if (!isDropiId(productId)) {
+      problems.push({ type: 'missing_dropi_id', details: { productId: it.id, reason: 'dropiProductId ausente o no numérico' } });
+      continue;
+    }
+    let variationId = null;
+    if (dropiItems.length > 0) {
+      const sel = it.OrderProduct?.selectedDropiId ?? (dropiItems.length === 1 ? dropiItems[0]?.id : null);
+      if (!sel) problems.push({ type: 'variant_mismatch', details: { productId: it.id, reason: 'variante no elegida (no se usa la primera por defecto)' } });
+      else if (!dropiItems.some((d) => String(d?.id) === String(sel))) problems.push({ type: 'variant_mismatch', details: { productId: it.id, selectedDropiId: String(sel), reason: 'la variante elegida ya no existe en el producto' } });
+      else if (!isDropiId(sel)) problems.push({ type: 'variant_mismatch', details: { productId: it.id, selectedDropiId: String(sel), reason: 'id de variante no numérico' } });
+      else variationId = Number(sel);
+    }
+    lines.push({ productId: it.id, id: Number(productId), quantity: qty, price, variationId });
+  }
+  return { lines, problems };
+}
+
+/** Cliente → datos de envío en el formato del contrato oficial de Dropi. */
+async function buildShipping(order) {
+  const c = order.customer;
+  const problems = [];
+  if (!c) return { shipping: null, problems: [{ type: 'incomplete_address', details: { reason: 'pedido sin cliente' } }] };
+  const missing = [];
+  if (!String(c.name ?? '').trim()) missing.push('nombre');
+  if (!String(c.lastName ?? '').trim()) missing.push('apellido');
+  if (String(c.streetAddress ?? '').trim().length < 6) missing.push('dirección');
+  const phone = normalizePhoneEC(c.phone) || normalizePhoneEC(c.phoneTwo);
+  if (!phone) missing.push('teléfono válido de Ecuador');
+  const cities = await knownCities();
+  const city = cities.find((x) => norm(x.name) === norm(c.city));
+  if (!city) missing.push('ciudad verificada en Dropi');
+  if (missing.length) problems.push({ type: 'incomplete_address', details: { missing } });
+  return {
+    problems,
+    shipping: {
+      name: String(c.name ?? '').trim(),
+      surname: String(c.lastName ?? '').trim(),
+      dir: String(c.streetAddress ?? '').trim(),
+      city: city?.name ?? null,
+      cityId: city?.id ?? null,
+      state: city?.department || String(c.province ?? '').trim() || null,
+      phone,
+      email: c.user?.email || undefined,
+      dni: c.identityNumber ? String(c.identityNumber) : undefined,
+    },
+  };
+}
+
+function marginCheck(order, cfg, floorCfg) {
+  const items = order.items || [];
+  let gross = 0;
+  let cost = 0;
+  const noCost = [];
+  for (const it of items) {
+    const qty = it.OrderProduct?.amount ?? 0;
+    gross += Number(it.OrderProduct?.unitPriceGross ?? it.price) * qty;
+    const c = it.OrderProduct?.unitCostSnapshot ?? it.costPrice;
+    if (c === null || c === undefined || !(Number(c) > 0)) noCost.push(it.id);
+    else cost += Number(c) * qty;
+  }
+  if (noCost.length) return { type: 'margin_insufficient', details: { reason: 'coste de proveedor desconocido', productIds: noCost } };
+  if (!(gross > 0)) return { type: 'inconsistent_data', details: { reason: 'importe del pedido ≤ 0' } };
+  const m = cfg.margin;
+  const r = contributionPerOrder({
+    pvp: Math.round(gross * 100) / 100, qty: 1, cost: Math.round(cost * 100) / 100, costIncludesVat: null,
+    shipping: null, returnCost: null, commissionRate: null,
+    deliveryRate: 1 - m.rejectRate, returnRate: m.rejectRate,
+    assumptions: { shipping: m.shipping, returnCost: m.returnCost, commissionRate: m.commissionRate },
+  });
+  const floor = Math.max(floorCfg.minContribution, floorCfg.minMarginOnNet * (r.netRevenue ?? 0));
+  if (r.incomplete || r.contribution < floor) {
+    return {
+      type: 'margin_insufficient',
+      details: { floorName: floorCfg.name, contributionWorst: r.contribution, floor: Math.round(floor * 100) / 100, netRevenue: r.netRevenue, rejectRate: m.rejectRate, missing: r.missing },
+    };
+  }
+  return null;
+}
+
+async function possibleDuplicate(order, cfg) {
+  if (!order.customerId) return null;
+  const mine = (order.items || []).map((i) => `${i.id}x${i.OrderProduct?.amount}`).sort().join(',');
+  const since = new Date(Date.now() - cfg.duplicateWindowH * 3600 * 1000);
+  const others = await models.Order.findAll({
+    where: {
+      customerId: order.customerId, id: { [Op.ne]: order.id }, state: { [Op.ne]: 'carrito' },
+      stateOrder: { [Op.ne]: 'cancelado' }, confirmedAt: { [Op.gte]: since },
+    },
+    include: ['items'],
+  });
+  const dup = others.find((o) => (o.items || []).map((i) => `${i.id}x${i.OrderProduct?.amount}`).sort().join(',') === mine);
+  return dup ? { type: 'possible_duplicate', details: { otherOrderId: dup.id, windowHours: cfg.duplicateWindowH } } : null;
+}
+
+/** Todas las comprobaciones. @returns {Promise<{problems, payload}>} payload listo para createOrderInDropi. */
+async function validateOrder(order, cfg = getConfig(), floor = 'autoFloor') {
+  const problems = [];
+  const items = order.items || [];
+  if (!items.length) problems.push({ type: 'inconsistent_data', details: { reason: 'pedido sin líneas' } });
+  for (const it of items) {
+    const qty = it.OrderProduct?.amount;
+    if (!Number.isInteger(qty) || qty < 1 || qty > cfg.maxQty) problems.push({ type: 'inconsistent_data', details: { productId: it.id, reason: `cantidad fuera de rango (${qty}; máx ${cfg.maxQty})` } });
+    if (it.isDeleted) problems.push({ type: 'out_of_stock', details: { productId: it.id, reason: 'producto eliminado del catálogo' } });
+  }
+  const { lines, problems: lineProblems } = buildDropiLines(order);
+  problems.push(...lineProblems);
+  const { shipping, problems: shipProblems } = await buildShipping(order);
+  problems.push(...shipProblems);
+
+  const pm = order.paymentMethod;
+  let rateType = null;
+  if (pm === 'cod' && order.paymentStatus === 'pending') rateType = 'CON RECAUDO';
+  else if (order.paymentStatus === 'paid') rateType = 'SIN RECAUDO';
+  else problems.push({ type: 'inconsistent_data', details: { reason: `método/estado de pago no despachable (${pm}/${order.paymentStatus})` } });
+
+  const linesTotal = Math.round(lines.reduce((s, l) => s + l.price * l.quantity, 0) * 100) / 100;
+  if (rateType === 'CON RECAUDO' && Math.abs(linesTotal - Number(order.total)) > 0.01) {
+    problems.push({ type: 'inconsistent_data', details: { reason: 'el importe a cobrar no coincide con las líneas', linesTotal, orderTotal: Number(order.total) } });
+  }
+
+  const margin = marginCheck(order, cfg, { name: floor, ...cfg[floor] });
+  if (margin) problems.push(margin);
+
+  for (const i of await blockingCatalogIssues(items.map((x) => x.id))) {
+    problems.push({ type: CATALOG_BLOCKING[i.type], details: { productId: i.productId, catalogIssue: i.type } });
+  }
+  const dup = await possibleDuplicate(order, cfg);
+  if (dup) problems.push(dup);
+
+  const payload = {
+    shopOrderId: `AYNIMAR-${order.id}`,
+    rateType,
+    codAmount: rateType === 'CON RECAUDO' ? Number(order.total) : 0,
+    customer: shipping,
+    products: lines.map(({ id, price, quantity, variationId }) => ({ id, price, quantity, ...(variationId ? { variation_id: variationId } : {}) })),
+  };
+  return { problems, payload };
+}
+
+/** Agrupa problemas por tipo (una excepción por tipo, con todos sus detalles). */
+function groupProblems(problems) {
+  const by = {};
+  for (const p of problems) (by[p.type] = by[p.type] || []).push(p.details);
+  return by;
+}
+
+// ── Puerta previa al envío ───────────────────────────────────────────────────
+
+async function realDispatchedCount() {
+  const [{ n }] = await sel(`SELECT count(*)::int AS n FROM orders
+     WHERE is_test = false AND dropi_order_id IS NOT NULL AND dropi_order_id NOT LIKE 'MOCK-%'`);
+  return n;
+}
+
+// dropi_status_history = registro de eventos REALES del pedido ({status, group, at}): estados de
+// Dropi + hitos propios (VALIDADO, ENVIADO_A_DROPI). Lo usa la barra de seguimiento (orderProgress).
+function withEvent(order, status, group, extra = {}) {
+  const h = Array.isArray(order.dropiStatusHistory) ? order.dropiStatusHistory : [];
+  return [...h, { status, group, at: new Date().toISOString(), ...extra }].slice(-50);
+}
+
+async function setStatus(order, fulfillmentStatus, extra = {}) {
+  await order.update({ fulfillmentStatus, ...extra });
+}
+
+async function notifyAdmin(text) {
+  await sendTelegramNotification(text).catch(() => {});
+}
+
+/**
+ * @returns {Promise<null | {status: string, problems?: object}>}
+ *   null → se puede enviar (order.__dropiPayload queda preparado).
+ */
+async function preDispatch(order, cfg = getConfig()) {
+  // Prueba ≠ real: fuera de producción o con email de QA, el pedido es de prueba.
+  const email = order.customer?.user?.email || '';
+  if (!order.isTest && (!isProductionEnv() || TEST_EMAIL_RE.test(email))) await order.update({ isTest: true });
+  if (cfg.mode === 'off') {
+    if (order.fulfillmentStatus !== 'AUTOMATION_OFF') await setStatus(order, 'AUTOMATION_OFF');
+    return { status: 'AUTOMATION_OFF' };
+  }
+  if (order.stateOrder === 'cancelado') {
+    await setStatus(order, 'CANCELLED');
+    return { status: 'CANCELLED' };
+  }
+
+  // Transporte: mock (por defecto) o http. Prueba ≠ real en ambos sentidos.
+  const blockTransport = async (reason) => {
+    await openException(order.id, 'provider_error', { reason });
+    await setStatus(order, 'BLOCKED');
+    return { status: 'BLOCKED' };
+  };
+  if (dropi.orderTransportName() === 'mock') {
+    // Un pedido REAL nunca se marca enviado con un id simulado (bug de da29068).
+    if (isProductionEnv() && !order.isTest) return blockTransport('transporte de órdenes en mock en producción: el pedido real NO se envió');
+  } else {
+    if (order.isTest) { await setStatus(order, 'TEST_NOT_SENT'); return { status: 'TEST_NOT_SENT' }; }
+    if (!isProductionEnv()) return blockTransport('Dropi real solo desde producción (usa el transporte mock)');
+  }
+
+  // Modo supervisado: las primeras N órdenes reales (o todas en 'supervised') se confirman en
+  // Telegram y se validan con el piso del piloto; el resto, con el piso automático.
+  const supervisedPhase = cfg.mode === 'supervised' || (await realDispatchedCount()) < cfg.supervisedMin;
+  const { problems, payload } = await validateOrder(order, cfg, supervisedPhase ? 'pilotFloor' : 'autoFloor');
+  const accepted = await acceptedTypes(order.id);
+  const grouped = groupProblems(problems.filter((p) => !accepted.has(p.type)));
+  const stillOpen = (await openExceptionTypes(order.id)).filter((t) => BLOCKING_TYPES.includes(t) && !grouped[t]);
+  if (Object.keys(grouped).length || stillOpen.length) {
+    const fresh = [];
+    for (const [type, details] of Object.entries(grouped)) if (await openException(order.id, type, { problems: details })) fresh.push(type);
+    await setStatus(order, 'BLOCKED');
+    if (fresh.length) await notifyAdmin(`⚠️ <b>Pedido #${order.id} retenido</b> (no enviado a Dropi)\nExcepciones: ${fresh.join(', ')}\nRevisar: GET /api/v1/order-exceptions`);
+    return { status: 'BLOCKED', problems: grouped };
+  }
+
+  if (!(order.dropiStatusHistory || []).some((h) => h.group === 'validated')) {
+    await order.update({ dropiStatusHistory: withEvent(order, 'VALIDADO', 'validated') });
+  }
+  if (supervisedPhase && order.fulfillmentStatus !== 'CONFIRMED') {
+    await setStatus(order, 'AWAITING_CONFIRMATION');
+    await askConfirmation(order, payload);
+    return { status: 'AWAITING_CONFIRMATION' };
+  }
+  order.__dropiPayload = payload; // eslint-disable-line no-param-reassign
+  return null;
+}
+
+async function askConfirmation(order, payload) {
+  const ref = `o${order.id}`;
+  const lines = payload.products.map((p) => `• Dropi ${p.id}${p.variation_id ? `/${p.variation_id}` : ''} ×${p.quantity} @ $${p.price}`).join('\n');
+  const text = `🧾 Pedido #${order.id}${order.isTest ? ' (PRUEBA)' : ''} listo para Dropi\n${payload.rateType} · cobrar $${payload.codAmount}\n` +
+    `Ciudad: ${payload.customer?.city ?? '?'}\n${lines}\nRef: ${ref}\n¿Enviar a Dropi?`;
+  const buttons = [['ap', 'Enviar'], ['rj', 'Retener']].map(([a, t]) => ({ text: t, callback_data: signCallbackData(a, ref) }));
+  if (!buttons.every((b) => b.callback_data) || !getAdminChatId()) {
+    console.warn(`[OrderAutomation] Pedido #${order.id} espera confirmación pero Telegram no está configurado.`);
+    return;
+  }
+  await callTelegram('sendMessage', { chat_id: getAdminChatId(), text, reply_markup: { inline_keyboard: [buttons] } });
+}
+
+/**
+ * Botón firmado de Telegram (ref o<orderId>). verifyCallbackQuery ya validó admin + firma.
+ * ap → CONFIRMED y envío; rj/ch → BLOCKED + excepción held_by_supervisor.
+ */
+async function handleTelegramCallback(cq, { action, ref }, answer) {
+  const orderId = Number(ref.slice(1));
+  const next = action === 'ap' ? 'CONFIRMED' : 'BLOCKED';
+  const [n] = await models.Order.update({ fulfillmentStatus: next }, { where: { id: orderId, fulfillmentStatus: 'AWAITING_CONFIRMATION' } });
+  if (!n) { await answer(cq.id, 'Ya decidido o no pendiente.'); return { changed: false }; }
+  if (cq.message?.chat?.id && cq.message?.message_id) {
+    await callTelegram('editMessageReplyMarkup', { chat_id: cq.message.chat.id, message_id: cq.message.message_id, reply_markup: { inline_keyboard: [] } });
+  }
+  if (next === 'BLOCKED') {
+    await openException(orderId, 'held_by_supervisor', { by: 'telegram' });
+    await answer(cq.id, 'Retenido');
+    return { changed: true, status: 'BLOCKED' };
+  }
+  await answer(cq.id, 'Enviando a Dropi…');
+  const OrderService = require('./orderService'); // diferido: evita require circular
+  const svc = new OrderService();
+  const r = await svc._dispatchOrder(await svc.findOne(orderId));
+  await notifyAdmin(`Pedido #${orderId}: ${r.status}${r.dropiOrderId ? ` · Dropi ${r.dropiOrderId}` : ''}`);
+  return { changed: true, status: r.status };
+}
+
+// ── Estados de Dropi → estado interno ────────────────────────────────────────
+// Lista real de list_statuses (2026-10-20). Normalizada: mayúsculas, sin tildes ni \r\n.
+// Las variantes de Laarcourier con la letra acentuada perdida ("EN TRNSITO") se cubren aparte.
+const S = (s) => s.split('|').map(norm);
+const STATUS_GROUPS = {
+  preparing: S('PENDIENTE CONFIRMACION|PENDIENTE|GENERANDO_GUIA|GUIA_GENERADA|PREPARADO PARA TRANSPORTADORA|PICKING|PACKING|GENERADA|GENERADO|GENERADO CLIENTE CORPORATIVO|ASIGNADO|POR RECOLECTAR|EN BODEGA DROPI|RECIBIDO POR DROPI|RECOGIDO POR DROPI|EN BODEGA ORIGEN|RECOLECCION|INGRESANDO|INGRESO A CONFIRMACION|PROCESAMIENTO|NOVEDAD SOLUCIONADA|SOLUCION APROBADA'),
+  transit: S('ENTREGADO A TRANSPORTADORA|EN TRANSITO|EN TRNSITO|EN RUTA|EN REPARTO|EN CAMINO|EN DISTRIBUCION A CLIENTE|EN DISTRIBUCION PARA ENTREGA EN AGENCIA|ZONA DE ENTREGA|RECOGIDO|RECOLECTADO|EMBARCANDO|TRASLADO A CENTRO LOGISTICO|INVENTARIO EN CENTRO LOGISTICO|BODEGA DESTINO|EN BODEGA|PARA RETIRO EN AGENCIA SERVIENTREGA|ENVIO LISTO EN OFICINA|RECIBIDO PUNTO DE VENTA|RECIBIDO PAU|DESTINATARIO RE-PROGRAMA FECHA DE ENTREGA|SE REALIZA VISITA A DESTINATARIO RE-PROGRAMA FECHA DE ENTREGA|EN ESPERA DE FIRMA DE DOCUMENTOS TC'),
+  delivered: S('ENTREGADO|ENTREGADA GINTRACOM|REPORTADO ENTREGADO|ENTREGA DIGITALIZADA|CERTIFICACION DE PRUEBA DE ENTREGA'),
+  returning: S('DEVOLUCION EN TRANSITO|EN PROCESO DE DEVOLUCION|TRANSITO A DEVOLUCION PROVEEDOR|DEVOLUCION EN RUTA|ZONA DE ENTREGA DEVOLUCION|ZONA DE ENTREGA DEVOLUCIN|NOVEDAD DEVOLUCION|DEVOLUCION DE DISTRIBUCION CLIENTE SOLICITA RETIRAR EN CS'),
+  returned: S('DEVOLUCION|DEVUELTO|DEVOLUCION AL REMITENTE|CERTIFICACION DEVOLUCION AL REMITENTE|DEVOLUCION ENTREGADA A ORIGEN|DEVOLUCION EN BODEGA'),
+  rejected: S('RECHAZADO'),
+  cancelled: S('CANCELADO|GUIA_ANULADA|ANULADA|CANCELADA POR TRANSPORTADORA|DESAPLICADO'),
+  issue: S('NOVEDAD|CON NOVEDAD|NOVEDAD EN GESTION|ERROR_GENERANDO_GUIA|FUERA DE COBERTURA, NO COINCIDE LA CIUDAD REAL DESTINO CON LA CIUDAD INGRESADA|DESTINATARIO SOLICITA CAMBIO DE DIRECCION|DESTINATARIO FALLECIDO|SINIESTRO|INCAUTADO|MERCANCIA CON AVERIA EN REPARTO. INDEMNIZACION|MERCANCIA HURTADA EN REPARTO. INDEMNIZACION|INDEMNIZACION|INDEMNIZADA POR DROPI|OBSTRUCCION EN LA VIA PUBLICA|PROBLEMAS DE ORDEN PUBLICO|ACCIDENTE EN CARRETERA|SOLUCION INCORRECTA'),
+};
+// "DEVOLUCIÓN / ENTREGA", "PROCESO FINALIZADO", "FINALIZADO POR RETENCION": ambiguos → unknown (revisión humana).
+function mapDropiStatus(raw) {
+  const s = norm(raw);
+  for (const [group, list] of Object.entries(STATUS_GROUPS)) if (list.includes(s)) return group;
+  return 'unknown';
+}
+const GROUP_STATE = { preparing: 'en_preparacion', transit: 'en_transito', delivered: 'entregado', returning: 'por_devolver', returned: 'devuelto', rejected: 'cancelado', cancelled: 'cancelado' };
+const RANK = { en_preparacion: 1, enviado: 2, en_transito: 2, por_devolver: 3, entregado: 4, devuelto: 4, cancelado: 4 };
+const TERMINAL = ['entregado', 'devuelto', 'cancelado'];
+
+/**
+ * Aplica un estado de Dropi a la orden con transiciones coherentes:
+ * nunca retrocede; un terminal no pasa a otro terminal (→ excepción).
+ * COD: entregado → pending_settlement + excepción cod_unreconciled (NO se marca
+ * cobrado hasta conciliar); rechazado/devuelto/cancelado → not_collected.
+ */
+async function applyDropiStatus(order, info) {
+  const raw = info?.status;
+  if (!raw) return { changed: false };
+  const group = mapDropiStatus(raw);
+  const update = { deliveryStatus: String(raw).slice(0, 100) };
+  // Fechas por estado (para medir el plazo real de Dropi: confirmación → entrega).
+  const history = Array.isArray(order.dropiStatusHistory) ? order.dropiStatusHistory : [];
+  const newGuide = Boolean(info.trackingNumber && !order.trackingNumber);
+  if (history[history.length - 1]?.status !== String(raw) || newGuide) {
+    update.dropiStatusHistory = [...history, { status: String(raw).slice(0, 100), group, at: (info.at ? new Date(info.at) : new Date()).toISOString(), ...(newGuide ? { guide: true } : {}) }].slice(-50);
+  }
+  if (newGuide) update.trackingNumber = String(info.trackingNumber).slice(0, 255);
+  if (info.carrierName && !order.carrierName) update.carrierName = String(info.carrierName).slice(0, 100);
+  if (info.shippingCost != null && order.shippingCost == null && Number.isFinite(Number(info.shippingCost))) update.shippingCost = Number(info.shippingCost);
+  let exception = null;
+
+  if (group === 'unknown') exception = ['unknown_status', { dropiStatus: raw }];
+  else if (group === 'issue') exception = ['delivery_issue', { dropiStatus: raw }];
+  else {
+    const next = GROUP_STATE[group];
+    const cur = order.stateOrder;
+    if (TERMINAL.includes(cur) && next !== cur) exception = ['unknown_status', { dropiStatus: raw, reason: `transición incoherente ${cur} → ${next}` }];
+    else if ((RANK[next] ?? 0) > (RANK[cur] ?? 0)) {
+      update.stateOrder = next;
+      const isCod = order.paymentMethod === 'cod';
+      if (isCod && next === 'entregado') { update.codStatus = 'pending_settlement'; exception = ['cod_unreconciled', { dropiStatus: raw, expected: Number(order.total) }]; }
+      if (isCod && ['devuelto', 'cancelado'].includes(next)) { update.codStatus = 'not_collected'; update.paymentStatus = 'failed'; }
+    }
+  }
+  await order.update(update);
+  if (exception) await openException(order.id, exception[0], exception[1]);
+  return { changed: true, group, stateOrder: order.stateOrder, exception: exception?.[0] ?? null };
+}
+
+// ── Cancelación ──────────────────────────────────────────────────────────────
+// Antes de llegar a Dropi: se detiene (CANCELLED, condicional para no pisar un
+// claim concurrente). Si Dropi ya pudo recibirla: excepción para anularla allí.
+// COD: una orden cancelada nunca queda como cobrada.
+const PRE_SEND = ['PENDING_DISPATCH', 'PENDING_DROPI_FULFILLMENT', 'CONFIRMED', 'AWAITING_CONFIRMATION', 'BLOCKED', 'AUTOMATION_OFF', 'FAILED_DROPI_FULFILLMENT', 'TEST_NOT_SENT'];
+async function onCancelled(orderId) {
+  const [n] = await models.Order.update({ fulfillmentStatus: 'CANCELLED' }, {
+    where: { id: orderId, dropiOrderId: null, fulfillmentStatus: { [Op.in]: PRE_SEND } },
+  });
+  const order = await models.Order.findByPk(orderId);
+  if (order.paymentMethod === 'cod' && order.codStatus !== 'collected') {
+    await order.update({ codStatus: 'not_collected', paymentStatus: 'failed' });
+  }
+  if (n) return { stopped: true };
+  if (order.dropiOrderId || ['SENDING', 'DISPATCH_UNKNOWN', 'DISPATCHED', 'MANUAL_DISPATCH'].includes(order.fulfillmentStatus)) {
+    const fresh = await openException(orderId, 'cancelled_after_dispatch', { dropiOrderId: order.dropiOrderId, shopOrderId: `AYNIMAR-${orderId}`, fulfillmentStatus: order.fulfillmentStatus });
+    if (fresh) await notifyAdmin(`🛑 <b>Pedido #${orderId} cancelado tras enviarse a Dropi</b>\nAnúlalo en Dropi (AYNIMAR-${orderId}) y marca la excepción como revisada.`);
+    return { stopped: false, exception: 'cancelled_after_dispatch' };
+  }
+  return { stopped: false };
+}
+
+// ── Resolución de excepciones (panel) ────────────────────────────────────────
+const money = (v, field) => {
+  if (v === undefined || v === null) return undefined;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) throw boom.badRequest(`${field} inválido`);
+  return Math.round(n * 100) / 100;
+};
+
+async function resolveException(id, body, adminId) {
+  const { resolution, note = null, dropiOrderId, amount, shippingCost, providerFees, dropiCity } = body || {};
+  const [ex] = await sel('SELECT * FROM order_exceptions WHERE id = :id', { id });
+  if (!ex) throw boom.notFound('Excepción no encontrada');
+  if (ex.status !== 'open') throw boom.conflict('La excepción ya está resuelta');
+  if (!RESOLUTIONS[resolution]?.includes(ex.type)) throw boom.badRequest(`Resolución "${resolution}" no admitida para ${ex.type}`);
+  const OrderService = require('./orderService');
+  const svc = new OrderService();
+  const order = await svc.findOne(ex.order_id);
+  if (!order) throw boom.notFound('Orden no encontrada');
+
+  const costs = { shippingCost: money(shippingCost, 'shippingCost'), providerFees: money(providerFees, 'providerFees') };
+  for (const k of Object.keys(costs)) if (costs[k] === undefined) delete costs[k];
+
+  if (resolution === 'link') {
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(String(dropiOrderId ?? ''))) throw boom.badRequest('dropiOrderId requerido (id del pedido en Dropi)');
+    const clash = await models.Order.findOne({ where: { dropiOrderId: String(dropiOrderId), id: { [Op.ne]: order.id } } });
+    if (clash) throw boom.conflict(`Ese id de Dropi ya está vinculado a la orden #${clash.id}`);
+  }
+  if (resolution === 'collected') {
+    if (order.codStatus !== 'pending_settlement' || ['devuelto', 'cancelado'].includes(order.stateOrder)) {
+      throw boom.conflict('Solo se concilia como cobrado un COD entregado y pendiente de liquidación (rechazada ≠ cobrada)');
+    }
+    if (money(amount, 'amount') === undefined) throw boom.badRequest('amount (importe liquidado) requerido');
+  }
+  if (dropiCity && ex.type === 'incomplete_address') await addCity(dropiCity);
+
+  // Cierre atómico: si otro operador la resolvió a la vez, solo uno gana.
+  const closed = await sel(`UPDATE order_exceptions SET status = 'resolved', resolution = :resolution, note = :note,
+      resolved_by = :adminId, resolved_at = now(), updated_at = now()
+    WHERE id = :id AND status = 'open' RETURNING id`, { id, resolution, note, adminId: adminId ?? null });
+  if (!closed.length) throw boom.conflict('La excepción ya está resuelta');
+
+  let dispatch = null;
+  switch (resolution) {
+    case 'link':
+      await order.update({ dropiOrderId: String(dropiOrderId), fulfillmentStatus: 'DISPATCHED', fulfillmentError: null, stateOrder: 'en_preparacion', ...(order.paymentMethod === 'cod' ? { codStatus: 'pending' } : {}), dropiStatusHistory: withEvent(order, 'ENVIADO_A_DROPI', 'dispatched', { linked: true }), ...costs });
+      break;
+    case 'manual':
+      await order.update({ fulfillmentStatus: 'MANUAL_DISPATCH', ...(dropiOrderId ? { dropiOrderId: String(dropiOrderId) } : {}), ...costs });
+      break;
+    case 'collected':
+      await order.update({ codStatus: 'collected', paymentStatus: 'paid', codCollectedAmount: money(amount, 'amount'), ...costs });
+      break;
+    case 'not_collected':
+      await order.update({ codStatus: 'not_collected', paymentStatus: 'failed', ...costs });
+      break;
+    case 'accept':
+      if (NON_BLOCKING.includes(ex.type)) { if (Object.keys(costs).length) await order.update(costs); break; }
+    // falls through — aceptar un bloqueo = reintentar saltándose ese tipo
+    case 'retry':
+    case 'not_created': {
+      const open = (await openExceptionTypes(order.id)).filter((t) => BLOCKING_TYPES.includes(t));
+      if (open.length) break; // aún hay otros bloqueos abiertos
+      if (order.dropiOrderId) break;
+      const status = resolution === 'not_created' ? 'PENDING_DROPI_FULFILLMENT' : 'PENDING_DISPATCH';
+      await order.update({ fulfillmentStatus: status, fulfillmentRetryCount: 0, fulfillmentError: null });
+      dispatch = await svc._dispatchOrder(await svc.findOne(order.id));
+      break;
+    }
+    default: break;
+  }
+  const fresh = await models.Order.findByPk(order.id);
+  return {
+    id: Number(id), orderId: order.id, type: ex.type, resolution,
+    order: { fulfillmentStatus: fresh.fulfillmentStatus, stateOrder: fresh.stateOrder, dropiOrderId: fresh.dropiOrderId, codStatus: fresh.codStatus, paymentStatus: fresh.paymentStatus },
+    dispatch,
+  };
+}
+
+module.exports = {
+  getConfig,
+  preDispatch,
+  validateOrder,
+  buildDropiLines,
+  normalizePhoneEC,
+  openException,
+  listExceptions,
+  resolveException,
+  blockingCatalogIssues,
+  hasBlockingIssue,
+  mapDropiStatus,
+  applyDropiStatus,
+  handleTelegramCallback,
+  onCancelled,
+  realDispatchedCount,
+  EXCEPTION_TYPES,
+  BLOCKING_TYPES,
+  RESOLUTIONS,
+};

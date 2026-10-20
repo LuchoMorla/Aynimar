@@ -1260,6 +1260,12 @@ router.post('/telegram/webhook', async (req, res) => {
       await answerCallback(cq.id, '⛔ Acción no válida.');
       return;
     }
+    // Ref o<id> = confirmación de envío de un pedido a Dropi (modo supervisado).
+    if (/^o\d+$/.test(verdict.ref)) {
+      await require('../Services/orderAutomationService').handleTelegramCallback(cq, verdict, answerCallback)
+        .catch((err) => console.error(`[Telegram Webhook] confirmación de pedido ${verdict.ref} falló: ${err.name}`));
+      return;
+    }
     await handleReviewCallback(cq, verdict);
     return;
   }
