@@ -32,6 +32,16 @@ El un-solo-uso del botón lo garantiza F2 (tabla `creative_reviews`, ver abajo).
 - Requisito: el webhook debe recibir `callback_query`. En staging se fija con `TELEGRAM_ALLOWED_UPDATES`; en production se mantiene la configuración actual del bot (verificar con `/telegram/debug` → `allowed_updates` nulo o con `callback_query`).
 - Pruebas: `scripts/telegram-approvals-test.js`.
 
+## Buzón del CTO (preguntas al propietario por el bot de staging)
+
+Para que el CTO (sin acceso entrante) pregunte y lea respuestas. Sin variables nuevas ni migraciones.
+
+- **Enviar**: `railway run -e staging -s Aynimar-staging -- node scripts/cto-ask.js ask "¿Pregunta?" "Opción A" "Opción B"` → mensaje con `Pregunta CTO-<qid>` (qid = 12 hex) y botones `mk:cq:<qid>_<n>:<hmac16>` (misma firma y verificación que las aprobaciones). Imprime el qid. El script se niega a correr en production y respeta el guard de bot no productivo.
+- **Responder**: botón (se guarda `{qid, option, label}`, se responde al botón, se quitan los botones y se edita el texto con `Respuesta: …`) o *Responder* al mensaje con texto libre (`{qid, text}` + "📝 Recibido por el CTO"). Solo `message` nuevo del admin (from y chat), igual que los cambios. Una respuesta que sea **solo 6 dígitos** va al 2FA; un mensaje con `Ref:` sigue siendo de piezas. El contenido nunca se registra en logs.
+- **Almacén**: `app_settings` clave `cto.inbox`, array JSON con `id` incremental y `at`; máximo 100 entradas (se descartan las más viejas). Read-modify-write sin bloqueo: suficiente para un solo admin.
+- **Leer**: `railway run -e staging -s Aynimar-staging -- node scripts/cto-ask.js inbox [after]` → `GET /api/v1/ai/cto/inbox?after=<id>` en `BACKEND_URL` o, si no existe (staging), `https://$RAILWAY_PUBLIC_DOMAIN`. Header `X-CTO-Key` = HMAC-SHA256(`TELEGRAM_WEBHOOK_SECRET`, `aynimar-cto-inbox-v1`) en hex, comparado en tiempo constante. Sin secreto → 503; clave inválida → 403; `after` inválido → 400. Rotar el secreto invalida la clave y los botones.
+- Pruebas: `scripts/cto-inbox-test.js` (incluido en `npm test`).
+
 ## Variables nuevas
 
 | Variable | Entorno | Secreta |

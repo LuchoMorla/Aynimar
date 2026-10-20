@@ -11,6 +11,7 @@ const validatorHandler        = require('../middlewares/validatorHandler');
 const { enqueueVideo }        = require('../libs/videoQueue');
 const { newRef }              = require('../integrations/videoService');
 const reviews                 = require('../Services/creativeReviewService');
+const ctoInbox                = require('../Services/ctoInboxService');
 const { callTelegram }        = require('../utils/telegramNotify');
 const {
   optimizeProductCopy,
@@ -30,6 +31,7 @@ const {
   isValidWebhookSecret,
   verifyCallbackQuery,
   maskId,
+  isValidCtoKey,
 } = require('../libs/telegramSecurity');
 
 const router = express.Router();
@@ -1120,6 +1122,22 @@ router.get('/telegram/debug', passport.authenticate('jwt', { session: false }), 
   }
 });
 
+// ── GET /api/v1/ai/cto/inbox?after=<id> ─────────────────────────────────────
+// Respuestas del propietario a preguntas del CTO (scripts/cto-ask.js).
+// Header X-CTO-Key = HMAC-SHA256(TELEGRAM_WEBHOOK_SECRET, 'aynimar-cto-inbox-v1') hex.
+router.get('/cto/inbox', async (req, res) => {
+  if (!process.env.TELEGRAM_WEBHOOK_SECRET) return res.status(503).json({ ok: false });
+  if (!isValidCtoKey(req.get('x-cto-key'))) return res.status(403).json({ ok: false });
+  const after = req.query.after === undefined ? 0 : Number(req.query.after);
+  if (!Number.isInteger(after) || after < 0) return res.status(400).json({ ok: false });
+  try {
+    return res.json({ ok: true, entries: await ctoInbox.listAfter(after) });
+  } catch (err) {
+    console.error('[CTO] no se pudo leer el buzón:', err.name);
+    return res.status(500).json({ ok: false });
+  }
+});
+
 // Responde a un callback_query (quita el "reloj" del botón). Nunca lanza.
 async function answerCallback(callbackQueryId, text) {
   const token = getTelegramToken();
@@ -1260,7 +1278,8 @@ router.post('/telegram/webhook', async (req, res) => {
       await answerCallback(cq.id, '⛔ Acción no válida.');
       return;
     }
-    await handleReviewCallback(cq, verdict);
+    if (verdict.action === 'cq') await ctoInbox.handleCallback(cq, verdict.ref);
+    else await handleReviewCallback(cq, verdict);
     return;
   }
 
@@ -1282,6 +1301,8 @@ router.post('/telegram/webhook', async (req, res) => {
     if (cmd) { await handleAdminCommand(cmd[1].toLowerCase()); return; }
     const replied = msg.reply_to_message;
     if (replied?.from?.is_bot && text && !/^\d{6}$/.test(text)) {
+      const qid = ctoInbox.questionId(replied.text || replied.caption);
+      if (qid) { await ctoInbox.handleReply(msg, qid, text); return; }
       const ref = /Ref: ([A-Za-z0-9_-]{1,32})/.exec(replied.caption || replied.text || '')?.[1];
       if (ref && await saveChangeRequestSafe(ref, text, msg.message_id)) return;
     }
