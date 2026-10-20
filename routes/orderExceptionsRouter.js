@@ -30,6 +30,7 @@ const resolveSchema = Joi.object({
     name: Joi.string().max(100).required(),
     departmentId: Joi.number().integer().min(1),
     department: Joi.string().max(100),
+    stateCode: Joi.string().pattern(/^EC-[A-Z]$/),
   }),
 });
 

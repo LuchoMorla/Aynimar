@@ -48,8 +48,9 @@ async function runChecks() {
   }
 
   // ── Dropi order fulfillment token ───────────────────────────────────────────
-  const orderToken = process.env.DROPI_ORDER_TOKEN || process.env.WOO_CONSUMER_SECRET;
-  record('CRITICAL', 'DROPI_ORDER_TOKEN env var', !!orderToken, orderToken ? 'Configured' : 'Missing — orders cannot dispatch to Dropi');
+  // Solo DROPI_INTEGRATION_KEY (sin respaldo en DROPI_ORDER_TOKEN ni WOO_CONSUMER_SECRET). Solo crítico con transporte http.
+  const orderToken = process.env.DROPI_INTEGRATION_KEY;
+  record(process.env.DROPI_ORDER_TRANSPORT === 'http' ? 'CRITICAL' : 'WARNING', 'DROPI_INTEGRATION_KEY env var', !!orderToken, orderToken ? 'Configured' : 'Missing — http order transport disabled');
 
   // ── AI copy key ─────────────────────────────────────────────────────────────
   const groqKey = process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY;

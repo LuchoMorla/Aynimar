@@ -1731,7 +1731,7 @@ suite('Atribución de pedidos — attributionSchema, confirm-cod/checkout y migr
 suite('Environment variable presence (warnings only)', () => {
   const vars = {
     GROQ_API_KEY:      process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY,
-    DROPI_ORDER_TOKEN: process.env.DROPI_ORDER_TOKEN || process.env.WOO_CONSUMER_SECRET,
+    DROPI_INTEGRATION_KEY: process.env.DROPI_INTEGRATION_KEY,
     JWT_SECRET:        process.env.JWT_SECRET,
     DATABASE_URL:      process.env.DATABASE_URL,
   };

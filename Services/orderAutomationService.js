@@ -31,9 +31,14 @@ function range(v, d) {
   return parts.length === 1 ? [parts[0], parts[0]] : [parts[0], parts[1]];
 }
 function getConfig(env = process.env) {
-  const mode = String(env.DROPI_ORDER_AUTOMATION || 'off').toLowerCase();
+  let mode = String(env.DROPI_ORDER_AUTOMATION || 'off').toLowerCase();
+  if (!['off', 'supervised', 'auto'].includes(mode)) mode = 'off';
+  // CEO-004: piloto = operador manual. 'auto' exige además su propio flag (apagado por defecto).
+  if (mode === 'auto' && env.DROPI_ORDER_AUTO_ENABLED !== 'true') mode = 'supervised';
   return {
-    mode: ['off', 'supervised', 'auto'].includes(mode) ? mode : 'off',
+    mode,
+    // CEO-004: tope diario de órdenes REALES enviadas (día de Ecuador). Al superarlo → excepción daily_cap_reached.
+    dailyCap: Math.max(0, Math.floor(num(env.ORDER_DAILY_DISPATCH_CAP, 5))),
     supervisedMin: Math.max(0, Math.floor(num(env.DROPI_ORDER_SUPERVISED_MIN, 20))),
     maxQty: Math.max(1, Math.floor(num(env.ORDER_MAX_QTY_PER_LINE, 10))),
     duplicateWindowH: num(env.ORDER_DUPLICATE_WINDOW_HOURS, 24),
@@ -56,7 +61,7 @@ function getConfig(env = process.env) {
 const EXCEPTION_TYPES = [
   'out_of_stock', 'incomplete_address', 'missing_dropi_id', 'variant_mismatch', 'margin_insufficient',
   'possible_duplicate', 'inconsistent_data', 'provider_error', 'dispatch_unknown', 'unknown_status',
-  'delivery_issue', 'cod_unreconciled', 'held_by_supervisor', 'cancelled_after_dispatch',
+  'delivery_issue', 'cod_unreconciled', 'held_by_supervisor', 'cancelled_after_dispatch', 'daily_cap_reached',
 ];
 // No bloquean el envío: avisan de algo que ya ocurrió (estado, entrega, cobro, cancelación tardía).
 const NON_BLOCKING = ['unknown_status', 'delivery_issue', 'cod_unreconciled', 'cancelled_after_dispatch'];
@@ -152,11 +157,16 @@ async function hasBlockingIssue(productId) {
 // El backend no puede llamar a search_cities (solo existe en el conector MCP).
 // Lista verificada con search_cities (2026-10-20) + las que un operador añade al
 // resolver una excepción incomplete_address (AppSetting dropi_cities).
+// stateCode = código de provincia del plugin oficial (states/EC.php + places/EC.php).
 const CITY_KEY = 'dropi_cities';
 const SEED_CITIES = [
-  { id: 802, name: 'QUITO', departmentId: 43, department: 'PICHINCHA' },
-  { id: 732, name: 'GUAYAQUIL', departmentId: 44, department: 'GUAYAS' },
+  { id: 802, name: 'QUITO', departmentId: 43, department: 'PICHINCHA', stateCode: 'EC-P' },
+  { id: 732, name: 'GUAYAQUIL', departmentId: 44, department: 'GUAYAS', stateCode: 'EC-G' },
 ];
+// Formato de `state` que espera la API (SIN CONFIRMAR por Dropi):
+//   code (por defecto) = lo que envía el plugin oficial (EC-P) · name = PICHINCHA.
+// city va siempre en mayúsculas, como en places/EC.php. Sin el dato verificado → bloqueo.
+const stateFormat = (env = process.env) => (String(env.DROPI_ORDER_STATE_FORMAT || 'code').toLowerCase() === 'name' ? 'name' : 'code');
 const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[\r\n\t]/g, ' ')
   .replace(/\s+/g, ' ').trim().toUpperCase();
 async function knownCities() {
@@ -165,9 +175,15 @@ async function knownCities() {
   try { extra = JSON.parse(row?.value || '[]'); } catch { extra = []; }
   return [...SEED_CITIES, ...(Array.isArray(extra) ? extra : [])];
 }
+const SUPPLIER_KEY = 'dropi_suppliers';
+async function knownSuppliers() {
+  const row = await models.AppSetting.findOne({ where: { key: SUPPLIER_KEY } }).catch(() => null);
+  try { const v = JSON.parse(row?.value || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; }
+}
 async function addCity(city) {
-  const c = { id: Number(city?.id), name: norm(city?.name), departmentId: Number(city?.departmentId) || null, department: norm(city?.department) || null };
+  const c = { id: Number(city?.id), name: norm(city?.name), departmentId: Number(city?.departmentId) || null, department: norm(city?.department) || null, stateCode: norm(city?.stateCode) || null };
   if (!Number.isInteger(c.id) || c.id < 1 || !c.name) throw boom.badRequest('dropiCity requiere id (entero) y name, de search_cities');
+  if (c.stateCode && !/^EC-[A-Z]$/.test(c.stateCode)) throw boom.badRequest('dropiCity.stateCode debe ser un código EC-X del plugin oficial');
   const row = await models.AppSetting.findOne({ where: { key: CITY_KEY } });
   let list = [];
   try { list = JSON.parse(row?.value || '[]'); } catch { list = []; }
@@ -206,7 +222,7 @@ function buildDropiLines(order) {
       dropiItems.forEach((b, i) => {
         if (!isDropiId(b?.id)) problems.push({ type: 'missing_dropi_id', details: { productId: it.id, reason: `componente ${i} sin id Dropi válido` } });
         // El PVP del kit va en el primer componente (Dropi exige precio ≥ 0 por línea).
-        lines.push({ productId: it.id, id: Number(b?.id), quantity: (b?.qty ?? 1) * qty, price: i === 0 ? price : 0 });
+        lines.push({ productId: it.id, id: Number(b?.id), name: it.name, quantity: (b?.qty ?? 1) * qty, price: i === 0 ? price : 0 });
       });
       continue;
     }
@@ -222,7 +238,7 @@ function buildDropiLines(order) {
       else if (!isDropiId(sel)) problems.push({ type: 'variant_mismatch', details: { productId: it.id, selectedDropiId: String(sel), reason: 'id de variante no numérico' } });
       else variationId = Number(sel);
     }
-    lines.push({ productId: it.id, id: Number(productId), quantity: qty, price, variationId });
+    lines.push({ productId: it.id, id: Number(productId), name: it.name, quantity: qty, price, variationId });
   }
   return { lines, problems };
 }
@@ -240,7 +256,10 @@ async function buildShipping(order) {
   if (!phone) missing.push('teléfono válido de Ecuador');
   const cities = await knownCities();
   const city = cities.find((x) => norm(x.name) === norm(c.city));
+  const fmt = stateFormat();
+  const state = city ? (fmt === 'code' ? city.stateCode : city.department) || null : null;
   if (!city) missing.push('ciudad verificada en Dropi');
+  else if (!state) missing.push(`provincia verificada (${fmt === 'code' ? 'stateCode EC-X' : 'department'}) para ${city.name}`);
   if (missing.length) problems.push({ type: 'incomplete_address', details: { missing } });
   return {
     problems,
@@ -250,7 +269,7 @@ async function buildShipping(order) {
       dir: String(c.streetAddress ?? '').trim(),
       city: city?.name ?? null,
       cityId: city?.id ?? null,
-      state: city?.department || String(c.province ?? '').trim() || null,
+      state,
       phone,
       email: c.user?.email || undefined,
       dni: c.identityNumber ? String(c.identityNumber) : undefined,
@@ -339,12 +358,23 @@ async function validateOrder(order, cfg = getConfig(), floor = 'autoFloor') {
   const dup = await possibleDuplicate(order, cfg);
   if (dup) problems.push(dup);
 
+  // supplier_id (user_id del proveedor en Dropi) que exige el contrato oficial: tabla verificada
+  // AppSetting dropi_suppliers = {"<id producto Dropi>": <user_id>}. Solo bloquea con transporte http.
+  const suppliers = await knownSuppliers();
+  const supplierIds = [...new Set(lines.map((l) => suppliers[String(l.id)]))];
+  if (dropi.orderTransportName() === 'http') {
+    const unknown = lines.filter((l) => !isDropiId(suppliers[String(l.id)])).map((l) => l.id);
+    if (unknown.length) problems.push({ type: 'missing_dropi_id', details: { reason: 'proveedor Dropi (supplier_id) no verificado en dropi_suppliers', dropiProductIds: unknown } });
+    else if (supplierIds.length > 1) problems.push({ type: 'inconsistent_data', details: { reason: 'pedido con varios proveedores Dropi (el contrato admite uno)', supplierIds } });
+  }
+
   const payload = {
     shopOrderId: `AYNIMAR-${order.id}`,
     rateType,
     codAmount: rateType === 'CON RECAUDO' ? Number(order.total) : 0,
+    supplierId: supplierIds.length === 1 && isDropiId(supplierIds[0]) ? Number(supplierIds[0]) : null,
     customer: shipping,
-    products: lines.map(({ id, price, quantity, variationId }) => ({ id, price, quantity, ...(variationId ? { variation_id: variationId } : {}) })),
+    products: lines.map(({ id, name, price, quantity, variationId }) => ({ id, name, price, quantity, ...(variationId ? { variation_id: variationId } : {}) })),
   };
   return { problems, payload };
 }
@@ -357,6 +387,21 @@ function groupProblems(problems) {
 }
 
 // ── Puerta previa al envío ───────────────────────────────────────────────────
+
+// Inicio del día en Ecuador (UTC-5, sin horario de verano).
+function ecuadorDayStart(now = new Date()) {
+  const ec = new Date(now.getTime() - 5 * 3600 * 1000);
+  return new Date(Date.UTC(ec.getUTCFullYear(), ec.getUTCMonth(), ec.getUTCDate(), 5));
+}
+/** Órdenes reales enviadas (o en vuelo / resultado desconocido) hoy, sin contar `excludeId`. */
+async function realDispatchedToday(excludeId = 0) {
+  const [{ n }] = await sel(`SELECT count(*)::int AS n FROM orders
+     WHERE is_test = false AND id <> :excludeId AND dispatch_started_at >= :since
+       AND (fulfillment_status IN ('SENDING', 'DISPATCH_UNKNOWN')
+            OR (dropi_order_id IS NOT NULL AND dropi_order_id NOT LIKE 'MOCK-%'))`,
+  { excludeId, since: ecuadorDayStart() });
+  return n;
+}
 
 async function realDispatchedCount() {
   const [{ n }] = await sel(`SELECT count(*)::int AS n FROM orders
@@ -408,6 +453,9 @@ async function preDispatch(order, cfg = getConfig()) {
   } else {
     if (order.isTest) { await setStatus(order, 'TEST_NOT_SENT'); return { status: 'TEST_NOT_SENT' }; }
     if (!isProductionEnv()) return blockTransport('Dropi real solo desde producción (usa el transporte mock)');
+    // Host .co, /api/v1/orders o falta DROPI_INTEGRATION_KEY: no se reclama ni se llama a Dropi.
+    const transportError = dropi.orderTransportError();
+    if (transportError) return blockTransport(transportError);
   }
 
   // Modo supervisado: las primeras N órdenes reales (o todas en 'supervised') se confirman en
@@ -432,6 +480,17 @@ async function preDispatch(order, cfg = getConfig()) {
     await setStatus(order, 'AWAITING_CONFIRMATION');
     await askConfirmation(order, payload);
     return { status: 'AWAITING_CONFIRMATION' };
+  }
+  // Tope diario (solo pedidos reales). ponytail: dos envíos simultáneos pueden pasarse en 1; lock si sube el volumen.
+  if (!order.isTest) {
+    const today = await realDispatchedToday(order.id);
+    if (today >= cfg.dailyCap) {
+      if (await openException(order.id, 'daily_cap_reached', { cap: cfg.dailyCap, sentToday: today, action: 'reintentar (retry) otro día o enviar a mano' })) {
+        await notifyAdmin(`⏸️ <b>Pedido #${order.id} en cola</b>: tope diario de ${cfg.dailyCap} envíos reales a Dropi alcanzado.`);
+      }
+      await setStatus(order, 'BLOCKED');
+      return { status: 'BLOCKED', problems: { daily_cap_reached: [{ cap: cfg.dailyCap, sentToday: today }] } };
+    }
   }
   order.__dropiPayload = payload; // eslint-disable-line no-param-reassign
   return null;
@@ -554,8 +613,9 @@ async function onCancelled(orderId) {
   }
   if (n) return { stopped: true };
   if (order.dropiOrderId || ['SENDING', 'DISPATCH_UNKNOWN', 'DISPATCHED', 'MANUAL_DISPATCH'].includes(order.fulfillmentStatus)) {
-    const fresh = await openException(orderId, 'cancelled_after_dispatch', { dropiOrderId: order.dropiOrderId, shopOrderId: `AYNIMAR-${orderId}`, fulfillmentStatus: order.fulfillmentStatus });
-    if (fresh) await notifyAdmin(`🛑 <b>Pedido #${orderId} cancelado tras enviarse a Dropi</b>\nAnúlalo en Dropi (AYNIMAR-${orderId}) y marca la excepción como revisada.`);
+    // Dropi no tiene API de cancelación: siempre es manual.
+    const fresh = await openException(orderId, 'cancelled_after_dispatch', { action: 'cancelar en el panel de Dropi', dropiOrderId: order.dropiOrderId, shopOrderId: `AYNIMAR-${orderId}`, fulfillmentStatus: order.fulfillmentStatus });
+    if (fresh) await notifyAdmin(`🛑 <b>Pedido #${orderId} cancelado tras enviarse a Dropi</b>\nNo hay API de cancelación: cancelar en el panel de Dropi (AYNIMAR-${orderId}) y marcar la excepción como revisada.`);
     return { stopped: false, exception: 'cancelled_after_dispatch' };
   }
   return { stopped: false };
@@ -575,6 +635,9 @@ async function resolveException(id, body, adminId) {
   if (!ex) throw boom.notFound('Excepción no encontrada');
   if (ex.status !== 'open') throw boom.conflict('La excepción ya está resuelta');
   if (!RESOLUTIONS[resolution]?.includes(ex.type)) throw boom.badRequest(`Resolución "${resolution}" no admitida para ${ex.type}`);
+  if (resolution === 'not_created' && String(note ?? '').trim().length < 3) {
+    throw boom.badRequest('not_created exige una nota: dónde se buscó AYNIMAR-<id> en el panel de Dropi (queda auditado)');
+  }
   const OrderService = require('./orderService');
   const svc = new OrderService();
   const order = await svc.findOne(ex.order_id);
@@ -625,6 +688,7 @@ async function resolveException(id, body, adminId) {
       if (open.length) break; // aún hay otros bloqueos abiertos
       if (order.dropiOrderId) break;
       const status = resolution === 'not_created' ? 'PENDING_DROPI_FULFILLMENT' : 'PENDING_DISPATCH';
+      if (resolution === 'not_created') dropi.releaseShopOrder(`AYNIMAR-${order.id}`); // una persona confirmó que no existe
       await order.update({ fulfillmentStatus: status, fulfillmentRetryCount: 0, fulfillmentError: null });
       dispatch = await svc._dispatchOrder(await svc.findOne(order.id));
       break;
@@ -655,6 +719,9 @@ module.exports = {
   handleTelegramCallback,
   onCancelled,
   realDispatchedCount,
+  realDispatchedToday,
+  ecuadorDayStart,
+  buildShipping,
   EXCEPTION_TYPES,
   BLOCKING_TYPES,
   RESOLUTIONS,

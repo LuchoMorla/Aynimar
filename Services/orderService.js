@@ -581,14 +581,18 @@ class OrderService {
       if (dispatchError.ambiguous) {
         console.error(`[OrderService] resultado DESCONOCIDO al despachar orden ${order.id}: ${msg}`);
         await order.update({ fulfillmentStatus: 'DISPATCH_UNKNOWN', fulfillmentError: msg }).catch(() => {});
-        await automation.openException(order.id, 'dispatch_unknown', { error: msg, shopOrderId: `AYNIMAR-${order.id}`, attempt }).catch(() => {});
+        await automation.openException(order.id, 'dispatch_unknown', {
+          error: msg, shopOrderId: `AYNIMAR-${order.id}`, attempt,
+          action: `Buscar AYNIMAR-${order.id} en el panel de Dropi ANTES de cualquier reenvío; resolver con link (existe) o not_created + nota (no existe). El reenvío es manual y queda auditado.`,
+        }).catch(() => {});
         sendTelegramNotification(
           `❓ <b>Orden #${order.id}: envío a Dropi con resultado desconocido</b>\n` +
           `No se reintenta. Busca en Dropi el pedido AYNIMAR-${order.id} y resuelve la excepción (link / not_created).`
         ).catch(() => {});
         return { status: 'UNKNOWN' };
       }
-      const exhausted = attempt >= MAX_DISPATCH_ATTEMPTS;
+      // permanent = Dropi respondió isSuccess=false: la rechazó, reintentar no cambia nada.
+      const exhausted = attempt >= MAX_DISPATCH_ATTEMPTS || dispatchError.permanent === true;
       console.error(
         `[OrderService] dispatch falló para orden ${order.id} (intento ${attempt}/${MAX_DISPATCH_ATTEMPTS}): ${msg}`
       );

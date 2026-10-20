@@ -349,13 +349,98 @@ async function fetchDropiCatalog({ page = 1, limit = 20, keyword = '', categoryI
 
 // ── Transporte de órdenes: interfaz { create(body), get(id) } ───────────────
 // mock (POR DEFECTO): no sale nada a la red; devuelve ids MOCK-DRP-*.
-// http: SOLO con DROPI_ORDER_TRANSPORT=http + DROPI_ORDER_API_URL + DROPI_ORDER_TOKEN.
-//   El endpoint REST NO está verificado (Dropi no documenta uno para Ecuador): no
-//   activarlo sin confirmación escrita de Dropi y autorización del propietario.
+// http: vía OFICIAL de Ecuador, copiada del plugin wc-dropi-integration 4.7.3
+//   (clasess/models/OrdersModel.php + Constants.php 'EC'):
+//   POST https://api.dropi.ec/integrations/orders/myorders
+//   cabecera dropi-integration-key: <DROPI_INTEGRATION_KEY>
+//   respuesta { isSuccess, message, objects: { id } }
+//   Solo DROPI_ORDER_TRANSPORT=http + DROPI_ORDER_HTTP_ENABLED=true + DROPI_INTEGRATION_KEY. No hay endpoints de
+//   Colombia ni el antiguo /api/v1/orders. Ver docs/ORDER_AUTOMATION.md.
 // DROPI_MOCK=true fuerza mock. En producción, preDispatch NUNCA deja que un pedido
 // real se "envíe" por mock (se bloquea con excepción): evita el bug de da29068.
+const DROPI_ORDER_PATH = '/integrations/orders/myorders';
+const DROPI_ORDER_STATUS_PENDING = 'PENDIENTE CONFIRMACION';
+
 function orderTransportName() {
   return process.env.DROPI_MOCK !== 'true' && process.env.DROPI_ORDER_TRANSPORT === 'http' ? 'http' : 'mock';
+}
+
+/**
+ * Configuración del transporte http. Nunca devuelve el token en los mensajes.
+ * @returns {{ ok: true, url: string, token: string } | { ok: false, error: string }}
+ */
+function orderHttpConfig(env = process.env) {
+  if (env.DROPI_ORDER_API_URL) {
+    return { ok: false, error: 'DROPI_ORDER_API_URL (antiguo /api/v1/orders) ya no se usa: bórrala y usa DROPI_ORDER_API_HOST (por defecto api.dropi.ec).' };
+  }
+  const raw = String(env.DROPI_ORDER_API_HOST || 'api.dropi.ec').trim();
+  let u;
+  try { u = new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`); } catch { return { ok: false, error: `DROPI_ORDER_API_HOST inválido (${raw})` }; }
+  const host = u.hostname.toLowerCase();
+  if (/\.co$/.test(host) || /\/api\/v1\/orders/.test(u.pathname)) {
+    return { ok: false, error: `DROPI_ORDER_API_HOST rechazado (${host}${u.pathname}): no hay endpoints de Colombia ni /api/v1/orders; solo api.dropi.ec.` };
+  }
+  const official = u.protocol === 'https:' && host === 'api.dropi.ec' && !u.port;
+  // Servidor HTTP falso de los tests: solo 127.0.0.1 y solo con NODE_ENV=test.
+  const fakeLocal = env.NODE_ENV === 'test' && u.protocol === 'http:' && host === '127.0.0.1';
+  if (!official && !fakeLocal) return { ok: false, error: `DROPI_ORDER_API_HOST rechazado (${host}): solo https://api.dropi.ec.` };
+  if (u.pathname !== '/' || u.search) return { ok: false, error: 'DROPI_ORDER_API_HOST debe ser solo el host, sin ruta.' };
+  // CEO-004: además del token, un flag explícito (el piloto es manual hasta que se encienda).
+  if (env.DROPI_ORDER_HTTP_ENABLED !== 'true') return { ok: false, error: 'Transporte http de órdenes Dropi DESHABILITADO: falta DROPI_ORDER_HTTP_ENABLED=true (autorización del propietario).' };
+  const token = String(env.DROPI_INTEGRATION_KEY || '').trim();
+  if (!token) return { ok: false, error: 'Transporte http de órdenes Dropi DESHABILITADO: falta DROPI_INTEGRATION_KEY (token de Dropi > Mis integraciones).' };
+  return { ok: true, url: `${u.origin}${DROPI_ORDER_PATH}`, token };
+}
+
+/** null si el transporte activo puede enviar; si no, el motivo (sin secretos). Lo usa preDispatch y el arranque. */
+function orderTransportError(env = process.env) {
+  if (orderTransportName() !== 'http') return null;
+  const c = orderHttpConfig(env);
+  return c.ok ? null : c.error;
+}
+
+// Dedupe local por shop_order_id (además del claim atómico en BD de _dispatchOrder):
+// una petición en vuelo se comparte; tras un id, se devuelve el mismo id; tras un
+// resultado desconocido NO se vuelve a enviar (Dropi no documenta consulta por
+// shop_order_id). Solo releaseShopOrder (resolución not_created) lo libera.
+// ponytail: memoria del proceso; con varias réplicas manda el claim de BD.
+const sentShopOrders = new Map(); // shop_order_id → Promise | { id } | { unknown: msg }
+function releaseShopOrder(shopOrderId) { sentShopOrders.delete(String(shopOrderId)); }
+
+async function postOrderHttp(body) {
+  const c = orderHttpConfig();
+  if (!c.ok) throw new Error(c.error); // definitivo: no se llamó a Dropi
+  const timeout = Math.max(100, Number(process.env.DROPI_ORDER_TIMEOUT_MS) || 20000);
+  let data;
+  try {
+    data = await fetchJson(c.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json;charset=UTF-8', 'Accept': 'application/json', 'dropi-integration-key': c.token },
+      body: JSON.stringify(body),
+      timeout,
+    });
+  } catch (cause) {
+    // Error nuevo: el AbortError de fetch es un DOMException con message de solo lectura.
+    const st = cause.response?.status;
+    const ambiguous = !st || st >= 500 || st === 408;
+    const detail = typeof cause.response?.data?.message === 'string' ? `: ${cause.response.data.message.slice(0, 300)}` : '';
+    const what = st ? `HTTP ${st}` : (cause.name === 'AbortError' ? 'timeout' : (cause.name || 'error de red'));
+    throw Object.assign(new Error(`Dropi create_order ${what}${detail}${ambiguous ? ' (resultado desconocido)' : ''}`), { ambiguous, response: cause.response });
+  }
+  if (data?.isSuccess === false) {
+    // Dropi rechazó la orden (no la creó): definitivo y sin reintento automático.
+    const err = new Error(`Dropi rechazó la orden: ${String(data.message || data.status || 'sin mensaje').slice(0, 300)}`);
+    err.ambiguous = false;
+    err.permanent = true;
+    throw err;
+  }
+  const externalOrderId = data?.objects?.id;
+  if (externalOrderId === undefined || externalOrderId === null || externalOrderId === '') {
+    const err = new Error('Dropi respondió sin objects.id (resultado desconocido)');
+    err.ambiguous = true;
+    throw err;
+  }
+  return { externalOrderId: String(externalOrderId) };
 }
 
 const ORDER_TRANSPORTS = {
@@ -369,70 +454,68 @@ const ORDER_TRANSPORTS = {
   },
   http: {
     async create(body) {
-      const { token, url } = httpConfig();
-      let data;
-      try {
-        data = await fetchJson(url, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify(body),
-          timeout: 20000,
-        });
-      } catch (err) {
-        const st = err.response?.status;
-        err.ambiguous = !st || st >= 500 || st === 408;
-        err.message = `Dropi create_order ${st ? `HTTP ${st}` : (err.name || 'error de red')}${err.ambiguous ? ' (resultado desconocido)' : ''}`;
-        throw err;
+      const key = String(body.shop_order_id);
+      const prev = sentShopOrders.get(key);
+      if (prev instanceof Promise) return prev;
+      if (prev?.id) return { externalOrderId: prev.id, deduped: true };
+      if (prev?.unknown) {
+        throw Object.assign(new Error(`${key} ya se envió con resultado desconocido (${prev.unknown}); no se reintenta: revisión humana`), { ambiguous: true });
       }
-      const externalOrderId = data?.objects?.id ?? data?.order_id ?? data?.id ?? data?.id_orden ?? null;
-      if (!externalOrderId) {
-        const err = new Error('Dropi respondió sin id de orden (resultado desconocido)');
-        err.ambiguous = true;
-        throw err;
-      }
-      return { externalOrderId: String(externalOrderId) };
+      const p = postOrderHttp(body).then(
+        (r) => { sentShopOrders.set(key, { id: r.externalOrderId }); return r; },
+        (err) => {
+          if (err.ambiguous) sentShopOrders.set(key, { unknown: err.message.slice(0, 200) });
+          else sentShopOrders.delete(key); // Dropi no la creó: el reintento acotado es seguro
+          throw err;
+        },
+      );
+      sentShopOrders.set(key, p);
+      return p;
     },
-    async get(dropiOrderId) {
-      const { token, url } = httpConfig();
-      const raw = await fetchJson(`${url.replace(/\/$/, '')}/${encodeURIComponent(dropiOrderId)}`, {
-        headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' }, timeout: 15000,
-      });
-      const data = raw?.objects ?? raw;
-      const status = data?.status ?? data?.estado ?? data?.estado_guia ?? data?.delivery_status ?? null;
-      if (!status) return null;
-      return {
-        status: String(status),
-        trackingNumber: data.shipping_guide ?? data.guia ?? data.tracking_number ?? null,
-        carrierName: data.distribution_company?.name ?? data.transportadora ?? data.carrier ?? null,
-        shippingCost: data.shipping_amount ?? data.shipping_cost ?? null,
-      };
-    },
+    // La API de integraciones no documenta consulta de estado (ni por id ni por
+    // shop_order_id): los estados se revisan en el panel o con el MCP del operador.
+    async get() { return null; },
   },
 };
 
-function httpConfig() {
-  const token = process.env.DROPI_ORDER_TOKEN || '';
-  const url   = process.env.DROPI_ORDER_API_URL || '';
-  if (!token || !url) {
-    // Definitivo (no se llamó a Dropi): seguro de reintentar cuando se configure.
-    throw new Error('Transporte http de órdenes Dropi sin configurar (DROPI_ORDER_API_URL + DROPI_ORDER_TOKEN). Ver docs/ORDER_AUTOMATION.md.');
-  }
-  return { token, url };
-}
-
-/** Cuerpo de create_order según el contrato OFICIAL del conector MCP de Dropi. */
+/**
+ * Cuerpo EXACTO del plugin oficial (OrdersModel::save), sin el token del producto
+ * (va solo en la cabecera) y con create_product_if_not_exist=false (nunca crea productos).
+ * state/city llegan ya en el formato configurado (orderAutomationService.buildShipping).
+ */
 function buildCreateOrderBody(payload) {
   const c = payload.customer || {};
-  const body = {
-    name: c.name, surname: c.surname, dir: c.dir, state: c.state, city: c.city, phone: c.phone,
+  const products = (payload.products || []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    type: p.variation_id ? 'VARIABLE' : 'SIMPLE',
+    user_id: payload.supplierId,
+    quantity: p.quantity,
+    price: p.price,
+    ...(p.variation_id ? { variation_id: p.variation_id } : {}),
+  }));
+  const total = Math.round(products.reduce((s, p) => s + p.price * p.quantity, 0) * 100) / 100;
+  return {
+    total_order: total,
+    notes: payload.shopOrderId,
+    name: c.name,
+    surname: c.surname,
+    dir: c.dir,
+    country: 'EC',
+    state: c.state,
+    city: c.city,
+    phone: c.phone,
+    client_email: c.email || '',
+    payment_method_id: 1,
+    status: DROPI_ORDER_STATUS_PENDING,
+    type: 'FINAL_ORDER',
     rate_type: payload.rateType,
-    products: payload.products,
+    products,
+    calculate_costs_and_shiping: true,
+    supplier_id: payload.supplierId,
     shop_order_id: payload.shopOrderId,
-    shop_order_number: payload.shopOrderId,
+    create_product_if_not_exist: false,
   };
-  if (c.email) body.client_email = c.email;
-  if (c.dni)   body.dni = c.dni;
-  return body;
 }
 
 /**
@@ -440,13 +523,13 @@ function buildCreateOrderBody(payload) {
  * tras pasar orderAutomationService.preDispatch (validación, interruptor,
  * supervisión). Ver docs/ORDER_AUTOMATION.md.
  *
- * payload: { shopOrderId, rateType, codAmount, customer:{name,surname,dir,state,city,phone,email?,dni?},
- *            products:[{id, price, quantity, variation_id?}] }
- * shop_order_id = clave de idempotencia (AYNIMAR-<id>): permite buscar el pedido
- * en Dropi (list_orders) antes de decidir tras un error ambiguo.
+ * payload: { shopOrderId, rateType, codAmount, supplierId, customer:{name,surname,dir,state,city,phone,email?},
+ *            products:[{id, name, price, quantity, variation_id?}] }
+ * shop_order_id = clave de idempotencia (AYNIMAR-<id>).
  *
  * Errores: err.ambiguous = true cuando NO se puede saber si Dropi creó la orden
- * (timeout, red, 5xx, 2xx sin id) → el llamador NO reintenta (DISPATCH_UNKNOWN).
+ * (timeout, red, 5xx, 2xx sin objects.id) → el llamador NO reintenta (DISPATCH_UNKNOWN).
+ * err.permanent = true con isSuccess=false: Dropi la rechazó → excepción sin reintento.
  */
 async function createOrderInDropi(payload) {
   return ORDER_TRANSPORTS[orderTransportName()].create(buildCreateOrderBody(payload));
@@ -736,4 +819,4 @@ async function searchDropiByImage({ imageBase64, page = 1, limit = 20 }) {
   }
 }
 
-module.exports = { fetchDropiCatalog, fetchDropiProductById, searchDropiByImage, createOrderInDropi, fetchDropiOrderStatus, orderTransportName, ORDER_TRANSPORTS };
+module.exports = { fetchDropiCatalog, fetchDropiProductById, searchDropiByImage, createOrderInDropi, fetchDropiOrderStatus, orderTransportName, orderHttpConfig, orderTransportError, releaseShopOrder, buildCreateOrderBody, ORDER_TRANSPORTS };

@@ -85,45 +85,197 @@ async function partA() {
   assert('valor inválido → off (fail-closed)', auto.getConfig({ DROPI_ORDER_AUTOMATION: 'yes' }).mode === 'off');
   assert('pisos sobreescribibles por env', auto.getConfig({ ORDER_PILOT_MIN_CONTRIBUTION_USD: '2.5' }).pilotFloor.minContribution === 2.5);
 
-  out('\n▶ A4. Adaptador real (red simulada): contrato oficial y errores ambiguos');
+  out('\n▶ A4. Transporte http OFICIAL Ecuador contra un servidor HTTP FALSO local (nunca sale a Dropi)');
+  const http = require('http');
+  const reqs = [];
+  let reply = async () => [200, { isSuccess: true, message: 'ok', objects: { id: 9001 } }];
+  const fake = http.createServer((rq, rs) => {
+    let raw = '';
+    rq.on('data', (c) => { raw += c; });
+    rq.on('end', async () => {
+      reqs.push({ method: rq.method, url: rq.url, headers: rq.headers, body: raw ? JSON.parse(raw) : null });
+      const [code, body] = await reply();
+      if (rs.destroyed) return;
+      rs.writeHead(code, { 'Content-Type': 'application/json' });
+      rs.end(JSON.stringify(body));
+    });
+  });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+  const port = fake.address().port;
   const adPath = require.resolve('../integrations/dropi/dropiAdapter');
   delete require.cache[adPath];
   process.env.DROPI_MOCK = 'false';
   const real = require('../integrations/dropi/dropiAdapter');
   delete require.cache[adPath];
-  const payload = { shopOrderId: 'AYNIMAR-1', rateType: 'CON RECAUDO', codAmount: 20, customer: { name: 'A', surname: 'B', dir: 'Calle 1', state: 'PICHINCHA', city: 'QUITO', phone: '0991234567' }, products: [{ id: 5, price: 20, quantity: 1, variation_id: 9 }] };
-  let mockSent = 0;
-  dropiHttp = async () => { mockSent++; return jsonResp(200, {}); };
-  const viaMock = await real.createOrderInDropi(payload);
-  assert('transporte por defecto = mock (sin red, id MOCK-DRP)', real.orderTransportName() === 'mock' && /^MOCK-DRP-/.test(viaMock.externalOrderId) && mockSent === 0);
-  process.env.DROPI_ORDER_TRANSPORT = 'http';
-  let e = await real.createOrderInDropi(payload).catch((x) => x);
-  assert('http sin DROPI_ORDER_API_URL/TOKEN → error DEFINITIVO (no se llamó a Dropi)', e instanceof Error && !e.ambiguous && mockSent === 0);
-  process.env.DROPI_ORDER_API_URL = 'https://dropi.test/orders';
-  process.env.DROPI_ORDER_TOKEN = 'FAKE-order-token';
-  let sent = null;
-  dropiHttp = async (u, o) => { sent = JSON.parse(o.body); return jsonResp(200, { isSuccess: true, objects: { id: 777 } }); };
-  const ok = await real.createOrderInDropi(payload);
-  assert('2xx con id → externalOrderId', ok.externalOrderId === '777');
-  assert('cuerpo = contrato oficial (rate_type, products[].variation_id, shop_order_id)', sent.rate_type === 'CON RECAUDO' && sent.products[0].variation_id === 9 && sent.shop_order_id === 'AYNIMAR-1' && sent.city === 'QUITO');
-  dropiHttp = async () => { throw Object.assign(new Error('aborted'), { name: 'AbortError' }); };
-  e = await real.createOrderInDropi(payload).catch((x) => x);
-  assert('timeout → ambiguous=true', e.ambiguous === true);
-  dropiHttp = async () => jsonResp(502, {});
-  e = await real.createOrderInDropi(payload).catch((x) => x);
-  assert('HTTP 502 → ambiguous=true', e.ambiguous === true);
-  dropiHttp = async () => jsonResp(422, { message: 'ciudad inválida' });
-  e = await real.createOrderInDropi(payload).catch((x) => x);
-  assert('HTTP 422 → definitivo (ambiguous=false)', e.ambiguous === false);
-  dropiHttp = async () => jsonResp(200, { isSuccess: true });
-  e = await real.createOrderInDropi(payload).catch((x) => x);
-  assert('2xx SIN id → ambiguous=true', e.ambiguous === true);
-  dropiHttp = async () => jsonResp(200, { objects: { id: 777, status: 'GUIA_GENERADA', shipping_guide: 'G-1' } });
-  const st = await real.fetchDropiOrderStatus('777');
-  assert('estado vía http → {status, trackingNumber}', st?.status === 'GUIA_GENERADA' && st.trackingNumber === 'G-1');
+  const payload = (n) => ({ shopOrderId: `AYNIMAR-${n}`, rateType: 'CON RECAUDO', codAmount: 40, supplierId: 77,
+    customer: { name: 'Ana', surname: 'Pérez', dir: 'Av. Amazonas N24-03', state: 'EC-P', city: 'QUITO', phone: '0991234567', email: 'ana@cliente.ec' },
+    products: [{ id: 1001, name: 'Prod', price: 15, quantity: 2, variation_id: 55 }, { id: 1002, name: 'Otro', price: 10, quantity: 1 }] });
+
+  const cfgOf = (o) => real.orderHttpConfig({ NODE_ENV: 'production', DROPI_ORDER_HTTP_ENABLED: 'true', DROPI_INTEGRATION_KEY: 'k', ...o });
+  const def = cfgOf({});
+  assert('host por defecto api.dropi.ec → https://api.dropi.ec/integrations/orders/myorders', def.ok && def.url === 'https://api.dropi.ec/integrations/orders/myorders');
+  assert('host .co rechazado (api.dropi.co, https://api.dropi.co, app.dropi.co)', ['api.dropi.co', 'https://api.dropi.co', 'app.dropi.co'].every((h) => !cfgOf({ DROPI_ORDER_API_HOST: h }).ok && /Colombia/.test(cfgOf({ DROPI_ORDER_API_HOST: h }).error)));
+  assert('antiguo /api/v1/orders rechazado (ruta en el host y DROPI_ORDER_API_URL)', !cfgOf({ DROPI_ORDER_API_HOST: 'https://api.dropi.ec/api/v1/orders' }).ok && /DROPI_ORDER_API_URL/.test(cfgOf({ DROPI_ORDER_API_URL: 'https://api.dropi.ec/api/v1/orders' }).error));
+  assert('otro host o http plano rechazados', !cfgOf({ DROPI_ORDER_API_HOST: 'evil.example' }).ok && !cfgOf({ DROPI_ORDER_API_HOST: 'http://api.dropi.ec' }).ok);
+  assert('127.0.0.1 solo con NODE_ENV=test', !cfgOf({ DROPI_ORDER_API_HOST: `http://127.0.0.1:${port}` }).ok && cfgOf({ NODE_ENV: 'test', DROPI_ORDER_API_HOST: `http://127.0.0.1:${port}` }).ok);
+  const noKey = cfgOf({ DROPI_INTEGRATION_KEY: '', DROPI_ORDER_TOKEN: 'legacy', WOO_CONSUMER_SECRET: 'legacy' });
+  assert('sin DROPI_INTEGRATION_KEY → deshabilitado (DROPI_ORDER_TOKEN / WOO_CONSUMER_SECRET NO sirven de respaldo)', !noKey.ok && /DROPI_INTEGRATION_KEY/.test(noKey.error) && !/legacy/.test(noKey.error));
+  assert('sin DROPI_ORDER_HTTP_ENABLED=true → deshabilitado aunque haya token (CEO-004)', !cfgOf({ DROPI_ORDER_HTTP_ENABLED: undefined }).ok);
+
+  const viaMock = await real.createOrderInDropi(payload(1));
+  assert('transporte por defecto = mock (sin red, id MOCK-DRP)', real.orderTransportName() === 'mock' && /^MOCK-DRP-/.test(viaMock.externalOrderId) && reqs.length === 0);
+  Object.assign(process.env, { DROPI_ORDER_TRANSPORT: 'http', DROPI_ORDER_API_HOST: `http://127.0.0.1:${port}`, DROPI_ORDER_TIMEOUT_MS: '10000', DROPI_ORDER_TOKEN: 'legacy', WOO_CONSUMER_SECRET: 'legacy' });
+  let e = await real.createOrderInDropi(payload(2)).catch((x) => x);
+  assert('http sin flag ni token → error DEFINITIVO, 0 peticiones', e instanceof Error && !e.ambiguous && reqs.length === 0 && real.orderTransportError() !== null);
+  process.env.DROPI_ORDER_HTTP_ENABLED = 'true';
+  e = await real.createOrderInDropi(payload(2)).catch((x) => x);
+  assert('http con flag y sin DROPI_INTEGRATION_KEY → deshabilitado, 0 peticiones', /DROPI_INTEGRATION_KEY/.test(e.message) && !e.ambiguous && reqs.length === 0);
+  delete process.env.DROPI_ORDER_TOKEN; delete process.env.WOO_CONSUMER_SECRET;
+  process.env.DROPI_INTEGRATION_KEY = 'FAKE-integration-key';
+  assert('configuración completa → orderTransportError() = null', real.orderTransportError() === null);
+
+  const ok = await real.createOrderInDropi(payload(3));
+  const r0 = reqs[0];
+  assert('éxito: objects.id → externalOrderId', ok.externalOrderId === '9001' && reqs.length === 1);
+  assert('POST /integrations/orders/myorders', r0.method === 'POST' && r0.url === '/integrations/orders/myorders');
+  assert('cabecera dropi-integration-key correcta, sin Authorization', r0.headers['dropi-integration-key'] === 'FAKE-integration-key' && !r0.headers.authorization && /application\/json/.test(r0.headers['content-type']));
+  const SNAPSHOT = {
+    total_order: 40, notes: 'AYNIMAR-3', name: 'Ana', surname: 'Pérez', dir: 'Av. Amazonas N24-03', country: 'EC', state: 'EC-P', city: 'QUITO',
+    phone: '0991234567', client_email: 'ana@cliente.ec', payment_method_id: 1, status: 'PENDIENTE CONFIRMACION', type: 'FINAL_ORDER', rate_type: 'CON RECAUDO',
+    products: [
+      { id: 1001, name: 'Prod', type: 'VARIABLE', user_id: 77, quantity: 2, price: 15, variation_id: 55 },
+      { id: 1002, name: 'Otro', type: 'SIMPLE', user_id: 77, quantity: 1, price: 10 },
+    ],
+    calculate_costs_and_shiping: true, supplier_id: 77, shop_order_id: 'AYNIMAR-3', create_product_if_not_exist: false,
+  };
+  assert('cuerpo EXACTO (snapshot del contrato del plugin oficial)', JSON.stringify(r0.body) === JSON.stringify(SNAPSHOT), JSON.stringify(r0.body));
+  assert('el token NO va en el cuerpo', !JSON.stringify(r0.body).includes('FAKE-integration-key'));
+  const again = await real.createOrderInDropi(payload(3));
+  assert('mismo shop_order_id tras éxito → mismo id, 0 peticiones nuevas', again.externalOrderId === '9001' && again.deduped === true && reqs.length === 1);
+
+  reply = async () => [200, { isSuccess: true, objects: { id: 9100 } }];
+  const nBefore = reqs.length;
+  reply = async () => { await new Promise((r) => setTimeout(r, 100)); return [200, { isSuccess: true, objects: { id: 9100 } }]; };
+  const [d1, d2] = await Promise.all([real.createOrderInDropi(payload(4)), real.createOrderInDropi(payload(4))]);
+  assert('doble disparo simultáneo → 1 sola petición, mismo id', reqs.length === nBefore + 1 && d1.externalOrderId === '9100' && d2.externalOrderId === '9100');
+
+  reply = async () => [200, { isSuccess: false, message: 'La ciudad no existe' }];
+  e = await real.createOrderInDropi(payload(5)).catch((x) => x);
+  assert('isSuccess=false → excepción con el mensaje, definitiva y sin reintento (permanent)', /La ciudad no existe/.test(e.message) && e.ambiguous === false && e.permanent === true);
+  reply = async () => [422, { isSuccess: false, message: 'teléfono inválido' }];
+  e = await real.createOrderInDropi(payload(6)).catch((x) => x);
+  assert('HTTP 4xx → definitivo con el mensaje de Dropi', e.ambiguous === false && /422/.test(e.message) && /teléfono inválido/.test(e.message));
+  const n6 = reqs.length;
+  e = await real.createOrderInDropi(payload(6)).catch((x) => x);
+  assert('tras un 4xx (no creada) el reintento acotado sí sale', reqs.length === n6 + 1);
+  reply = async () => [503, {}];
+  e = await real.createOrderInDropi(payload(7)).catch((x) => x);
+  assert('HTTP 5xx → ambiguous=true (resultado desconocido)', e.ambiguous === true);
+  reply = async () => [200, { isSuccess: true }];
+  e = await real.createOrderInDropi(payload(8)).catch((x) => x);
+  assert('2xx sin objects.id → ambiguous=true', e.ambiguous === true);
+
+  process.env.DROPI_ORDER_TIMEOUT_MS = '500';
+  reply = async () => { await new Promise((r) => setTimeout(r, 1500)); return [200, { isSuccess: true, objects: { id: 1 } }]; };
+  const nT = reqs.length;
+  e = await real.createOrderInDropi(payload(9)).catch((x) => x);
+  assert('timeout → ambiguous=true (unknown)', e.ambiguous === true && /timeout/.test(e.message) && reqs.length === nT + 1, `${e.message} ${reqs.length - nT}`);
+  e = await real.createOrderInDropi(payload(9)).catch((x) => x);
+  assert('tras timeout NO se reintenta: 0 peticiones nuevas y error "revisión humana"', e.ambiguous === true && /revisión humana/.test(e.message) && reqs.length === nT + 1);
+  real.releaseShopOrder('AYNIMAR-9');
+  process.env.DROPI_ORDER_TIMEOUT_MS = '10000';
+  reply = async () => [200, { isSuccess: true, objects: { id: 9900 } }];
+  const after = await real.createOrderInDropi(payload(9));
+  assert('solo tras not_created (releaseShopOrder) sale UNA vez más', after.externalOrderId === '9900' && reqs.length === nT + 2);
+  assert('estado vía http → null (la API no documenta consulta de estado)', (await real.fetchDropiOrderStatus('9001')) === null);
   process.env.DROPI_MOCK = 'true';
   assert('DROPI_MOCK=true fuerza mock aunque DROPI_ORDER_TRANSPORT=http', real.orderTransportName() === 'mock');
-  delete process.env.DROPI_ORDER_API_URL; delete process.env.DROPI_ORDER_TOKEN; delete process.env.DROPI_ORDER_TRANSPORT; dropiHttp = null;
+  await new Promise((r) => setTimeout(r, 1600)); // deja cerrar la respuesta lenta pendiente
+  fake.close();
+  for (const k of ['DROPI_ORDER_TRANSPORT', 'DROPI_ORDER_API_HOST', 'DROPI_ORDER_TIMEOUT_MS', 'DROPI_ORDER_HTTP_ENABLED', 'DROPI_INTEGRATION_KEY']) delete process.env[k];
+
+  out('\n▶ A6. Puerta previa sin BD (consultas simuladas): ciudades, proveedor, tope diario, flags, cancelación');
+  const seqz = require('../libs/sequelize');
+  const realQuery = seqz.query.bind(seqz);
+  const appSettings = { dropi_suppliers: JSON.stringify({ 1001: 77 }) };
+  let sentToday = 0;
+  const opened = [];
+  seqz.models.AppSetting.findOne = async ({ where }) => (appSettings[where.key] ? { value: appSettings[where.key] } : null);
+  seqz.query = async (sql) => {
+    if (/dispatch_started_at >= :since/.test(sql)) return [{ n: sentToday }];
+    if (/count\(\*\)::int AS n FROM orders/.test(sql)) return [{ n: 0 }];
+    if (/INSERT INTO order_exceptions/.test(sql)) { opened.push(sql); return [{ inserted: true }]; }
+    return [];
+  };
+  const insertsOf = () => opened.length;
+  const fakeOrder = (over = {}) => ({
+    id: 501, isTest: false, customerId: null, paymentMethod: 'cod', paymentStatus: 'pending', total: 40, stateOrder: 'comprado_pendiente_pago',
+    fulfillmentStatus: 'CONFIRMED', dropiStatusHistory: [{ status: 'VALIDADO', group: 'validated' }],
+    customer: { name: 'Ana', lastName: 'Pérez', streetAddress: 'Av. Amazonas N24-03', phone: '0991234567', city: 'Quito', user: { email: 'ana@cliente.ec' } },
+    items: [{ id: 1, name: 'Prod', dropiProductId: '1001', price: 40, costPrice: 8, OrderProduct: { amount: 1, unitPriceGross: 40 } }],
+    async update(o) { Object.assign(this, o); return this; },
+    ...over,
+  });
+  const ship = async (city, fmt) => { if (fmt) process.env.DROPI_ORDER_STATE_FORMAT = fmt; else delete process.env.DROPI_ORDER_STATE_FORMAT; return auto.buildShipping({ customer: { ...fakeOrder().customer, city } }); };
+  let s = await ship('Quito');
+  assert('Quito (802) → state EC-P (formato del plugin, por defecto), city QUITO', s.problems.length === 0 && s.shipping.state === 'EC-P' && s.shipping.city === 'QUITO' && s.shipping.cityId === 802);
+  s = await ship('guayaquil', 'name');
+  assert('Guayaquil (732) con DROPI_ORDER_STATE_FORMAT=name → GUAYAS', s.problems.length === 0 && s.shipping.state === 'GUAYAS' && s.shipping.cityId === 732);
+  s = await ship('Cuenca');
+  assert('ciudad no verificada (Cuenca) → bloqueo incomplete_address', s.problems[0]?.type === 'incomplete_address' && s.shipping.state === null);
+  appSettings.dropi_cities = JSON.stringify([{ id: 999, name: 'CUENCA', department: 'AZUAY' }]);
+  s = await ship('Cuenca');
+  assert('ciudad añadida sin stateCode verificado → sigue bloqueada en formato code', s.problems[0]?.type === 'incomplete_address' && /stateCode/.test(JSON.stringify(s.problems)));
+  delete appSettings.dropi_cities;
+
+  assert('auto sin DROPI_ORDER_AUTO_ENABLED → supervised (CEO-004)', auto.getConfig({ DROPI_ORDER_AUTOMATION: 'auto' }).mode === 'supervised' && auto.getConfig({ DROPI_ORDER_AUTOMATION: 'auto', DROPI_ORDER_AUTO_ENABLED: 'true' }).mode === 'auto');
+  assert('tope diario por defecto 5 y configurable', auto.getConfig({}).dailyCap === 5 && auto.getConfig({ ORDER_DAILY_DISPATCH_CAP: '2' }).dailyCap === 2);
+  assert('día de Ecuador (UTC-5): 2026-10-20 03:00Z cuenta en el 19', auto.ecuadorDayStart(new Date('2026-10-20T03:00:00Z')).toISOString() === '2026-10-19T05:00:00.000Z');
+
+  Object.assign(process.env, { RAILWAY_ENVIRONMENT_NAME: 'production', DROPI_MOCK: 'false', DROPI_ORDER_TRANSPORT: 'http', DROPI_ORDER_HTTP_ENABLED: 'true', DROPI_INTEGRATION_KEY: 'FAKE-integration-key' });
+  const sup = auto.getConfig({ DROPI_ORDER_AUTOMATION: 'supervised' });
+  sentToday = 4;
+  let o = fakeOrder();
+  let g = await auto.preDispatch(o, sup);
+  assert('4 envíos reales hoy (tope 5) → se envía; payload con supplier 77 y state EC-P', g === null && o.__dropiPayload.supplierId === 77 && o.__dropiPayload.customer.state === 'EC-P');
+  sentToday = 5;
+  const nIns = insertsOf();
+  o = fakeOrder();
+  g = await auto.preDispatch(o, sup);
+  assert('5 envíos reales hoy → BLOCKED + daily_cap_reached (en cola, no se descarta)', g?.status === 'BLOCKED' && g.problems.daily_cap_reached && o.fulfillmentStatus === 'BLOCKED' && insertsOf() === nIns + 1 && !o.__dropiPayload);
+  sentToday = 0;
+  o = fakeOrder({ customer: { ...fakeOrder().customer, city: 'Cuenca' } });
+  g = await auto.preDispatch(o, sup);
+  assert('ciudad fuera de Quito/Guayaquil → BLOCKED incomplete_address', g?.status === 'BLOCKED' && g.problems.incomplete_address);
+  o = fakeOrder({ items: [{ ...fakeOrder().items[0], dropiProductId: '2002' }] });
+  g = await auto.preDispatch(o, sup);
+  assert('producto sin supplier_id verificado → BLOCKED missing_dropi_id', g?.status === 'BLOCKED' && /supplier_id/.test(JSON.stringify(g.problems.missing_dropi_id)));
+  delete process.env.DROPI_INTEGRATION_KEY;
+  o = fakeOrder();
+  g = await auto.preDispatch(o, sup);
+  assert('http sin DROPI_INTEGRATION_KEY → BLOCKED provider_error antes de validar/enviar', g?.status === 'BLOCKED' && !o.__dropiPayload && opened.length > 0);
+  process.env.DROPI_INTEGRATION_KEY = 'FAKE-integration-key';
+  process.env.DROPI_ORDER_API_HOST = 'api.dropi.co';
+  o = fakeOrder();
+  g = await auto.preDispatch(o, sup);
+  assert('host .co → BLOCKED provider_error (no hay endpoints de Colombia)', g?.status === 'BLOCKED' && !o.__dropiPayload);
+  for (const k of ['DROPI_ORDER_API_HOST', 'DROPI_ORDER_TRANSPORT', 'DROPI_ORDER_HTTP_ENABLED', 'DROPI_INTEGRATION_KEY']) delete process.env[k];
+  Object.assign(process.env, { RAILWAY_ENVIRONMENT_NAME: 'staging', DROPI_MOCK: 'true' });
+
+  const OrderM = seqz.models.Order;
+  const [origUpd, origFind] = [OrderM.update, OrderM.findByPk];
+  OrderM.update = async () => [0];
+  OrderM.findByPk = async () => fakeOrder({ dropiOrderId: '9001', fulfillmentStatus: 'DISPATCHED', codStatus: 'collected' });
+  let exDetails = null;
+  seqz.query = async (sql, { replacements } = {}) => { if (/INSERT INTO order_exceptions/.test(sql)) { exDetails = JSON.parse(replacements.details); return [{ inserted: true }]; } return []; };
+  const tgBefore = tg.length;
+  const can = await auto.onCancelled(501);
+  assert('cancelación tras el envío → excepción manual «cancelar en el panel de Dropi»', can.exception === 'cancelled_after_dispatch' && exDetails.action === 'cancelar en el panel de Dropi' && tg.slice(tgBefore).some((t) => /cancelar en el panel de Dropi/.test(t.body?.text || '')));
+  seqz.query = async (sql) => (/FROM order_exceptions WHERE id/.test(sql) ? [{ id: 1, order_id: 501, type: 'dispatch_unknown', status: 'open' }] : []);
+  const nn = await auto.resolveException(1, { resolution: 'not_created' }, 1).catch((x) => x);
+  assert('not_created sin nota → 400 (reenvío manual auditado)', nn.output?.statusCode === 400);
+  OrderM.update = origUpd; OrderM.findByPk = origFind; seqz.query = realQuery;
+  delete seqz.models.AppSetting.findOne;
 
   out('\n▶ A5. Seguimiento visual: etapas derivadas del estado real (sin simular)');
   const { buildProgress } = require('../Services/orderProgress');
@@ -211,6 +363,7 @@ async function partB({ schema }) {
   const worker = require('../workers/dropiRetryWorker');
   const svc = new OrderService();
   const env = (o) => { for (const [k, v] of Object.entries(o)) { if (v === undefined) delete process.env[k]; else process.env[k] = String(v); } };
+  env({ DROPI_ORDER_AUTO_ENABLED: 'true' }); // CEO-004: 'auto' exige su propio flag
 
   // Datos base
   const cat = await models.Category.create({ name: 'Test', image: 'x' });
@@ -288,7 +441,11 @@ async function partB({ schema }) {
   behavior = 'ok';
   const [ex4b] = await sel("SELECT id FROM order_exceptions WHERE order_id = :id AND type = 'dispatch_unknown'", { id: o4b.id });
   const n4b = calls.length;
-  const nc = await auto.resolveException(ex4b.id, { resolution: 'not_created' }, 1);
+  const ncNoNote = await auto.resolveException(ex4b.id, { resolution: 'not_created' }, 1).catch((e) => e);
+  assert('"not_created" sin nota → 400 (el reenvío manual queda auditado)', ncNoNote.output?.statusCode === 400 && calls.length === n4b);
+  const [ex4bRow] = await sel('SELECT details FROM order_exceptions WHERE id = :id', { id: ex4b.id });
+  assert('dispatch_unknown pide buscar AYNIMAR-<id> en el panel antes de reenviar', String(ex4bRow.details.action).includes(`AYNIMAR-${o4b.id}`));
+  const nc = await auto.resolveException(ex4b.id, { resolution: 'not_created', note: 'buscado AYNIMAR en el panel: no existe' }, 1);
   assert('"not_created" → un reenvío y DISPATCHED', nc.order.fulfillmentStatus === 'DISPATCHED' && calls.length === n4b + 1);
   // Proceso muerto en SENDING
   const c4c = await customer();
