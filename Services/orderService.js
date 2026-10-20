@@ -671,6 +671,29 @@ class OrderService {
     return rows.length > 0;
   }
 
+  async isBusinessOfOwner(businessId, userId) {
+    const [rows] = await sequelize.query(
+      `SELECT 1 FROM business b
+         JOIN bussiness_owner bo ON bo.id = b.business_owner_id
+        WHERE b.id = :businessId AND bo.user_id = :userId
+        LIMIT 1`,
+      { replacements: { businessId, userId } }
+    );
+    return rows.length > 0;
+  }
+
+  // IDOR en listados: admin ve el de cualquiera; el resto solo el suyo → 404
+  // (no revela existencia), igual que findOneForUser.
+  assertUserAccess(userId, { sub, role }) {
+    if (role === 'admin' || Number(userId) === Number(sub)) return;
+    throw boom.notFound('Usuario no encontrado');
+  }
+
+  async assertBusinessAccess(businessId, { sub, role }) {
+    if (role === 'admin' || (await this.isBusinessOfOwner(businessId, sub))) return;
+    throw boom.notFound('Negocio no encontrado');
+  }
+
   // IDOR: admin ve/borra cualquiera; el cliente solo la suya; el business_owner
   // solo órdenes con productos de su negocio. Sin permiso → 404 (no revela existencia).
   async findOneForUser(id, { sub, role }) {
