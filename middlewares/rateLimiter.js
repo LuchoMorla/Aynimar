@@ -7,7 +7,9 @@ const generalLimiter = rateLimit({
   max: 100,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  skip: (req) => req.path === '/health',
+  // Hub multiempresa (/api/v1/hub/handle): una sola IP; lo protegen la firma HMAC,
+  // su limitador de firmas inválidas y el tope por remitente (routes/hubRouter.js).
+  skip: (req) => req.path === '/health' || req.path === '/api/v1/hub/handle',
   handler: (req, res) => {
     log.warn('rate_limit_general', {
       ip: (req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket?.remoteAddress,

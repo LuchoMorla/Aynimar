@@ -45,7 +45,13 @@ app.set('trust proxy', 1);
 const puerto = process.env.PORT || 8080;
 
 // body parsers — must be registered before cors and routes
-app.use(expressModule.json({ limit: '50mb' }));
+// La entrada del hub (/api/v1/hub/) firma los bytes crudos: solo ahí se conserva req.rawBody.
+app.use(expressModule.json({
+  limit: '50mb',
+  verify: (req, res, buf) => {
+    if (req.originalUrl.startsWith('/api/v1/hub/')) req.rawBody = Buffer.from(buf);
+  },
+}));
 app.use(expressModule.urlencoded({ extended: true, limit: '50mb' }));
 
 // ── CORS — Fase A (A4) ────────────────────────────────────────────────────────
