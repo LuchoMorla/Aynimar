@@ -111,6 +111,22 @@ async function main() {
     const leaked = ['ana@cliente', 'otro@x.ec', '0987654321', '991234567', '765 4321'].filter((c) => logs.some((l) => l.toLowerCase().includes(c)));
     assert('el contacto no aparece en ningún log', leaked.length === 0, leaked.join(','));
 
+    console.log('\n▶ CORS (middlewares/corsOptions.js)');
+    const cors = require('cors');
+    const { corsOptions } = require('../middlewares/corsOptions');
+    const capp = express();
+    capp.use(cors(corsOptions));
+    capp.post('/x', (q, s) => s.json({ ok: true }));
+    capp.use((err, q, s, n) => s.status(500).json({ message: err.message }));
+    const csrv = await new Promise((ok) => { const x = capp.listen(0, '127.0.0.1', () => ok(x)); });
+    const cbase = `http://127.0.0.1:${csrv.address().port}/x`;
+    const pre = (origin) => fetch(cbase, { method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'POST' } });
+    const bad = await pre('https://evil.example');
+    const good = await pre('https://www.aynimar.com');
+    await new Promise((ok) => { csrv.closeAllConnections(); csrv.close(ok); });
+    assert('preflight desde origen no permitido → no 500 y sin Access-Control-Allow-Origin', bad.status !== 500 && !bad.headers.get('access-control-allow-origin'), String(bad.status));
+    assert('preflight desde origen permitido → 204 con ACAO', good.status === 204 && good.headers.get('access-control-allow-origin') === 'https://www.aynimar.com');
+
     console.log('\n▶ POST /ai/nutria/chat (optionalAuth)');
     mute();
     script = [{ content: '¡Hola! Soy NutrIA.' }];

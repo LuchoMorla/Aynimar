@@ -154,6 +154,16 @@ suite('aiCopyService — module contract', () => {
   assert('NEURO_SYSTEM_PROMPT has bracket prohibition', svc.NEURO_SYSTEM_PROMPT.includes('PROHIBICIÓN ABSOLUTA'));
 });
 
+// ── CORS: origen no permitido → callback(null, false), nunca un Error (500) ─────
+suite('CORS — corsOptions.origin', () => {
+  const { corsOptions } = require('../middlewares/corsOptions');
+  const res = (o) => { let r; corsOptions.origin(o, (err, ok) => { r = { err, ok }; }); return r; };
+  assert('origen de producción → permitido', res('https://www.aynimar.com').ok === true && !res('https://www.aynimar.com').err);
+  assert('sin Origin (curl/servidor) → permitido', res(undefined).ok === true);
+  const evil = res('https://evil.example');
+  assert('origen no permitido → (null, false), sin Error', evil.err === null && evil.ok === false, JSON.stringify(evil));
+});
+
 // ── 5. neuro copy user content builder ───────────────────────────────────────
 suite('buildNeuroCopyUserContent — output contract', () => {
   const { buildNeuroCopyUserContent } = require('../integrations/aiCopyService');
