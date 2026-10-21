@@ -2,7 +2,9 @@
 
 // Entrada interna del hub WhatsApp multiempresa (ecosistema-luismorla/hub), inquilino AE.
 //   POST /api/v1/hub/handle   { tenantId:'AE', origin, entry, phone, msgId, text?, replyId? }
-//                             → { messages:[{type:'text',text}], handoff }
+//                             → { messages:[{type:'text',text} | {type:'buttons',text,buttons:[{id,title}]}], handoff }
+// Botones de respuesta (menú MENU): al tocar, el hub manda `replyId`. Solo los de REPLIES se
+// ejecutan (sin LLM); cualquier otro replyId ⇒ se reenvía el menú y nunca se trata como texto.
 // Mismo patrón que Pulpia (Pescafast): reutiliza EXACTAMENTE el motor de NutrIA
 // (aiRouter.runNutriaTurn) con channel='whatsapp' y las acciones de navegador
 // (tarjetas, carrito, redirect) convertidas en texto con enlaces a la tienda
@@ -46,7 +48,7 @@ const schema = Joi.object({
   phone: Joi.string().pattern(/^\d{8,15}$/).required(),
   msgId: Joi.string().max(120).required(),
   text: Joi.string().max(1000).allow(''),
-  replyId: Joi.string().max(200).allow(null, ''),
+  replyId: Joi.string().max(64).pattern(/^[\x21-\x7e]+$/).allow(null, ''), // ASCII visible, sin espacios
   // Código [AE-PROD-<id>] (hub 9220516). Para Aynimar solo valen ids numéricos; el resto se ignora.
   product: Joi.string().pattern(/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/).allow(null, ''),
   machine: Joi.forbidden(), // AV (AyniMachine), no aplica a AE ⇒ 400
@@ -80,11 +82,13 @@ function isDuplicate(msgId, now) {
 // Sin precios, nombres, teléfonos ni tokens: la tienda recalcula precio y stock.
 const MAX_BUY_ITEMS = 10;
 const MAX_BUY_QTY = 10;
-function buyLink(cart) {
-  const items = Object.entries(cart || {})
+function cartIds(cart) {
+  return Object.entries(cart || {})
     .filter(([id, qty]) => /^[1-9]\d{0,9}$/.test(String(id)) && Number.isInteger(Number(qty)) && Number(qty) >= 1)
-    .slice(0, MAX_BUY_ITEMS)
-    .map(([id, qty]) => `${id}:${Math.min(Number(qty), MAX_BUY_QTY)}`);
+    .slice(0, MAX_BUY_ITEMS);
+}
+function buyLink(cart) {
+  const items = cartIds(cart).map(([id, qty]) => `${id}:${Math.min(Number(qty), MAX_BUY_QTY)}`);
   if (!items.length) return null;
   const base = (process.env.NUTRIA_SHOP_URL || 'https://aynimar.com').replace(/\/$/, '');
   return `${base}/comprar?items=${items.join(',')}&src=AE-WA`;
@@ -108,6 +112,50 @@ function toWhatsApp(body, cart) {
   return [...new Set(out)].map((text) => ({ type: 'text', text }));
 }
 
+// Menú de botones (contrato hub: máx. 3 botones, título ≤20, cuerpo ≤1024).
+const BTN = {
+  search: { id: 'ae|search', title: 'Buscar productos' },
+  cart: { id: 'ae|cart', title: 'Ver carrito' },
+  help: { id: 'ae|help', title: 'Ayuda con compra' },
+};
+const buttons = (text, list = [BTN.search, BTN.cart, BTN.help]) => ({ type: 'buttons', text, buttons: list });
+const MENU = buttons('¿Qué quieres hacer?');
+// Texto de plazo APROBADO (tienda src/lib/deliveryCopy.js, propuesta A 2026-10-20). Cuenta desde el despacho.
+const DELIVERY_TIME_TEXT = 'Una vez despachado, la transportadora entrega normalmente en 1 a 3 días hábiles según destino. Rural y Galápagos: plazo variable, te lo confirmamos antes de despachar.';
+const HELP_TEXT = [
+  'Así compras en Aynimar:',
+  '1. Busca el producto y elige la cantidad.',
+  '2. Abre el enlace de compra o agrégalo al carrito en la tienda.',
+  '3. En el checkout escribe tus datos de entrega y confirma.',
+  '4. Pagas contra entrega: pagas al recibir tu pedido.',
+  DELIVERY_TIME_TEXT,
+  'Precio y stock se confirman en la tienda al comprar.',
+].join('\n');
+
+// replyId de la lista blanca → mensajes (nombres y precios solo de BD; nada inventado).
+const REPLIES = {
+  'ae|search': async () => {
+    const ps = await models.Product.findAll({
+      where: { isDeleted: false, showShop: true }, attributes: ['id', 'name', 'price'], order: [['id', 'DESC']], limit: 5,
+    });
+    const out = [{ type: 'text', text: 'Cuéntame qué buscas (por ejemplo: «powerbank» o «kit solar») y te muestro opciones.' }];
+    if (ps.length) out.push({ type: 'text', text: `Algunos productos de la tienda:\n\n${ps.map((p) => `• ${p.name} — $${p.price}\n${ai.STORE_URL}/store/${p.id}`).join('\n\n')}` });
+    return out;
+  },
+  'ae|cart': async (s) => {
+    const items = cartIds(s.contexto.estadoCarrito);
+    const ps = items.length
+      ? await models.Product.findAll({ where: { id: items.map(([id]) => Number(id)), isDeleted: false }, attributes: ['id', 'name'] })
+      : [];
+    const qty = Object.fromEntries(items);
+    const live = ps.filter((p) => qty[p.id]);
+    const link = buyLink(Object.fromEntries(live.map((p) => [p.id, qty[p.id]])));
+    if (!link) return [buttons('Tu carrito está vacío. ¿Buscamos algo?', [BTN.search])];
+    return [{ type: 'text', text: `Tu carrito:\n${live.map((p) => `• ${p.name} × ${Math.min(Number(qty[p.id]), MAX_BUY_QTY)}`).join('\n')}\n\nPara comprar, abre este enlace (precio y stock se confirman en la tienda): ${link}` }];
+  },
+  'ae|help': async () => [{ type: 'text', text: HELP_TEXT }, buttons('¿Seguimos?', [BTN.search, BTN.cart])],
+};
+
 const badSignatureLimiter = rateLimit({
   windowMs: 60 * 1000, max: 300, skipSuccessfulRequests: true, standardHeaders: 'draft-7', legacyHeaders: false,
 });
@@ -125,6 +173,18 @@ router.post('/handle', (req, res, next) => (enabled() ? next() : res.sendStatus(
     return res.json({ messages: [{ type: 'text', text: 'NutrIA 🦦: recibí muchos mensajes seguidos. Escríbeme de nuevo en un rato, porfa.' }], handoff: false });
   }
   s.turns.push(now);
+
+  if (b.replyId) {
+    const reply = Object.hasOwn(REPLIES, b.replyId) ? REPLIES[b.replyId] : null;
+    try {
+      const messages = reply ? await reply(s) : [MENU];
+      log.info('hub_handle', { origin: b.origin || null, reply: reply ? b.replyId : 'desconocido', count: messages.length });
+      return res.json({ messages, handoff: false });
+    } catch (err) {
+      log.error('hub_handle', { ok: false, error: err.message });
+      return res.sendStatus(500);
+    }
+  }
 
   const groq = router.llm || ai.getGroqClient();
   if (!groq) return res.sendStatus(503);
@@ -152,6 +212,8 @@ router.post('/handle', (req, res, next) => (enabled() ? next() : res.sendStatus(
     if (estadoCarrito) s.contexto.estadoCarrito = { ...s.contexto.estadoCarrito, ...estadoCarrito };
     const messages = [...(ficha ? [ficha] : []), ...toWhatsApp(body, s.contexto.estadoCarrito)];
     const handoff = toolCallNames.includes('alertar_telegram') || /\b(humano|asesor|persona)\b/i.test(b.text || '');
+    // Menú: al entrar o cuando el motor solo conversó (sin herramientas ni ficha); nunca en handoff.
+    if (!handoff && (b.entry || (!ficha && !toolCallNames.length))) messages.push(MENU);
     log.info('hub_handle', { origin: b.origin || null, count: messages.length, handoff });
     return res.json({ messages, handoff });
   } catch (err) {
@@ -164,4 +226,5 @@ module.exports = router;
 module.exports.verify = verify;
 module.exports.toWhatsApp = toWhatsApp;
 module.exports.buyLink = buyLink;
+module.exports.MENU = MENU;
 module.exports._sessions = sessions; // tests

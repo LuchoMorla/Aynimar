@@ -5,7 +5,8 @@
  * Sin BD ni red: LLM SIMULADO (nunca llama a Groq) y modelos Sequelize sustituidos.
  * Cubre: flag off 404, HMAC válido/inválido/timestamp vencido, sesión anónima
  * pidiendo un pedido → no encontrado (sin tocar BD), conversión a {messages}
- * con enlaces (ficha y /comprar con sus límites), handoff, dedupe y que el teléfono no aparezca en logs.
+ * con enlaces (ficha y /comprar con sus límites), handoff, dedupe, botones de respuesta (replyId en
+ * lista blanca, forjado ⇒ solo menú) y que el teléfono no aparezca en logs.
  * Usage: node scripts/hub-adapter-test.js
  */
 
@@ -31,7 +32,13 @@ const orderLookups = [];
 models.Order.findByPk = async (id) => { orderLookups.push(id); return { id, state: 'x', customer: { userId: 2 } }; };
 const productFinds = [];
 models.Product.findOne = async ({ where }) => { productFinds.push(where); return where.id === 42 && where.isDeleted === false ? { id: 42, name: 'Kit Solar Camping', price: 59.9 } : null; };
-models.Product.findAll = async () => [{ id: 5, name: 'Powerbank Solar 20000', price: 24.9, stock: 3, description: 'Carga', image: null }];
+const CATALOG = [{ id: 5, name: 'Powerbank Solar 20000', price: 24.9 }, { id: 8, name: 'Lámpara Solar LED', price: 12.5 }, { id: 9, name: 'Borrado', price: 1, isDeleted: true }];
+const productFindAlls = [];
+models.Product.findAll = async ({ where } = {}) => {
+  productFindAlls.push(where);
+  if (Array.isArray(where?.id)) return CATALOG.filter((p) => where.id.includes(p.id) && !p.isDeleted && where.isDeleted === false);
+  return [{ id: 5, name: 'Powerbank Solar 20000', price: 24.9, stock: 3, description: 'Carga', image: null }];
+};
 models.SalesPerformance.create = async () => ({});
 
 // LLM simulado: cada respuesta es la siguiente de `script`; registra los mensajes recibidos.
@@ -102,6 +109,10 @@ async function main() {
     assert('entrada sin texto ⇒ "hola" al motor', llmCalls.at(-1).at(-1).content === 'hola');
     assert('system prompt incluye la nota de canal WhatsApp', /CANAL WHATSAPP/.test(llmCalls.at(-1)[0].content));
     assert('el teléfono no viaja al LLM', !JSON.stringify(llmCalls.at(-1)).includes(PHONE));
+    const menu = r.json?.messages?.at(-1);
+    assert('la entrada termina con el menú de botones', menu?.type === 'buttons' && menu.buttons.map((x) => x.id).join() === 'ae|search,ae|cart,ae|help', JSON.stringify(menu));
+    assert('menú: máx. 3 botones, títulos ≤20, cuerpo ≤1024', menu.buttons.length <= 3 && menu.buttons.every((x) => x.title.length <= 20) && menu.text.length <= 1024);
+    assert('menú: títulos pedidos', menu.buttons.map((x) => x.title).join('|') === 'Buscar productos|Ver carrito|Ayuda con compra');
 
     console.log('\n▶ Sesión anónima pidiendo un pedido');
     script = [{ tools: [['obtener_estado_orden', { orden_id: 10 }]] }, { content: 'No lo encuentro por aquí.' }];
@@ -116,7 +127,7 @@ async function main() {
     script = [{ tools: [['buscar_producto', { nombre: 'powerbank' }]] }, { tools: [['agregar_al_carrito', { producto_id: 5, cantidad: 1 }], ['redirigir_checkout', {}]] }, { content: 'Te va a encantar.' }];
     r = await post(payload('quiero un powerbank'));
     const all = (r.json?.messages || []).map((m) => m.text).join('\n');
-    assert('todos los mensajes son texto', r.json?.messages?.every((m) => m.type === 'text'));
+    assert('respuesta específica (herramientas) ⇒ sin menú, todo texto', r.json?.messages?.every((m) => m.type === 'text'));
     assert('ficha del producto con precio y enlace', /Powerbank Solar 20000 — \$24\.9\nhttps:\/\/tienda\.test\/store\/5/.test(all), all);
     assert('carrito/checkout → un solo enlace de compra', (all.match(/\/comprar\?/g) || []).length === 1, all);
     assert('enlace de compra = contrato', /https:\/\/tienda-compra\.test\/comprar\?items=5:1&src=AE-WA$/m.test(all), all);
@@ -151,6 +162,7 @@ async function main() {
     script = [{ content: 'Te paso con el equipo.' }];
     r = await post(payload('quiero hablar con un asesor'));
     assert('pedir asesor ⇒ handoff = true', r.json?.handoff === true);
+    assert('handoff ⇒ sin menú', !r.json.messages.some((m) => m.type === 'buttons'));
 
     console.log('\n▶ Código [AE-PROD-<id>] (campo product)');
     assert('machine en el body → 400 (no aplica a AE)', (await post({ ...payload('hola'), machine: 'M-01' })).status === 400);
@@ -166,7 +178,48 @@ async function main() {
     assert('product no numérico → se ignora (200, sin consulta ni ficha)', r.status === 200 && productFinds.length === finds && !/store\//.test(r.json.messages.map((m) => m.text).join()));
     script = [{ content: 'Hola.' }];
     r = await post(payload('', { entry: true, product: '999' }));
-    assert('product inexistente → sin ficha, sigue el saludo', r.status === 200 && r.json.messages.length === 1 && llmCalls.at(-1).at(-1).content === 'hola');
+    assert('product inexistente → sin ficha, sigue el saludo (+ menú)', r.status === 200 && r.json.messages.length === 2 && r.json.messages[1].type === 'buttons' && llmCalls.at(-1).at(-1).content === 'hola');
+
+    console.log('\n▶ Botones de respuesta (replyId)');
+    const tap = (replyId, phone = PHONE, title = 'x') => post(payload(title, { replyId, phone }));
+    let calls = llmCalls.length;
+    let fa = productFindAlls.length;
+    r = await tap('ae|search', PHONE, 'Buscar productos');
+    assert('ae|search → 200 sin LLM', r.status === 200 && llmCalls.length === calls, JSON.stringify(r.json));
+    assert('ae|search → filtra isDeleted:false y showShop:true', productFindAlls.length === fa + 1 && productFindAlls.at(-1).isDeleted === false && productFindAlls.at(-1).showShop === true, JSON.stringify(productFindAlls.at(-1)));
+    const sTxt = r.json.messages.map((m) => m.text).join('\n');
+    assert('ae|search → pide qué busca y lista nombre/precio de BD', /qué buscas/.test(sTxt) && /Powerbank Solar 20000 — \$24\.9\nhttps:\/\/tienda\.test\/store\/5/.test(sTxt), sTxt);
+    r = await tap('ae|cart', PHONE, 'Ver carrito');
+    const cTxt = r.json?.messages?.[0]?.text || '';
+    assert('ae|cart (lleno) → lista del carrito de sesión con cantidades', /Powerbank Solar 20000 × 1/.test(cTxt) && /Lámpara Solar LED × 2/.test(cTxt), cTxt);
+    assert('ae|cart (lleno) → enlace /comprar del carrito', /https:\/\/tienda-compra\.test\/comprar\?items=5:1,8:2&src=AE-WA/.test(cTxt), cTxt);
+    assert('ae|cart → sin precios', !/\$|24\.9|12\.5/.test(cTxt), cTxt);
+    assert('ae|cart → consulta solo productos no eliminados', productFindAlls.at(-1).isDeleted === false && productFindAlls.at(-1).id.join() === '5,8');
+    script = [{ tools: [['agregar_al_carrito', { producto_id: 9, cantidad: 1 }]] }, { content: 'Listo.' }];
+    await post(payload('agrega el 9'));
+    r = await tap('ae|cart');
+    assert('ae|cart → producto eliminado fuera de lista y enlace', !/Borrado|9:1/.test(r.json.messages[0].text), r.json.messages[0].text);
+    const OTHER = '593911111111';
+    r = await tap('ae|cart', OTHER, 'Ver carrito');
+    assert('ae|cart (vacío) → lo dice y ofrece solo «Buscar productos»', r.json?.messages?.length === 1 && r.json.messages[0].type === 'buttons' && /vacío/.test(r.json.messages[0].text) && r.json.messages[0].buttons.map((x) => x.id).join() === 'ae|search', JSON.stringify(r.json));
+    r = await tap('ae|help', OTHER, 'Ayuda con compra');
+    const hTxt = r.json?.messages?.[0]?.text || '';
+    assert('ae|help → pasos, contra entrega y plazo aprobado', /1\./.test(hTxt) && /contra entrega/i.test(hTxt) && hTxt.includes('Una vez despachado, la transportadora entrega normalmente en 1 a 3 días hábiles según destino. Rural y Galápagos: plazo variable, te lo confirmamos antes de despachar.'), hTxt);
+    assert('ae|help → sin textos prohibidos', !/todo el país|todo el Ecuador|cualquier ciudad|sin riesgo|100% seguro|garant|compra protegida|env[ií]o gratis|número de guía|3[–-]7 días/i.test(JSON.stringify(r.json)), hTxt);
+    assert('ae|help → termina con botones válidos', r.json.messages.at(-1).type === 'buttons' && r.json.messages.at(-1).buttons.every((x) => x.title.length <= 20));
+    calls = llmCalls.length; fa = productFindAlls.length;
+    const forged = ['ae|admin', 'search', 'pf|search', 'AE|SEARCH', 'ae|search|x', '__proto__', 'constructor', 'ae|toString'];
+    for (const id of forged) {
+      r = await tap(id, OTHER, 'Buscar productos');
+      assert(`replyId forjado «${id}» → solo el menú`, r.status === 200 && r.json.messages.length === 1 && JSON.stringify(r.json.messages[0]) === JSON.stringify(hubRouter.MENU) && r.json.handoff === false, JSON.stringify(r.json));
+    }
+    assert('replyId forjado → ni LLM ni BD (el título no va como texto libre)', llmCalls.length === calls && productFindAlls.length === fa);
+    assert('replyId con espacios → 400', (await tap('ae|search x', OTHER)).status === 400);
+    assert('replyId > 64 → 400', (await tap(`ae|${'a'.repeat(62)}`, OTHER)).status === 400);
+    script = [{ content: 'Claro, cuéntame.' }];
+    r = await post(payload('tengo una duda', { phone: OTHER }));
+    assert('charla sin herramientas ⇒ menú al final', r.json?.messages?.at(-1)?.type === 'buttons');
+    assert('el teléfono OTHER tampoco en logs', !logs.some((l) => l.includes(OTHER)));
 
     console.log('\n▶ Privacidad');
     assert('el teléfono no aparece en ningún log', !logs.some((l) => l.includes(PHONE)), logs.find((l) => l.includes(PHONE)));
