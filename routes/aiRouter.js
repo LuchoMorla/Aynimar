@@ -273,6 +273,8 @@ function extractProfileFromMensaje(mensaje) {
 }
 
 // ── App navigation map ────────────────────────────────────────────────────────
+// Mismo origen que el permalink de routes/woocommerceMirror.js (enlaces del canal WhatsApp).
+const STORE_URL = (process.env.NEXT_PUBLIC_FRONTEND_URL || 'https://www.aynimar.com').replace(/\/$/, '');
 const APP_ROUTES = {
   tienda:         '/store',
   checkout:       '/checkout',
@@ -713,6 +715,10 @@ async function executeTool(name, args, clientActions, estadoActualizado, ctx = {
       // IDOR: solo pedidos del usuario autenticado (admin, cualquiera). Anónimo o
       // ajeno → el mismo error que «no existe». La caché va por usuario+pedido.
       const notFound = { error: 'Pedido no encontrado. Verifica el número.' };
+      // WhatsApp (hub): sesión siempre anónima ⇒ nunca por número; se remite a su cuenta.
+      if (!ctx.userId && ctx.channel === 'whatsapp') {
+        return { error: `Pedido no encontrado. Por WhatsApp no consulto pedidos por número: el cliente puede verlo en ${STORE_URL}/mi_cuenta/orders iniciando sesión, o con el enlace de seguimiento de su correo de confirmación.` };
+      }
       if (!ctx.userId) return notFound;
       const cacheKey = `${ctx.userId}:${args.orden_id}`;
       const hit = cachedOrder(cacheKey);
@@ -821,6 +827,216 @@ async function executeTool(name, args, clientActions, estadoActualizado, ctx = {
   return { error: `Herramienta desconocida: ${name}` };
 }
 
+// ── Motor de NutrIA (un turno) ────────────────────────────────────────────────
+// Compartido por POST /nutria/chat (web) y la entrada del hub WhatsApp
+// (routes/hubRouter.js). input = { message, history, contexto, sessionId, user?, channel? };
+// `user` = JWT ({ sub, role }) o vacío (anónimo); `groq` = cliente OpenAI-compatible
+// (inyectable en tests). Devuelve { body, toolCallNames }: body es EXACTAMENTE la
+// respuesta JSON de /nutria/chat.
+const NUTRIA_WHATSAPP_NOTE = `
+
+━━━ CANAL WHATSAPP ━━━
+Hablas por WhatsApp: no hay tarjetas ni botones. El servidor añade los enlaces a la ficha de cada producto y,
+cuando usas agregar_al_carrito o redirigir_checkout, un enlace de compra con el carrito. No escribas URLs.
+Por este canal NO se consultan pedidos por número: si preguntan por un pedido, indica revisarlo en su cuenta de la tienda.`;
+
+async function runNutriaTurn({ message, history, contexto, sessionId, user, channel } = {}, groq) {
+  // Pick model based on message complexity; 8B handles most sales chats
+  const model = process.env.GROQ_MODEL || pickModel(message.trim());
+
+  // Últimos 6 mensajes, máx. 2000 caracteres cada uno (endpoint público:
+  // sin tope, un historial enorme dispara coste/latencia del LLM).
+  const safeHistory = Array.isArray(history)
+    ? history
+        .filter(
+          (m) => m && typeof m.role === 'string' && typeof m.content === 'string'
+            && ['user', 'assistant'].includes(m.role)
+        )
+        .slice(-6)
+        .map((m) => ({ role: m.role, content: m.content.slice(0, 2000) }))
+    : [];
+
+  const clientActions     = [];
+  const estadoActualizado = {};
+  const MAX_TOOL_ROUNDS   = 5;
+  let round = 0;
+
+  // ── Internal Needs Engine — pre-fetch catalog before Groq call ────────────
+  // Avoids a full tool-call round-trip for predictable pain→product matches.
+  const contextNarrative = buildContextNarrative(contexto);
+  let oportunidadStr = '';
+  const needsMatch = evaluarNecesidadesCliente(message.trim());
+
+  if (needsMatch) {
+    if (!needsMatch.ambiguous && Array.isArray(needsMatch.searchTerms) && needsMatch.searchTerms.length > 0) {
+      try {
+        const { models } = sequelize;
+        // Cap to 3 terms to keep the OR clause lightweight
+        const allTerms  = [...new Set(needsMatch.searchTerms.flatMap((t) => expandSearchTerms(t)))].slice(0, 3);
+        const orClauses = allTerms.flatMap((t) => [
+          { name:        { [Op.iLike]: `%${t}%` } },
+          { description: { [Op.iLike]: `%${t}%` } },
+        ]);
+        const preProd = await models.Product.findAll({
+          where: { [Op.or]: orClauses, isDeleted: false },
+          limit: 4,
+          attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
+        });
+        if (preProd.length > 0) {
+          const payload = preProd.map((p) => ({
+            id:          p.id,
+            nombre:      p.name,
+            precio:      p.price,
+            stock:       p.stock ?? 'disponible',
+            descripcion: (p.description || '').slice(0, 60),
+            imagen:      p.image || null,
+          }));
+          clientActions.push({ type: 'show_products', productos: payload });
+          if (!estadoActualizado.historialIntereses) estadoActualizado.historialIntereses = [];
+          estadoActualizado.historialIntereses.push(...payload.map((p) => p.nombre));
+          estadoActualizado.ultimosProductos = payload.slice(0, 3).map((p) => ({ id: p.id, nombre: p.nombre, precio: p.precio }));
+
+          const lista = payload.map((p) => `- ${p.nombre} | $${p.precio} | id:${p.id}`).join('\n');
+          oportunidadStr = `\n\nOPORTUNIDAD PRE-CARGADA (${needsMatch.label}):\n${lista}\nReply con A-B-C-D. NO llames buscar_producto() este turno.`;
+        }
+      } catch (engineErr) {
+        console.error('[NutrIA] Pre-fetch error:', engineErr.message);
+      }
+    } else if (needsMatch.ambiguous && needsMatch.preguntaConsultiva) {
+      oportunidadStr = `\n\nDOLOR AMBIGUO (${needsMatch.label}): Pregunta antes de buscar: "${needsMatch.preguntaConsultiva}"`;
+    }
+  }
+
+  const systemContent = NUTRIA_SYSTEM_PROMPT + (channel === 'whatsapp' ? NUTRIA_WHATSAPP_NOTE : '') + contextNarrative + oportunidadStr;
+
+  const conversationMessages = [
+    { role: 'system', content: systemContent },
+    ...safeHistory,
+    { role: 'user',   content: message.trim() },
+  ];
+
+  const groqParams = { model, messages: conversationMessages, tools: NUTRIA_TOOLS, tool_choice: 'auto' };
+  const toolNames  = () => conversationMessages
+    .filter((m) => m.role === 'assistant' && Array.isArray(m.tool_calls))
+    .flatMap((m) => m.tool_calls.map((tc) => tc.function.name));
+
+  // ── First Groq call (with 70B→8B fallback on 429) ────────────────────────
+  let completion;
+  try {
+    completion = await safeGroqCall(groq, groqParams);
+  } catch (groqInitErr) {
+    if (groqInitErr.isRateLimit) {
+      await new Promise((r) => setTimeout(r, 5000));
+      return { toolCallNames: toolNames(), body: {
+        message:           '¡Chuta! Dame un segundo que el sistema está procesando a máxima velocidad, ya te doy el precio. 🦦',
+        products:          [],
+        actions:           clientActions.filter((a) => a.type !== 'show_products'),
+        estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
+      } };
+    }
+    console.error('[NutrIA] Groq initial call failed:', groqInitErr.message);
+    return { toolCallNames: toolNames(), body: {
+      message:           '¡Chuta! Me distraje un momento. ¿Lo intentamos de nuevo? 🦦',
+      products:          [],
+      actions:           clientActions.filter((a) => a.type !== 'show_products'),
+      estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
+    } };
+  }
+
+  let choice = completion.choices[0];
+
+  // ── Tool-calling loop ─────────────────────────────────────────────────────
+  while (choice.finish_reason === 'tool_calls' && round < MAX_TOOL_ROUNDS) {
+    round++;
+    conversationMessages.push(choice.message);
+
+    const toolResults = await Promise.all(
+      (choice.message.tool_calls || []).map(async (tc) => {
+        let rawArgs = {};
+        try { rawArgs = JSON.parse(tc.function.arguments); } catch (_) { /* malformed */ }
+
+        const args = normalizeToolArgs(tc.function.name, rawArgs);
+
+        let result;
+        try {
+          result = await executeTool(tc.function.name, args, clientActions, estadoActualizado, { userId: user?.sub, role: user?.role, channel });
+        } catch (toolErr) {
+          console.error(`[NutrIA] Tool error (${tc.function.name}):`, toolErr.message);
+          result = { error: 'Herramienta no disponible temporalmente.' };
+        }
+
+        return { role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result) };
+      })
+    );
+
+    conversationMessages.push(...toolResults);
+
+    try {
+      completion = await safeGroqCall(groq, { ...groqParams, messages: conversationMessages });
+      choice = completion.choices[0];
+    } catch (groqLoopErr) {
+      if (groqLoopErr.isRateLimit) {
+        await new Promise((r) => setTimeout(r, 5000));
+        return { toolCallNames: toolNames(), body: {
+          message:           '¡Chuta! Dame un segundo que el sistema está procesando a máxima velocidad, ya te doy el precio. 🦦',
+          products:          clientActions.filter((a) => a.type === 'show_products').flatMap((a) => a.productos ?? []),
+          actions:           clientActions.filter((a) => a.type !== 'show_products'),
+          estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
+        } };
+      }
+      console.error('[NutrIA] Groq loop error:', groqLoopErr.message);
+      return { toolCallNames: toolNames(), body: {
+        message:           '¡Chuta! Me distraje buscando, ¿probamos con otro término? 🦦',
+        products:          clientActions.filter((a) => a.type === 'show_products').flatMap((a) => a.productos ?? []),
+        actions:           clientActions.filter((a) => a.type !== 'show_products'),
+        estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
+      } };
+    }
+  }
+
+  const reply = sanitizeReply(choice.message?.content);
+
+  // Hoist products to a top-level key so the frontend reads them directly
+  // without traversing the actions array (prevents silent null on no-tool turns)
+  const products     = clientActions
+    .filter((a) => a.type === 'show_products')
+    .flatMap((a) => a.productos ?? []);
+  const otherActions = clientActions.filter((a) => a.type !== 'show_products');
+
+  // ── Sales performance logging (fire-and-forget) ───────────────────────────
+  const { models } = sequelize;
+  const sid        = String(sessionId || `anon-${Date.now()}`);
+  const turns      = safeHistory.length + 1;
+
+  let outcome = 'no_action';
+  if (otherActions.some((a) => a.type === 'redirect'))      outcome = 'checkout_redirect';
+  else if (otherActions.some((a) => a.type === 'add_to_cart')) outcome = 'cart_add';
+  else if (estadoActualizado.trackingSoporte?.ordenId)         outcome = 'support_query';
+
+  const addedProducts = otherActions
+    .filter((a) => a.type === 'add_to_cart')
+    .map((a) => ({ id: a.productoId, qty: a.cantidad }));
+
+  const toolCallNames = toolNames();
+
+  logSalesEvent(models, {
+    sessionId:     sid,
+    outcome,
+    productIds:    addedProducts,
+    turns,
+    lastIntent:    message.trim(),
+    toolCallNames,
+  });
+  // ─────────────────────────────────────────────────────────────────────────
+
+  return { toolCallNames, body: {
+    message:           reply,
+    products,
+    actions:           otherActions,
+    estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
+  } };
+}
+
 // ── POST /api/v1/ai/nutria/chat ───────────────────────────────────────────────
 // Accepts: { message: string, history: array, contexto: object }
 // Returns: { reply: string, actions: array, estadoActualizado: object }
@@ -841,199 +1057,8 @@ router.post('/nutria/chat', optionalAuth, async (req, res) => {
       return res.status(503).json({ message: 'NutrIA está en mantenimiento. Vuelve pronto 🦦.' });
     }
 
-    // Pick model based on message complexity; 8B handles most sales chats
-    const model = process.env.GROQ_MODEL || pickModel(message.trim());
-
-    // Últimos 6 mensajes, máx. 2000 caracteres cada uno (endpoint público:
-    // sin tope, un historial enorme dispara coste/latencia del LLM).
-    const safeHistory = Array.isArray(history)
-      ? history
-          .filter(
-            (m) => m && typeof m.role === 'string' && typeof m.content === 'string'
-              && ['user', 'assistant'].includes(m.role)
-          )
-          .slice(-6)
-          .map((m) => ({ role: m.role, content: m.content.slice(0, 2000) }))
-      : [];
-
-    const clientActions     = [];
-    const estadoActualizado = {};
-    const MAX_TOOL_ROUNDS   = 5;
-    let round = 0;
-
-    // ── Internal Needs Engine — pre-fetch catalog before Groq call ────────────
-    // Avoids a full tool-call round-trip for predictable pain→product matches.
-    const contextNarrative = buildContextNarrative(contexto);
-    let oportunidadStr = '';
-    const needsMatch = evaluarNecesidadesCliente(message.trim());
-
-    if (needsMatch) {
-      if (!needsMatch.ambiguous && Array.isArray(needsMatch.searchTerms) && needsMatch.searchTerms.length > 0) {
-        try {
-          const { models } = sequelize;
-          // Cap to 3 terms to keep the OR clause lightweight
-          const allTerms  = [...new Set(needsMatch.searchTerms.flatMap((t) => expandSearchTerms(t)))].slice(0, 3);
-          const orClauses = allTerms.flatMap((t) => [
-            { name:        { [Op.iLike]: `%${t}%` } },
-            { description: { [Op.iLike]: `%${t}%` } },
-          ]);
-          const preProd = await models.Product.findAll({
-            where: { [Op.or]: orClauses, isDeleted: false },
-            limit: 4,
-            attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
-          });
-          if (preProd.length > 0) {
-            const payload = preProd.map((p) => ({
-              id:          p.id,
-              nombre:      p.name,
-              precio:      p.price,
-              stock:       p.stock ?? 'disponible',
-              descripcion: (p.description || '').slice(0, 60),
-              imagen:      p.image || null,
-            }));
-            clientActions.push({ type: 'show_products', productos: payload });
-            if (!estadoActualizado.historialIntereses) estadoActualizado.historialIntereses = [];
-            estadoActualizado.historialIntereses.push(...payload.map((p) => p.nombre));
-            estadoActualizado.ultimosProductos = payload.slice(0, 3).map((p) => ({ id: p.id, nombre: p.nombre, precio: p.precio }));
-
-            const lista = payload.map((p) => `- ${p.nombre} | $${p.precio} | id:${p.id}`).join('\n');
-            oportunidadStr = `\n\nOPORTUNIDAD PRE-CARGADA (${needsMatch.label}):\n${lista}\nReply con A-B-C-D. NO llames buscar_producto() este turno.`;
-          }
-        } catch (engineErr) {
-          console.error('[NutrIA] Pre-fetch error:', engineErr.message);
-        }
-      } else if (needsMatch.ambiguous && needsMatch.preguntaConsultiva) {
-        oportunidadStr = `\n\nDOLOR AMBIGUO (${needsMatch.label}): Pregunta antes de buscar: "${needsMatch.preguntaConsultiva}"`;
-      }
-    }
-
-    const systemContent = NUTRIA_SYSTEM_PROMPT + contextNarrative + oportunidadStr;
-
-    const conversationMessages = [
-      { role: 'system', content: systemContent },
-      ...safeHistory,
-      { role: 'user',   content: message.trim() },
-    ];
-
-    const groqParams = { model, messages: conversationMessages, tools: NUTRIA_TOOLS, tool_choice: 'auto' };
-
-    // ── First Groq call (with 70B→8B fallback on 429) ────────────────────────
-    let completion;
-    try {
-      completion = await safeGroqCall(groq, groqParams);
-    } catch (groqInitErr) {
-      if (groqInitErr.isRateLimit) {
-        await new Promise((r) => setTimeout(r, 5000));
-        return res.json({
-          message:           '¡Chuta! Dame un segundo que el sistema está procesando a máxima velocidad, ya te doy el precio. 🦦',
-          products:          [],
-          actions:           clientActions.filter((a) => a.type !== 'show_products'),
-          estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
-        });
-      }
-      console.error('[NutrIA] Groq initial call failed:', groqInitErr.message);
-      return res.json({
-        message:           '¡Chuta! Me distraje un momento. ¿Lo intentamos de nuevo? 🦦',
-        products:          [],
-        actions:           clientActions.filter((a) => a.type !== 'show_products'),
-        estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
-      });
-    }
-
-    let choice = completion.choices[0];
-
-    // ── Tool-calling loop ─────────────────────────────────────────────────────
-    while (choice.finish_reason === 'tool_calls' && round < MAX_TOOL_ROUNDS) {
-      round++;
-      conversationMessages.push(choice.message);
-
-      const toolResults = await Promise.all(
-        (choice.message.tool_calls || []).map(async (tc) => {
-          let rawArgs = {};
-          try { rawArgs = JSON.parse(tc.function.arguments); } catch (_) { /* malformed */ }
-
-          const args = normalizeToolArgs(tc.function.name, rawArgs);
-
-          let result;
-          try {
-            result = await executeTool(tc.function.name, args, clientActions, estadoActualizado, { userId: req.user?.sub, role: req.user?.role });
-          } catch (toolErr) {
-            console.error(`[NutrIA] Tool error (${tc.function.name}):`, toolErr.message);
-            result = { error: 'Herramienta no disponible temporalmente.' };
-          }
-
-          return { role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result) };
-        })
-      );
-
-      conversationMessages.push(...toolResults);
-
-      try {
-        completion = await safeGroqCall(groq, { ...groqParams, messages: conversationMessages });
-        choice = completion.choices[0];
-      } catch (groqLoopErr) {
-        if (groqLoopErr.isRateLimit) {
-          await new Promise((r) => setTimeout(r, 5000));
-          return res.json({
-            message:           '¡Chuta! Dame un segundo que el sistema está procesando a máxima velocidad, ya te doy el precio. 🦦',
-            products:          clientActions.filter((a) => a.type === 'show_products').flatMap((a) => a.productos ?? []),
-            actions:           clientActions.filter((a) => a.type !== 'show_products'),
-            estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
-          });
-        }
-        console.error('[NutrIA] Groq loop error:', groqLoopErr.message);
-        return res.json({
-          message:           '¡Chuta! Me distraje buscando, ¿probamos con otro término? 🦦',
-          products:          clientActions.filter((a) => a.type === 'show_products').flatMap((a) => a.productos ?? []),
-          actions:           clientActions.filter((a) => a.type !== 'show_products'),
-          estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
-        });
-      }
-    }
-
-    const reply = sanitizeReply(choice.message?.content);
-
-    // Hoist products to a top-level key so the frontend reads them directly
-    // without traversing the actions array (prevents silent null on no-tool turns)
-    const products     = clientActions
-      .filter((a) => a.type === 'show_products')
-      .flatMap((a) => a.productos ?? []);
-    const otherActions = clientActions.filter((a) => a.type !== 'show_products');
-
-    // ── Sales performance logging (fire-and-forget) ───────────────────────────
-    const { models } = sequelize;
-    const sessionId  = String(req.body.sessionId || `anon-${Date.now()}`);
-    const turns      = safeHistory.length + 1;
-
-    let outcome = 'no_action';
-    if (otherActions.some((a) => a.type === 'redirect'))      outcome = 'checkout_redirect';
-    else if (otherActions.some((a) => a.type === 'add_to_cart')) outcome = 'cart_add';
-    else if (estadoActualizado.trackingSoporte?.ordenId)         outcome = 'support_query';
-
-    const addedProducts = otherActions
-      .filter((a) => a.type === 'add_to_cart')
-      .map((a) => ({ id: a.productoId, qty: a.cantidad }));
-
-    const toolCallNames = conversationMessages
-      .filter((m) => m.role === 'assistant' && Array.isArray(m.tool_calls))
-      .flatMap((m) => m.tool_calls.map((tc) => tc.function.name));
-
-    logSalesEvent(models, {
-      sessionId,
-      outcome,
-      productIds:    addedProducts,
-      turns,
-      lastIntent:    message.trim(),
-      toolCallNames,
-    });
-    // ─────────────────────────────────────────────────────────────────────────
-
-    return res.json({
-      message:           reply,
-      products,
-      actions:           otherActions,
-      estadoActualizado: Object.keys(estadoActualizado).length > 0 ? estadoActualizado : null,
-    });
+    const { body } = await runNutriaTurn({ message, history, contexto, sessionId: req.body.sessionId, user: req.user }, groq);
+    return res.json(body);
   } catch (err) {
     console.error('[NutrIA] Error inesperado:', err.message);
     return res.json({
@@ -1653,3 +1678,6 @@ router.post(
 
 module.exports = router;
 module.exports.executeTool = executeTool; // tests (order-idor-test) sin LLM
+module.exports.runNutriaTurn = runNutriaTurn; // hub WhatsApp (routes/hubRouter.js)
+module.exports.getGroqClient = getGroqClient;
+module.exports.STORE_URL = STORE_URL;

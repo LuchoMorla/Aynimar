@@ -109,6 +109,7 @@ async function main() {
     assert('anónimo → «no encontrado» (con caché caliente)', JSON.stringify(await ask(10, {})) === JSON.stringify(nf));
     assert('otro usuario → «no encontrado» (con caché caliente)', JSON.stringify(await ask(10, { userId: 5, role: 'customer' })) === JSON.stringify(nf));
     assert('admin → datos', (await ask(10, { userId: 1, role: 'admin' })).guia === 'G1');
+    assert('pedido de invitado (sin customer), cliente → «no encontrado»', JSON.stringify(await ask(10, { userId: 'x' })) === JSON.stringify(nf));
     models.Order.findByPk = realFindByPk; // el resto de la suite usa el real/sus propios stubs
 
     console.log('\n▶ NutrIA alertar_telegram escapa HTML');
