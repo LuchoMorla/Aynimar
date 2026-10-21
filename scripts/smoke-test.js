@@ -170,6 +170,10 @@ suite('buildNeuroCopyUserContent — output contract', () => {
   assert('output contains variant info', out.includes('Color') && out.includes('Blanco'));
   assert('output contains rawDetails context', out.includes('1800W'));
   assert('output does not contain unfilled brackets', !out.includes('[placeholder]'));
+  // Escasez falsa: el prompt ya no pide la blockquote de urgencia/escasez y la prohíbe.
+  const { NEURO_SYSTEM_PROMPT } = require('../integrations/aiCopyService');
+  assert('no pide línea de escasez/blockquote', !/blockquote|escasez/i.test(out) && !/ESCASEZ:|Escasez en blockquote|^> /m.test(NEURO_SYSTEM_PROMPT));
+  assert('prohíbe escasez no respaldada por el input', NEURO_SYSTEM_PROMPT.includes('"pocas unidades"'));
 });
 
 // ── 6. Order totals / IVA policy (Fase B — B2; IVA resuelto 2026-09-06) ─────
