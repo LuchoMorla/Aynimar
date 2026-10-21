@@ -107,7 +107,7 @@ class OrderService {
       throw boom.notFound(`Producto ${data.productId} no encontrado en inventario. Lo siento, ese producto no está disponible en este momento.`);
     }
 
-    const newItem = await models.OrderProduct.create(data);
+    const newItem = await this._addOrMergeItem(data);
 
     // Reset the 2-hour countdown each time an item is added (idempotent via jobId).
     // If guestEmail is now available, update it in the new job payload.
@@ -838,8 +838,22 @@ class OrderService {
     return item;
   }
   async addItem(data) {
-    const newItem = await models.OrderProduct.create(data);
-    return newItem;
+    return this._addOrMergeItem(data);
+  }
+
+  // Mismo producto (y misma variante) ya en el carrito → se suma la cantidad a esa
+  // línea en vez de duplicarla. Devuelve la línea (nueva o actualizada).
+  // ponytail: sin lock; dos add-item simultáneos aún pueden crear 2 líneas (checkout las suma igual).
+  async _addOrMergeItem(data) {
+    const existing = await models.OrderProduct.findOne({
+      where: {
+        orderId: data.orderId,
+        productId: data.productId,
+        selectedDropiId: data.selectedDropiId ? String(data.selectedDropiId) : { [Op.or]: [null, ''] },
+      },
+    });
+    if (existing) return existing.update({ amount: existing.amount + data.amount });
+    return models.OrderProduct.create(data);
   }
   async updateItem(id, changes) {
     const item = await this.findOneItem(id);

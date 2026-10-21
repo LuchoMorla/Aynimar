@@ -852,6 +852,28 @@ async function partB({ schema }) {
     assert('stock 1 con pedido de 2 → sigue 409', confN3?.output?.statusCode === 409, confN3?.message);
   }
 
+  out('\n▶ B19. add-item / add-item-guest: el mismo producto suma cantidad (no duplica la línea)');
+  {
+    // sync() crea UNIQUE(order_id, product_id) por el belongsToMany; la BD real (migraciones)
+    // no lo tiene (por eso se duplicaban líneas). Se quita para reproducir la BD real.
+    await sequelize.query('ALTER TABLE orders_products DROP CONSTRAINT IF EXISTS orders_products_order_id_product_id_key');
+    const cC = await customer();
+    const cart = await order(cC, []);
+    const l1 = await svc.addItem({ orderId: cart.id, productId: good.id, amount: 1 });
+    const l2 = await svc.addItem({ orderId: cart.id, productId: good.id, amount: 2 });
+    const rows = await models.OrderProduct.findAll({ where: { orderId: cart.id } });
+    assert('add-item ×2 → 1 línea con amount 3 (misma línea devuelta)', rows.length === 1 && rows[0].amount === 3 && l1.id === l2.id, `${rows.length} ${rows.map((x) => x.amount)}`);
+    await svc.addItem({ orderId: cart.id, productId: good.id, amount: 1, selectedDropiId: '555' });
+    await svc.addItem({ orderId: cart.id, productId: good.id, amount: 1, selectedDropiId: '555' });
+    const rows2 = await models.OrderProduct.findAll({ where: { orderId: cart.id }, order: [['id', 'ASC']] });
+    assert('otra variante → línea aparte, y se suma consigo misma', rows2.length === 2 && rows2[1].amount === 2 && rows2[1].selectedDropiId === '555');
+    const guest = await models.Order.create({});
+    const g1 = await svc.addItemToGuestOrder({ orderId: guest.id, productId: good.id, amount: 1 });
+    const g2 = await svc.addItemToGuestOrder({ orderId: guest.id, productId: good.id, amount: 1, selectedDropiId: '' });
+    const gRows = await models.OrderProduct.findAll({ where: { orderId: guest.id } });
+    assert('add-item-guest ×2 (null y "") → 1 línea con amount 2', gRows.length === 1 && gRows[0].amount === 2 && g1.id === g2.id);
+  }
+
   out('\n▶ B11. API /api/v1/order-exceptions (JWT + admin)');
   const express = require('express');
   require('../utils/auth');
