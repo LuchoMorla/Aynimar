@@ -859,12 +859,13 @@ async function partB({ schema }) {
     await sequelize.query('ALTER TABLE orders_products DROP CONSTRAINT IF EXISTS orders_products_order_id_product_id_key');
     const cC = await customer();
     const cart = await order(cC, []);
-    const l1 = await svc.addItem({ orderId: cart.id, productId: good.id, amount: 1 });
-    const l2 = await svc.addItem({ orderId: cart.id, productId: good.id, amount: 2 });
+    const me = { sub: cC.userId, role: 'customer' };
+    const l1 = await svc.addItem({ orderId: cart.id, productId: good.id, amount: 1 }, me);
+    const l2 = await svc.addItem({ orderId: cart.id, productId: good.id, amount: 2 }, me);
     const rows = await models.OrderProduct.findAll({ where: { orderId: cart.id } });
     assert('add-item ×2 → 1 línea con amount 3 (misma línea devuelta)', rows.length === 1 && rows[0].amount === 3 && l1.id === l2.id, `${rows.length} ${rows.map((x) => x.amount)}`);
-    await svc.addItem({ orderId: cart.id, productId: good.id, amount: 1, selectedDropiId: '555' });
-    await svc.addItem({ orderId: cart.id, productId: good.id, amount: 1, selectedDropiId: '555' });
+    await svc.addItem({ orderId: cart.id, productId: good.id, amount: 1, selectedDropiId: '555' }, me);
+    await svc.addItem({ orderId: cart.id, productId: good.id, amount: 1, selectedDropiId: '555' }, me);
     const rows2 = await models.OrderProduct.findAll({ where: { orderId: cart.id }, order: [['id', 'ASC']] });
     assert('otra variante → línea aparte, y se suma consigo misma', rows2.length === 2 && rows2[1].amount === 2 && rows2[1].selectedDropiId === '555');
     const guest = await models.Order.create({});
@@ -872,6 +873,29 @@ async function partB({ schema }) {
     const g2 = await svc.addItemToGuestOrder({ orderId: guest.id, productId: good.id, amount: 1, selectedDropiId: '' });
     const gRows = await models.OrderProduct.findAll({ where: { orderId: guest.id } });
     assert('add-item-guest ×2 (null y "") → 1 línea con amount 2', gRows.length === 1 && gRows[0].amount === 2 && g1.id === g2.id);
+
+    out('\n▶ B20. IDOR del carrito (BD real): add-item / items / associate-order');
+    const cO = await customer();
+    const nf = async (p) => (await p.catch((e) => e))?.output?.statusCode;
+    const before = await models.OrderProduct.count({ where: { orderId: cart.id } });
+    assert('add-item al carrito de otro cliente → 404 sin crear línea', await nf(svc.addItem({ orderId: cart.id, productId: good.id, amount: 1 }, { sub: cO.userId, role: 'customer' })) === 404
+      && await models.OrderProduct.count({ where: { orderId: cart.id } }) === before);
+    assert('add-item a orden inexistente → 404', await nf(svc.addItem({ orderId: 999999, productId: good.id, amount: 1 }, me)) === 404);
+    const done = await order(cO, [[good, 1]], { state: 'pendiente_envio' });
+    assert('add-item a pedido ya confirmado (propio) → 404', await nf(svc.addItem({ orderId: done.id, productId: good.id, amount: 1 }, { sub: cO.userId, role: 'customer' })) === 404);
+    assert('admin → puede añadir', !((await svc.addItem({ orderId: cart.id, productId: (await P({})).id, amount: 1 }, { sub: 0, role: 'admin' }).catch((e) => e)) instanceof Error));
+    const g3 = await svc.addItem({ orderId: guest.id, productId: good.id, amount: 1 }, { sub: cO.userId, role: 'customer' }).catch((e) => e);
+    assert('add-item con JWT a un carrito de invitado → sigue funcionando (compatibilidad)', !(g3 instanceof Error) && g3.amount === 3);
+    const item = rows[0];
+    assert('PATCH item ajeno → 404 (antes 403)', await nf(svc.updateCartItem(item.id, { amount: 9 }, { sub: cO.userId, role: 'customer' })) === 404 && (await models.OrderProduct.findByPk(item.id)).amount === 3);
+    assert('DELETE item ajeno sin JWT → 404', await nf(svc.deleteCartItem(item.id, null)) === 404 && !!(await models.OrderProduct.findByPk(item.id)));
+    assert('GET item ajeno → 404; dueño → 200', await nf(svc.findCartItem(item.id, { sub: cO.userId, role: 'customer' })) === 404 && (await svc.findCartItem(item.id, me)).id === item.id);
+    assert('PATCH item propio → OK', (await svc.updateCartItem(item.id, { amount: 4 }, me)).amount === 4);
+    assert('item de invitado sin JWT → editable (mecanismo de invitado)', (await svc.updateCartItem(gRows[0].id, { amount: 5 }, null)).amount === 5);
+    assert('associate-order de un carrito de OTRO cliente → 404 (antes devolvía su orden)', await nf(svc.associateOrderToCustomer(cart.id, cO.userId)) === 404 && (await reload(cart.id)).customerId === cC.id);
+    assert('associate-order de su propio carrito → idempotente', (await svc.associateOrderToCustomer(cart.id, cC.userId)).id === cart.id);
+    const guest2 = await models.Order.create({});
+    assert('associate-order de un carrito de invitado → se asocia', (await svc.associateOrderToCustomer(guest2.id, cO.userId)).customerId === cO.id);
   }
 
   out('\n▶ B11. API /api/v1/order-exceptions (JWT + admin)');

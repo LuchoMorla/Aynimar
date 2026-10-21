@@ -192,6 +192,50 @@ async function main() {
     const chk = await post('/checkout', tok(5, 'customer'), { orderId: 12 });
     assert('checkout de un tercero → 403 sin token', chk.status === 403 && !chk.body.includes('TOKEN_'), String(chk.status));
     assert('no se generó ningún token para terceros', tokenCalls.length === 0);
+
+    console.log('\n▶ Carrito: POST /add-item (JWT), GET/PATCH/DELETE add-item/:id e item-guest/:id');
+    // Orden 30 = carrito del userId 2; 31 = carrito de invitado; 32 = pedido confirmado del userId 2.
+    // Item 300 en la 30; 310 en la 31.
+    const CARTS = { 30: { id: 30, state: 'carrito', customerId: 20, customer: { id: 20, userId: 2 } }, 31: { id: 31, state: 'carrito', customerId: null, customer: null }, 32: { id: 32, state: 'pendiente_envio', customerId: 20, customer: { id: 20, userId: 2 } } };
+    const ITEMS = { 300: { id: 300, orderId: 30, amount: 1 }, 310: { id: 310, orderId: 31, amount: 1 } };
+    const writes = [];
+    const realOrderFind = models.Order.findByPk;
+    const realItemFind = models.OrderProduct.findByPk;
+    const realItemFindOne = models.OrderProduct.findOne;
+    const realItemCreate = models.OrderProduct.create;
+    const realProductFind = models.Product.findByPk;
+    models.Product.findByPk = async (id) => ({ id });
+    models.Order.findByPk = async (id) => CARTS[id] || null;
+    models.OrderProduct.findByPk = async (id) => (ITEMS[id] ? { ...ITEMS[id], update: async (c) => { writes.push(['update', id, c]); return { ...ITEMS[id], ...c }; }, destroy: async () => { writes.push(['destroy', id]); } } : null);
+    models.OrderProduct.findOne = async () => null;
+    models.OrderProduct.create = async (d) => { writes.push(['create', d.orderId]); return { id: 999, ...d }; };
+    try {
+      const add = (orderId, t) => post('/add-item', t, { orderId, productId: 5, amount: 1 });
+      assert('add-item sin JWT → 401', (await add(30)).status === 401);
+      const notMine = await add(30, tok(5, 'customer'));
+      const missing = await add(99, tok(5, 'customer'));
+      assert('add-item al carrito de otro → 404 idéntico a «no existe», sin escribir', notMine.status === 404 && notMine.body === missing.body && !writes.length, notMine.body);
+      assert('add-item a un pedido confirmado → 404', (await add(32, tok(2, 'customer'))).status === 404);
+      assert('add-item del dueño → 201', (await add(30, tok(2, 'customer'))).status === 201);
+      assert('add-item de admin → 201', (await add(30, tok(1, 'admin'))).status === 201);
+      assert('add-item con JWT a carrito de invitado → 201 (compatibilidad)', (await add(31, tok(5, 'customer'))).status === 201);
+      assert('add-item-guest a carrito de invitado → 201 (sin cambios)', (await post('/add-item-guest', null, { orderId: 31, productId: 5, amount: 1 })).status === 201);
+      const n = writes.length;
+      for (const [m, path] of [['GET', 'add-item/300'], ['PATCH', 'add-item/300'], ['DELETE', 'add-item/300'], ['PATCH', 'item-guest/300'], ['DELETE', 'item-guest/300']]) {
+        const body = m === 'PATCH' ? { amount: 7 } : undefined;
+        const other = await call(m, path, tok(5, 'customer'), body);
+        const none = await call(m, path.replace('300', '777'), tok(5, 'customer'), body);
+        const anon = await call(m, path, null, body);
+        assert(`${m} ${path} ajeno o anónimo → 404 idéntico a «no existe»`, other.status === 404 && anon.status === 404 && other.body === none.body, `${other.status} ${anon.status}`);
+      }
+      assert('ninguna escritura sobre items ajenos', writes.length === n);
+      assert('PATCH add-item/300 del dueño → 200', (await call('PATCH', 'add-item/300', tok(2, 'customer'), { amount: 2 })).status === 200);
+      assert('GET add-item/300 del dueño y de admin → 200', (await call('GET', 'add-item/300', tok(2, 'customer'))).status === 200 && (await call('GET', 'add-item/300', tok(1, 'admin'))).status === 200);
+      assert('item de invitado sin JWT → PATCH 200 y DELETE 200 (mecanismo de invitado)', (await call('PATCH', 'item-guest/310', null, { amount: 2 })).status === 200 && (await call('DELETE', 'item-guest/310')).status === 200);
+    } finally {
+      models.Order.findByPk = realOrderFind; models.OrderProduct.findByPk = realItemFind;
+      models.OrderProduct.findOne = realItemFindOne; models.OrderProduct.create = realItemCreate; models.Product.findByPk = realProductFind;
+    }
   } finally {
     console.error = origError;
     server.close();

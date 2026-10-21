@@ -150,8 +150,9 @@ class OrderService {
     if (!order) throw boom.notFound('Guest order not found');
 
     if (order.customerId) {
-      // Opcional: Podrías fusionar carritos aquí en el futuro.
-      console.log(`Order ${guestOrderId} already belongs to customer ${order.customerId}. No action taken.`);
+      // IDOR: antes devolvía la orden (con datos del cliente) aunque fuera de OTRO cliente.
+      // Ajena → el mismo 404 que «no existe»; propia → sin cambios (idempotente).
+      if (order.customerId !== customer.id) throw boom.notFound('Guest order not found');
       return order;
     }
 
@@ -837,8 +838,24 @@ class OrderService {
     const item = await models.OrderProduct.findByPk(id);
     return item;
   }
-  async addItem(data) {
+  // POST /orders/add-item (JWT). IDOR: solo un carrito del propio usuario (o admin) o un
+  // carrito de invitado (mismo mecanismo que add-item-guest); si no, o si la orden no
+  // existe o ya no es carrito → el mismo 404 (el front crea un carrito nuevo y reintenta).
+  async addItem(data, user = null) {
+    const order = await models.Order.findByPk(data.orderId, {
+      include: [{ association: 'customer', attributes: ['id', 'userId'] }],
+    });
+    if (!order || order.state !== 'carrito' || !this._canAccessCart(order, user)) {
+      throw boom.notFound('Orden no encontrada');
+    }
     return this._addOrMergeItem(data);
+  }
+
+  /** GET /orders/add-item/:id — misma regla que la edición; ajeno → 404. */
+  async findCartItem(itemId, user = null) {
+    const { item, order } = await this._loadItemOrder(itemId);
+    if (!this._canAccessCart(order, user)) throw boom.notFound('Item de carrito no encontrado');
+    return item;
   }
 
   // Mismo producto (y misma variante) ya en el carrito → se suma la cantidad a esa
@@ -887,30 +904,36 @@ class OrderService {
     return { item, order };
   }
 
-  _assertCartMutable(order, userId) {
+  // Carrito de invitado (sin cliente): cualquiera con el id (mecanismo actual de invitado,
+  // ver informes/integracion-staging-oct-3.md). Carrito de un cliente: solo ese cliente
+  // (JWT) o un admin. `user` = req.user ({ sub, role }) o null.
+  _canAccessCart(order, user) {
+    if (!order.customerId) return true;
+    if (!user) return false;
+    return user.role === 'admin' || (order.customer?.userId != null && Number(order.customer.userId) === Number(user.sub));
+  }
+
+  _assertCartMutable(order, user) {
+    // Ajeno → el mismo 404 que «no existe» (antes 403: revelaba que el item existía).
+    if (!this._canAccessCart(order, user)) throw boom.notFound('Item de carrito no encontrado');
     if (order.state !== 'carrito') {
       throw boom.conflict('Esta orden ya no es un carrito editable');
     }
-    if (order.customerId) {
-      if (!userId || !order.customer || order.customer.userId !== userId) {
-        throw boom.forbidden('No puedes modificar el carrito de otro usuario');
-      }
-    }
   }
 
-  async updateCartItem(itemId, changes, userId = null) {
+  async updateCartItem(itemId, changes, user = null) {
     if (changes.amount == null) {
       throw boom.badRequest('Falta "amount" para actualizar el item');
     }
     const { item, order } = await this._loadItemOrder(itemId);
-    this._assertCartMutable(order, userId);
+    this._assertCartMutable(order, user);
     await item.update({ amount: changes.amount }); // sólo cantidad — nunca orderId/productId
     return { id: itemId, amount: item.amount, rta: true };
   }
 
-  async deleteCartItem(itemId, userId = null) {
+  async deleteCartItem(itemId, user = null) {
     const { item, order } = await this._loadItemOrder(itemId);
-    this._assertCartMutable(order, userId);
+    this._assertCartMutable(order, user);
     await item.destroy();
     return { rta: true };
   }

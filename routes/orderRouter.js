@@ -188,7 +188,7 @@ router.patch(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const updated = await service.updateCartItem(id, req.body, req.user?.sub ?? null);
+      const updated = await service.updateCartItem(id, req.body, req.user ?? null);
       res.status(200).json(updated);
     } catch (error) {
       next(error);
@@ -203,7 +203,7 @@ router.delete(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const deleted = await service.deleteCartItem(id, req.user?.sub ?? null);
+      const deleted = await service.deleteCartItem(id, req.user ?? null);
       res.status(200).json(deleted);
     } catch (error) {
       next(error);
@@ -610,13 +610,15 @@ router.delete(
 
 // ITEMS
 
+// IDOR: antes devolvía cualquier item por id. Misma regla que la edición (optionalAuth).
 router.get(
   '/add-item/:id',
+  optionalAuth,
   validatorHandler(getItemSchema, 'params'),
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const item = await service.findOneItem(id);
+      const item = await service.findCartItem(id, req.user ?? null);
       res.json(item);
     } catch (error) {
       next(error);
@@ -632,7 +634,7 @@ router.post(
   async (req, res, next) => {
     try {
       const body = req.body;
-      const newItem = await service.addItem(body);
+      const newItem = await service.addItem(body, req.user); // IDOR: solo su carrito (o admin)
       res.status(201).json(newItem);
     } catch (error) {
       next(error);
@@ -651,7 +653,7 @@ router.patch(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const updated = await service.updateCartItem(id, req.body, req.user?.sub ?? null);
+      const updated = await service.updateCartItem(id, req.body, req.user ?? null);
       res.status(200).json(updated);
     } catch (error) {
       next(error);
@@ -666,7 +668,7 @@ router.delete(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const deleted = await service.deleteCartItem(id, req.user?.sub ?? null);
+      const deleted = await service.deleteCartItem(id, req.user ?? null);
       res.status(200).json(deleted);
     } catch (error) {
       next(error);
