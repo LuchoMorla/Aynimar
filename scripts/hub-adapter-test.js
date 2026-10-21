@@ -127,7 +127,7 @@ async function main() {
     script = [{ tools: [['buscar_producto', { nombre: 'powerbank' }]] }, { tools: [['agregar_al_carrito', { producto_id: 5, cantidad: 1 }], ['redirigir_checkout', {}]] }, { content: 'Te va a encantar.' }];
     r = await post(payload('quiero un powerbank'));
     const all = (r.json?.messages || []).map((m) => m.text).join('\n');
-    assert('respuesta específica (herramientas) ⇒ sin menú, todo texto', r.json?.messages?.every((m) => m.type === 'text'));
+    assert('respuesta con herramientas ⇒ textos y el menú solo al final', r.json?.messages?.slice(0, -1).every((m) => m.type === 'text') && r.json.messages.at(-1).type === 'buttons', JSON.stringify(r.json));
     assert('ficha del producto con precio y enlace', /Powerbank Solar 20000 — \$24\.9\nhttps:\/\/tienda\.test\/store\/5/.test(all), all);
     assert('carrito/checkout → un solo enlace de compra', (all.match(/\/comprar\?/g) || []).length === 1, all);
     assert('enlace de compra = contrato', /https:\/\/tienda-compra\.test\/comprar\?items=5:1&src=AE-WA$/m.test(all), all);
@@ -218,7 +218,10 @@ async function main() {
     assert('replyId > 64 → 400', (await tap(`ae|${'a'.repeat(62)}`, OTHER)).status === 400);
     script = [{ content: 'Claro, cuéntame.' }];
     r = await post(payload('tengo una duda', { phone: OTHER }));
-    assert('charla sin herramientas ⇒ menú al final', r.json?.messages?.at(-1)?.type === 'buttons');
+    assert('charla sin herramientas ⇒ sin botones', !r.json?.messages?.some((m) => m.type === 'buttons'), JSON.stringify(r.json));
+    script = [{ tools: [['buscar_producto', { nombre: 'lampara' }]] }, { content: 'Mira estas.' }];
+    r = await post(payload('busco una lámpara', { phone: OTHER }));
+    assert('tras una acción (herramienta) ⇒ menú al final', r.json?.messages?.at(-1)?.type === 'buttons', JSON.stringify(r.json));
     assert('el teléfono OTHER tampoco en logs', !logs.some((l) => l.includes(OTHER)));
 
     console.log('\n▶ Privacidad');

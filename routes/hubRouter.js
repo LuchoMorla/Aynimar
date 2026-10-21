@@ -57,6 +57,8 @@ const schema = Joi.object({
 // ponytail: sesiones y dedupe en memoria (una instancia; se pierden al reiniciar).
 // Pasar a BD/Redis si se escala a varias réplicas.
 const { models } = require('../libs/sequelize');
+// ponytail: sesiones (y carrito) en memoria: vale con 1 réplica; se pierden al reiniciar. La fuente
+// de verdad de la compra es el enlace /comprar (CTO Aynimar 2026-10-21: no añadir Redis por esto).
 const sessions = new Map(); // HMAC(phone) → { history, contexto, ts, turns:[ms] }
 const seen = new Map();     // msgId → ms
 function sessionFor(phone, now) {
@@ -140,6 +142,7 @@ const REPLIES = {
     });
     const out = [{ type: 'text', text: 'Cuéntame qué buscas (por ejemplo: «powerbank» o «kit solar») y te muestro opciones.' }];
     if (ps.length) out.push({ type: 'text', text: `Algunos productos de la tienda:\n\n${ps.map((p) => `• ${p.name} — $${p.price}\n${ai.STORE_URL}/store/${p.id}`).join('\n\n')}` });
+    out.push(buttons('¿Qué más?', [BTN.cart, BTN.help]));
     return out;
   },
   'ae|cart': async (s) => {
@@ -151,7 +154,7 @@ const REPLIES = {
     const live = ps.filter((p) => qty[p.id]);
     const link = buyLink(Object.fromEntries(live.map((p) => [p.id, qty[p.id]])));
     if (!link) return [buttons('Tu carrito está vacío. ¿Buscamos algo?', [BTN.search])];
-    return [{ type: 'text', text: `Tu carrito:\n${live.map((p) => `• ${p.name} × ${Math.min(Number(qty[p.id]), MAX_BUY_QTY)}`).join('\n')}\n\nPara comprar, abre este enlace (precio y stock se confirman en la tienda): ${link}` }];
+    return [{ type: 'text', text: `Tu carrito:\n${live.map((p) => `• ${p.name} × ${Math.min(Number(qty[p.id]), MAX_BUY_QTY)}`).join('\n')}\n\nPara comprar, abre este enlace (precio y stock se confirman en la tienda): ${link}` }, buttons('¿Qué más?', [BTN.search, BTN.help])];
   },
   'ae|help': async () => [{ type: 'text', text: HELP_TEXT }, buttons('¿Seguimos?', [BTN.search, BTN.cart])],
 };
@@ -212,8 +215,9 @@ router.post('/handle', (req, res, next) => (enabled() ? next() : res.sendStatus(
     if (estadoCarrito) s.contexto.estadoCarrito = { ...s.contexto.estadoCarrito, ...estadoCarrito };
     const messages = [...(ficha ? [ficha] : []), ...toWhatsApp(body, s.contexto.estadoCarrito)];
     const handoff = toolCallNames.includes('alertar_telegram') || /\b(humano|asesor|persona)\b/i.test(b.text || '');
-    // Menú: al entrar o cuando el motor solo conversó (sin herramientas ni ficha); nunca en handoff.
-    if (!handoff && (b.entry || (!ficha && !toolCallNames.length))) messages.push(MENU);
+    // Menú (CTO Aynimar 2026-10-21): en el saludo y al terminar una acción (herramienta), no en cada
+    // mensaje de charla; nunca en handoff.
+    if (!handoff && (b.entry || toolCallNames.length)) messages.push(MENU);
     log.info('hub_handle', { origin: b.origin || null, count: messages.length, handoff });
     return res.json({ messages, handoff });
   } catch (err) {
