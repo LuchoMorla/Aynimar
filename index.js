@@ -14,8 +14,10 @@ process.on('uncaughtException', (err) => {
 });
 
 const expressModule = require('express');
-// Bootstrap BullMQ cart-recovery worker — starts listening for delayed jobs
-require('./workers/cartRecoveryWorker');
+// Bootstrap BullMQ cart-recovery worker — starts listening for delayed jobs.
+// Sin Redis configurado (p. ej. staging) no arranca: si no, reintenta 127.0.0.1:6379 sin fin
+// y llena los logs (~70k líneas/día). Mismo criterio que libs/videoQueue.js.
+if (process.env.REDIS_URL || process.env.REDIS_HOST) require('./workers/cartRecoveryWorker');
 // Bootstrap Dropi retry worker — retries PENDING_DROPI_FULFILLMENT orders every 5 min
 require('./workers/dropiRetryWorker');
 const routerApi = require('./routes');
