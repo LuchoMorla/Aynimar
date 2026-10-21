@@ -112,6 +112,8 @@ function extractVariants(p) {
 
 // Normalizes Dropi v4 semantic-search product to a uniform shape.
 // Response: { isSuccess, objects: { products: [], total, filters } }
+const intOrNull = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : null; };
+
 function normalizeProduct(p) {
   if (!p || typeof p !== 'object') return null;
 
@@ -186,7 +188,7 @@ function normalizeProduct(p) {
     variants,
     price:       parseFloat(p.sale_price || p.price || p.precio || p.precio_costo || p.costo || p.cost_price || 0),
     retailPrice: parseFloat(p.suggested_price || p.regular_price || p.precio_venta || p.pvp || p.precio_sugerido || 0),
-    stock:       parseInt(p.total_stock ?? p.stock_quantity ?? p.stock_simple ?? p.stock ?? -1, 10),
+    stock:       intOrNull(p.total_stock ?? p.stock_quantity ?? p.stock_simple ?? p.stock ?? null), // sin dato → null (antes -1)
     sku:         p.sku ?? String(p.id ?? ''),
   };
 }
@@ -819,4 +821,4 @@ async function searchDropiByImage({ imageBase64, page = 1, limit = 20 }) {
   }
 }
 
-module.exports = { fetchDropiCatalog, fetchDropiProductById, searchDropiByImage, createOrderInDropi, fetchDropiOrderStatus, orderTransportName, orderHttpConfig, orderTransportError, releaseShopOrder, buildCreateOrderBody, ORDER_TRANSPORTS };
+module.exports = { normalizeProduct, fetchDropiCatalog, fetchDropiProductById, searchDropiByImage, createOrderInDropi, fetchDropiOrderStatus, orderTransportName, orderHttpConfig, orderTransportError, releaseShopOrder, buildCreateOrderBody, ORDER_TRANSPORTS };

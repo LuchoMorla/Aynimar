@@ -317,6 +317,14 @@ async function partA() {
       && auto.isTestOrder({ ...o, isTest: true }, true) && auto.isTestOrder({ ...o, customer: { user: { email: 'qa+1@x.ec' } } }, true));
     assert('notifyOwnerNewOrder nunca lanza (pedido de prueba o null → false)', (await auto.notifyOwnerNewOrder(null)) === false && (await auto.notifyOwnerNewOrder(o, { prod: false })) === false);
   }
+
+  out('\n▶ A-stock. Dropi sin dato de stock → null (antes -1)');
+  {
+    const { normalizeProduct } = require('../integrations/dropi/dropiAdapter');
+    assert('sin campo de stock → null', normalizeProduct({ id: 1, name: 'x' }).stock === null);
+    assert('stock no numérico → null', normalizeProduct({ id: 1, name: 'x', stock: 'n/a' }).stock === null);
+    assert('stock 0 y 7 se conservan', normalizeProduct({ id: 1, name: 'x', stock: 0 }).stock === 0 && normalizeProduct({ id: 1, name: 'x', total_stock: '7' }).stock === 7);
+  }
 }
 
 // ── Parte B: Postgres real ───────────────────────────────────────────────────
@@ -824,6 +832,24 @@ async function partB({ schema }) {
     } finally {
       env({ RAILWAY_ENVIRONMENT_NAME: 'staging', DROPI_ORDER_AUTOMATION: prevMode });
     }
+  }
+
+  out('\n▶ B18. Stock negativo (-1 heredado de Dropi) = sin dato: no bloquea checkout ni confirmCod');
+  {
+    const neg = await P({ stock: -1, name: 'Producto 23 (stock -1)' });
+    const cN = await customer();
+    const oN = await order(cN, [[neg, 2]]);
+    const chkN = await svc.checkout(oN.id, cN.userId, 0).catch((e) => e);
+    assert('checkout con stock -1 → OK (antes 409)', !(chkN instanceof Error), chkN?.message);
+    const cN2 = await customer();
+    const oN2 = await order(cN2, [[neg, 2]]);
+    const confN = await svc.confirmCod(oN2.id, cN2.userId).catch((e) => e);
+    assert('confirmCod con stock -1 → OK y el stock no se descuenta', !(confN instanceof Error) && (await models.Product.findByPk(neg.id)).stock === -1, confN?.message);
+    const few = await P({ stock: 1 });
+    const cN3 = await customer();
+    const oN3 = await order(cN3, [[few, 2]]);
+    const confN3 = await svc.confirmCod(oN3.id, cN3.userId).catch((e) => e);
+    assert('stock 1 con pedido de 2 → sigue 409', confN3?.output?.statusCode === 409, confN3?.message);
   }
 
   out('\n▶ B11. API /api/v1/order-exceptions (JWT + admin)');

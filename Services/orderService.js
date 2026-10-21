@@ -446,7 +446,8 @@ class OrderService {
           throw boom.conflict('Un producto de la orden ya no está disponible.');
         }
         const qty = it.amount;
-        if (product.stock !== null) {
+        // Stock negativo = sin dato (p. ej. -1 heredado de Dropi): se trata como null.
+        if (product.stock !== null && product.stock >= 0) {
           if (product.stock < qty) {
             throw boom.conflict(
               `Stock insuficiente para "${product.name}". Disponible: ${product.stock}, pedido: ${qty}`
@@ -1259,8 +1260,8 @@ class OrderService {
         const product = productMap.get(item.productId);
         const quantity = item.amount;
 
-        // Stock can be null for unlimited/dropship products — skip the check.
-        if (product.stock !== null && product.stock < quantity) {
+        // Stock can be null (or negative = sin dato) for unlimited/dropship products — skip the check.
+        if (product.stock !== null && product.stock >= 0 && product.stock < quantity) {
           throw boom.conflict(
             `Insufficient stock for "${product.name}". ` +
             `Available: ${product.stock}, requested: ${quantity}`
