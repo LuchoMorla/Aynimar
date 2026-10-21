@@ -2,13 +2,18 @@
 /* global FormData */
 
 const fs = require('fs');
-const { getTelegramToken, getAdminChatId, signCallbackData } = require('../libs/telegramSecurity');
+const { getTelegramToken, getAdminChatId, signCallbackData, isProductionEnv } = require('../libs/telegramSecurity');
+
+// Fuera de producción (staging, local) los avisos llegan rotulados: el propietario
+// no debe confundir un pedido de prueba con una venta real.
+const NON_PROD_TAG = '🧪 <b>PRUEBA · STAGING — no es una venta real</b>\n';
 
 async function sendTelegramNotification(text) {
   const token  = getTelegramToken();
   const chatId = process.env.TELEGRAM_OWNER_ID || process.env.TELEGRAM_CHAT_ID;
 
   if (!token || !chatId) return;
+  if (!isProductionEnv()) text = NON_PROD_TAG + text;
 
   try {
     const resp = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
