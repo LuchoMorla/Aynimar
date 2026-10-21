@@ -18,6 +18,23 @@ const { config } = require('./../config/config');
 const sendMail = require('../utils/sendMail');
 const { cartRecoveryQueue } = require('../libs/cartRecoveryQueue');
 
+// Contacto del pedido normalizado: correo recortado y en minúsculas; teléfono solo
+// dígitos, sin prefijo 593 ni ceros iniciales (0991234567 = +593 99 123 4567 = 991234567).
+function normalizeContact(raw) {
+  const v = String(raw ?? '').trim();
+  if (!v) return '';
+  if (v.includes('@')) return v.toLowerCase();
+  let d = v.replace(/\D/g, '');
+  if (d.startsWith('593') && d.length >= 11) d = d.slice(3);
+  d = d.replace(/^0+/, '');
+  return d.length >= 7 ? `tel:${d}` : '';
+}
+// Igualdad en tiempo constante (hash de longitud fija); vacío nunca coincide.
+function safeEqual(a, b) {
+  const h = (x) => crypto.createHash('sha256').update(String(x)).digest();
+  return crypto.timingSafeEqual(h(a), h(b)) && a !== '';
+}
+
 const CART_RECOVERY_DELAY_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 // Fase B (B3): intentos totales de despacho por orden. El 1º lo hace la FASE 2
@@ -242,6 +259,27 @@ class OrderService {
     // Condicional: si otra petición lo generó a la vez, gana la primera.
     const [n] = await models.Order.update({ trackingToken: token }, { where: { id: order.id, trackingToken: null } });
     return n ? token : (await models.Order.findByPk(order.id, { attributes: ['trackingToken'] })).trackingToken;
+  }
+
+  /**
+   * Seguimiento para invitados / pedidos antiguos sin enlace: pedido + correo o teléfono
+   * del pedido → trackingToken (lo genera si falta). Cualquier fallo → null (el router
+   * responde el mismo 404). Comparación en tiempo constante; el contacto nunca se registra.
+   */
+  async lookupTrackingToken(orderId, contact) {
+    const order = await models.Order.findByPk(orderId, {
+      attributes: ['id', 'state', 'trackingToken', 'customerId'],
+      include: [{ association: 'customer', attributes: ['phone', 'phoneTwo'],
+        include: [{ association: 'user', attributes: ['email'] }] }],
+    });
+    const c = order && order.state !== 'carrito' ? order.customer : null;
+    const given = normalizeContact(contact);
+    // Siempre se comparan 3 candidatos (aunque falten) para no variar el trabajo.
+    const candidates = [c?.user?.email, c?.phone, c?.phoneTwo].map(normalizeContact);
+    let ok = false;
+    for (const cand of candidates) ok = safeEqual(given, cand) || ok;
+    if (!ok || !given) return null;
+    return this._ensureTrackingToken(order);
   }
 
   /** "Mis pedidos": progreso real de los pedidos confirmados del usuario (sin datos personales). */

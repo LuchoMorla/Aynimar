@@ -122,7 +122,14 @@ const checkoutSchema = Joi.object({
   creditsToApply: Joi.number().integer().min(0).default(0),
 });
 
+// POST /orders/track/lookup: pedido + correo o teléfono del pedido.
+const trackLookupSchema = Joi.object({
+  orderId: Joi.number().integer().min(1).max(2147483647).required(),
+  contact: Joi.string().trim().min(5).max(254).required(),
+});
+
 module.exports = {
+  trackLookupSchema,
   sanitizeAttribution,
   getOrderSchema,
   getOrderByUserIdAndOrderId,

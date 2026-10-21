@@ -1059,7 +1059,7 @@ router.post('/nutria/chat', optionalAuth, async (req, res) => {
       return res.status(400).json({ message: 'El mensaje es demasiado largo (máx. 2000 caracteres).' });
     }
 
-    const groq = getGroqClient();
+    const groq = router.llm || getGroqClient(); // router.llm: LLM simulado en tests
     if (!groq) {
       console.error('[NutrIA] GROQ_IA_KEY no configurada.');
       return res.status(503).json({ message: 'NutrIA está en mantenimiento. Vuelve pronto 🦦.' });

@@ -24,7 +24,9 @@ const {
   checkoutSchema,
   confirmCodSchema,
   sanitizeAttribution,
+  trackLookupSchema,
 } = require('../schemaODtos/orderSchema');
+const { trackLookupLimiter, trackLookupOrderLimiter } = require('../middlewares/rateLimiter');
 const {
   getOrderIdSchema,
   getOrderAndProofIdSchema,
@@ -40,6 +42,27 @@ const customerService = new CustomerService();
 const recyclerService = new RecyclerService();
 
 // --- RUTAS PÚBLICAS (sin autenticación) ---
+
+// POST /api/v1/orders/track/lookup  { orderId, contact }
+// Invitados y pedidos antiguos sin enlace: si `contact` (correo o teléfono del pedido)
+// coincide → { trackingToken } (se genera si falta). Cualquier otro caso → el mismo 404
+// que /track/:ref (no revela si el pedido existe); 400 con el mismo cuerpo.
+// 5 intentos / 15 min por IP y 5 / 15 min por orderId.
+// El contacto no se registra (ni en logs ni en el error de validación).
+const TRACK_NOT_FOUND = { message: 'Orden no encontrada.' };
+router.post('/track/lookup', trackLookupLimiter, trackLookupOrderLimiter, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const { error, value } = trackLookupSchema.validate(req.body ?? {});
+    if (error) return res.status(400).json(TRACK_NOT_FOUND); // mismo cuerpo genérico que el 404
+    const trackingToken = await service.lookupTrackingToken(value.orderId, value.contact);
+    if (!trackingToken) return res.status(404).json(TRACK_NOT_FOUND);
+    return res.json({ trackingToken });
+  } catch (err) {
+    console.error('[track/lookup] error:', err.name);
+    return res.status(404).json(TRACK_NOT_FOUND);
+  }
+});
 
 // GET /api/v1/orders/track/:ref
 // Seguimiento público. :ref es el TOKEN OPACO de seguimiento (GET /orders/mine/progress),

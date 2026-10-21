@@ -34,4 +34,32 @@ const authLimiter = rateLimit({
   },
 });
 
-module.exports = { generalLimiter, authLimiter };
+// 5 requests per 15 min per IP — POST /orders/track/lookup (pedido + contacto → token).
+// ponytail: en memoria por réplica; Redis store si se escala a varias réplicas.
+const trackLookupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (req, res) => {
+    log.warn('rate_limit_track_lookup', {
+      ip: (req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket?.remoteAddress,
+    });
+    res.status(429).json({ message: 'Demasiados intentos. Intenta en 15 minutos.' });
+  },
+});
+
+// …y además 5 por pedido / 15 min, venga de la IP que venga (frena el reparto entre IPs).
+const trackLookupOrderLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => `track-order:${Number(req.body?.orderId) || 0}`,
+  handler: (req, res) => {
+    log.warn('rate_limit_track_lookup_order', {});
+    res.status(429).json({ message: 'Demasiados intentos. Intenta en 15 minutos.' });
+  },
+});
+
+module.exports = { generalLimiter, authLimiter, trackLookupLimiter, trackLookupOrderLimiter };
