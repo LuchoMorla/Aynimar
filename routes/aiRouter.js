@@ -645,6 +645,10 @@ function evaluarNecesidadesCliente(mensaje) {
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
 // ctx = { userId, role } del JWT de la conversación (optionalAuth); vacío si es anónimo.
+// Canal WhatsApp (hub): solo productos visibles en la tienda (los enlaces /store/:id
+// de un producto oculto no sirven al cliente). La web conserva su comportamiento.
+const shopVisible = (channel) => (channel === 'whatsapp' ? { showShop: true } : {});
+
 async function executeTool(name, args, clientActions, estadoActualizado, ctx = {}) {
   const { models } = sequelize;
 
@@ -659,7 +663,7 @@ async function executeTool(name, args, clientActions, estadoActualizado, ctx = {
 
       // Query 1: search by product name + description
       let products = await models.Product.findAll({
-        where: { [Op.or]: orClauses, isDeleted: false },
+        where: { [Op.or]: orClauses, isDeleted: false, ...shopVisible(ctx.channel) },
         limit: 5,
         attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
       });
@@ -675,7 +679,7 @@ async function executeTool(name, args, clientActions, estadoActualizado, ctx = {
         if (categories.length > 0) {
           const catIds = categories.map((c) => c.id);
           products = await models.Product.findAll({
-            where: { categoryId: { [Op.in]: catIds }, isDeleted: false },
+            where: { categoryId: { [Op.in]: catIds }, isDeleted: false, ...shopVisible(ctx.channel) },
             limit: 5,
             attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
           });
@@ -778,9 +782,13 @@ async function executeTool(name, args, clientActions, estadoActualizado, ctx = {
 
   if (name === 'get_detalles_producto') {
     try {
-      const product = await models.Product.findByPk(args.producto_id, {
-        attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
-      });
+      const id = Number(args.producto_id);
+      const product = Number.isSafeInteger(id) && id > 0
+        ? await models.Product.findOne({
+            where: { id, isDeleted: false, ...shopVisible(ctx.channel) },
+            attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
+          })
+        : null;
       if (!product) return { error: 'Producto no encontrado. Verifica el ID.' };
       return {
         id:          product.id,
@@ -878,7 +886,7 @@ async function runNutriaTurn({ message, history, contexto, sessionId, user, chan
           { description: { [Op.iLike]: `%${t}%` } },
         ]);
         const preProd = await models.Product.findAll({
-          where: { [Op.or]: orClauses, isDeleted: false },
+          where: { [Op.or]: orClauses, isDeleted: false, ...shopVisible(channel) },
           limit: 4,
           attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
         });

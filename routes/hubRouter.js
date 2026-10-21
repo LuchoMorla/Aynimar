@@ -130,11 +130,11 @@ router.post('/handle', (req, res, next) => (enabled() ? next() : res.sendStatus(
   if (!groq) return res.sendStatus(503);
   let message = b.text || 'hola'; // entrada sin texto (código, anuncio, menú) ⇒ saludo
   try {
-    // Entrada con [AE-PROD-<id>]: ficha real primero (solo productos no eliminados) y el
+    // Entrada con [AE-PROD-<id>]: ficha real primero (solo productos no eliminados y visibles en tienda) y el
     // motor la recibe en el contexto como "último producto mostrado".
     let ficha = null;
     if (b.entry && /^[1-9]\d{0,9}$/.test(b.product || '')) {
-      const p = await models.Product.findOne({ where: { id: Number(b.product), isDeleted: false }, attributes: ['id', 'name', 'price'] });
+      const p = await models.Product.findOne({ where: { id: Number(b.product), isDeleted: false, showShop: true }, attributes: ['id', 'name', 'price'] });
       if (p) {
         ficha = { type: 'text', text: `• ${p.name} — $${p.price}\n${ai.STORE_URL}/store/${p.id}` };
         s.contexto.ultimosProductos = [{ id: p.id, nombre: p.name, precio: p.price }];

@@ -31,7 +31,8 @@ const orderLookups = [];
 models.Order.findByPk = async (id) => { orderLookups.push(id); return { id, state: 'x', customer: { userId: 2 } }; };
 const productFinds = [];
 models.Product.findOne = async ({ where }) => { productFinds.push(where); return where.id === 42 && where.isDeleted === false ? { id: 42, name: 'Kit Solar Camping', price: 59.9 } : null; };
-models.Product.findAll = async () => [{ id: 5, name: 'Powerbank Solar 20000', price: 24.9, stock: 3, description: 'Carga', image: null }];
+const productLists = [];
+models.Product.findAll = async ({ where } = {}) => (productLists.push(where), [{ id: 5, name: 'Powerbank Solar 20000', price: 24.9, stock: 3, description: 'Carga', image: null }]);
 models.SalesPerformance.create = async () => ({});
 
 // LLM simulado: cada respuesta es la siguiente de `script`; registra los mensajes recibidos.
@@ -160,6 +161,7 @@ async function main() {
     assert('product numérico en la entrada → ficha primero con enlace', r.status === 200 && r.json.messages[0].text === 'Kit Solar Camping — $59.9\nhttps://tienda.test/store/42'.replace(/^/, '• '), JSON.stringify(r.json));
     assert('el motor recibe el producto (contexto y mensaje)', /Kit Solar Camping/.test(llmCalls.at(-1).at(-1).content) && /id:42/.test(llmCalls.at(-1)[0].content));
     assert('solo productos no eliminados', productFinds.at(-1).isDeleted === false && productFinds.at(-1).id === 42);
+    assert('solo productos visibles en tienda (showShop)', productFinds.at(-1).showShop === true);
     const finds = productFinds.length;
     script = [{ content: 'Hola.' }];
     r = await post(payload('', { entry: true, product: 'SKU-ABC' }));
@@ -167,6 +169,20 @@ async function main() {
     script = [{ content: 'Hola.' }];
     r = await post(payload('', { entry: true, product: '999' }));
     assert('product inexistente → sin ficha, sigue el saludo', r.status === 200 && r.json.messages.length === 1 && llmCalls.at(-1).at(-1).content === 'hola');
+
+    console.log('\n▶ Catálogo filtrado (isDeleted / showShop)');
+    script = [{ tools: [['get_detalles_producto', { producto_id: 42 }]] }, { content: 'Detalles.' }];
+    await post(payload('detalles del 42'));
+    assert('get_detalles_producto por WhatsApp: isDeleted:false y showShop:true', productFinds.at(-1).id === 42 && productFinds.at(-1).isDeleted === false && productFinds.at(-1).showShop === true, JSON.stringify(productFinds.at(-1)));
+    script = [{ tools: [['buscar_producto', { nombre: 'linterna' }]] }, { content: 'Mira.' }];
+    await post(payload('busco linterna'));
+    assert('buscar_producto por WhatsApp: isDeleted:false y showShop:true', productLists.at(-1)?.isDeleted === false && productLists.at(-1)?.showShop === true);
+    const { executeTool } = require('../routes/aiRouter');
+    await executeTool('get_detalles_producto', { producto_id: 42 }, [], {}, {});
+    assert('get_detalles_producto web: isDeleted:false (showShop sin cambios)', productFinds.at(-1).isDeleted === false && !('showShop' in productFinds.at(-1)));
+    const nFinds = productFinds.length;
+    const bad = await executeTool('get_detalles_producto', { producto_id: '1 OR 1=1' }, [], {}, {});
+    assert('get_detalles_producto con id no numérico → error sin consulta', !!bad.error && productFinds.length === nFinds);
 
     console.log('\n▶ Privacidad');
     assert('el teléfono no aparece en ningún log', !logs.some((l) => l.includes(PHONE)), logs.find((l) => l.includes(PHONE)));
