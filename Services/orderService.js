@@ -1299,6 +1299,12 @@ class OrderService {
         );
       }
 
+      // Prueba ≠ real desde la compra (no solo al despachar): un pedido de QA pagado con
+      // DeUna nunca pasaba por preDispatch y contaba como venta real en las métricas.
+      if (!order.isTest && automation.isTestOrder({ isTest: false, customer })) {
+        await order.update({ isTest: true }, { transaction: t });
+      }
+
       // ── 4. Guard: cart must have at least one item ─────────────────────────
       const cartItems = await models.OrderProduct.findAll({
         where: { orderId: order.id },
