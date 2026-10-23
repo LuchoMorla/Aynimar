@@ -19,6 +19,7 @@ const { isProductionEnv, signCallbackData } = require('../libs/telegramSecurity'
 const { sendTelegramNotification, callTelegram } = require('../utils/telegramNotify');
 const { getAdminChatId } = require('../libs/telegramSecurity');
 const dropi = require('../integrations/dropi/dropiAdapter');
+const { unitPrice, variantQty, selectedVariant } = require('../utils/variantAdapter');
 
 const { models } = sequelize;
 const sel = (sql, replacements = {}) => sequelize.query(sql, { replacements, type: QueryTypes.SELECT });
@@ -302,7 +303,7 @@ function buildDropiLines(order) {
   const isDropiItem = (it) => Boolean(it.dropiProductId) || it.sourceProvider === 'dropi' || (Array.isArray(it.dropiItems) && it.dropiItems.length > 0);
   for (const it of items) {
     const qty = it.OrderProduct?.amount;
-    const price = Number(it.OrderProduct?.unitPriceGross ?? it.price);
+    const price = Number(it.OrderProduct?.unitPriceGross ?? unitPrice(it, it.OrderProduct?.selectedDropiId));
     const productId = it.dropiProductId || (it.sourceProvider === 'dropi' ? it.externalId : null);
     if (!isDropiItem(it)) {
       problems.push({ type: 'sourcing_required', details: { productId: it.id, reason: 'producto sin vínculo Dropi en un pedido Dropi' } });
@@ -324,8 +325,17 @@ function buildDropiLines(order) {
     let variationId = null;
     if (dropiItems.length > 0) {
       const sel = it.OrderProduct?.selectedDropiId ?? (dropiItems.length === 1 ? dropiItems[0]?.id : null);
+      const entry = sel ? selectedVariant(it, sel) : null;
       if (!sel) problems.push({ type: 'variant_mismatch', details: { productId: it.id, reason: 'variante no elegida (no se usa la primera por defecto)' } });
-      else if (!dropiItems.some((d) => String(d?.id) === String(sel))) problems.push({ type: 'variant_mismatch', details: { productId: it.id, selectedDropiId: String(sel), reason: 'la variante elegida ya no existe en el producto' } });
+      else if (!entry) problems.push({ type: 'variant_mismatch', details: { productId: it.id, selectedDropiId: String(sel), reason: 'la variante elegida ya no existe en el producto' } });
+      else if (entry.dropiId != null) {
+        // Presentación («1 unidad», «Pack x2»): producto Dropi SIMPLE × qty de la variante.
+        // El precio se reparte por unidad Dropi para que precio × cantidad = PVP de la línea.
+        if (!isDropiId(entry.dropiId)) problems.push({ type: 'sourcing_required', details: { productId: it.id, reason: `presentación ${sel} sin id Dropi válido` } });
+        const k = variantQty(it, sel);
+        lines.push({ productId: it.id, id: Number(entry.dropiId), name: it.name, quantity: k * qty, price: price / k, variationId: null });
+        continue;
+      }
       else if (!isDropiId(sel)) problems.push({ type: 'variant_mismatch', details: { productId: it.id, selectedDropiId: String(sel), reason: 'id de variante no numérico' } });
       else variationId = Number(sel);
     }
@@ -375,10 +385,11 @@ function marginCheck(order, cfg, floorCfg) {
   const noCost = [];
   for (const it of items) {
     const qty = it.OrderProduct?.amount ?? 0;
-    gross += Number(it.OrderProduct?.unitPriceGross ?? it.price) * qty;
+    const sel = it.OrderProduct?.selectedDropiId;
+    gross += Number(it.OrderProduct?.unitPriceGross ?? unitPrice(it, sel)) * qty;
     const c = it.OrderProduct?.unitCostSnapshot ?? it.costPrice;
     if (c === null || c === undefined || !(Number(c) > 0)) noCost.push(it.id);
-    else cost += Number(c) * qty;
+    else cost += Number(c) * variantQty(it, sel) * qty; // Pack x2 = 2 × coste unitario
   }
   if (noCost.length) return { type: 'margin_insufficient', details: { reason: 'coste de proveedor desconocido', productIds: noCost } };
   if (!(gross > 0)) return { type: 'inconsistent_data', details: { reason: 'importe del pedido ≤ 0' } };

@@ -12,7 +12,7 @@ const crypto = require('crypto');
 const { buildProgress } = require('./orderProgress');
 const { createOrderInEffi }  = require('../integrations/effi/effiAdapter');
 const { sendTelegramNotification } = require('../utils/telegramNotify');
-const { buildDispatchDescription } = require('../utils/variantAdapter');
+const { buildDispatchDescription, unitPrice, variantQty, selectedVariant, hasVariantPrices } = require('../utils/variantAdapter');
 
 const { config } = require('./../config/config');
 const sendMail = require('../utils/sendMail');
@@ -494,7 +494,8 @@ class OrderService {
           }
           await product.update({ stock: product.stock - qty }, { transaction: t });
         }
-        lineItems.push({ price: product.price, qty });
+        // Precio de la variante elegida (o products.price): nunca el del cliente.
+        lineItems.push({ price: unitPrice(product, it.selectedDropiId), qty });
       }
 
       // Totales: para créditos parciales, checkout() ya los fijó — no se
@@ -735,7 +736,7 @@ class OrderService {
           ownersData[ownerEmail].businesses[businessId].products.push({
             name: item.name,
             amount: item.OrderProduct.amount,
-            price: item.price
+            price: unitPrice(item, item.OrderProduct.selectedDropiId)
           });
         }
       }
@@ -862,6 +863,12 @@ class OrderService {
   // línea en vez de duplicarla. Devuelve la línea (nueva o actualizada).
   // ponytail: sin lock; dos add-item simultáneos aún pueden crear 2 líneas (checkout las suma igual).
   async _addOrMergeItem(data) {
+    // Producto con precio por presentación: la variante debe existir (si no, el cliente
+    // vería un precio y el despacho quedaría bloqueado por variant_mismatch).
+    const product = await models.Product.findByPk(data.productId, { attributes: ['id', 'isBundle', 'dropiItems'] });
+    if (product && hasVariantPrices(product) && !selectedVariant(product, data.selectedDropiId)) {
+      throw boom.badRequest('Elige una presentación válida del producto.');
+    }
     const existing = await models.OrderProduct.findOne({
       where: {
         orderId: data.orderId,
@@ -870,7 +877,9 @@ class OrderService {
       },
     });
     if (existing) return existing.update({ amount: existing.amount + data.amount });
-    return models.OrderProduct.create(data);
+    // Solo estos campos: nunca un precio (unitPriceGross, etc.) que venga del cliente.
+    const { orderId, productId, amount, selectedDropiId } = data;
+    return models.OrderProduct.create({ orderId, productId, amount, selectedDropiId });
   }
   async updateItem(id, changes) {
     const item = await this.findOneItem(id);
@@ -1063,8 +1072,8 @@ class OrderService {
           if (selectedId) {
             const variantDesc = buildDispatchDescription(item, item.OrderProduct?.selectedDropiId ?? null);
             byProvider.dropi.push({
-              externalId:          String(selectedId),
-              quantity:            item.OrderProduct.amount,
+              externalId:          String(selectedVariant(item, selectedId)?.dropiId ?? selectedId),
+              quantity:            variantQty(item, selectedId) * item.OrderProduct.amount,
               dispatchDescription: variantDesc,
             });
             console.log(`[Dispatch] Variant "${variantDesc}" → dropi_id=${selectedId}`);
@@ -1349,7 +1358,7 @@ class OrderService {
           );
         }
 
-        lineItems.push({ price: product.price, qty: quantity });
+        lineItems.push({ price: unitPrice(product, item.selectedDropiId), qty: quantity });
       }
 
       // Fórmula única de totales/IVA (Services/orderTotals.js). `subtotal` ya

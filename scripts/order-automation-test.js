@@ -318,6 +318,39 @@ async function partA() {
     assert('notifyOwnerNewOrder nunca lanza (pedido de prueba o null → false)', (await auto.notifyOwnerNewOrder(null)) === false && (await auto.notifyOwnerNewOrder(o, { prod: false })) === false);
   }
 
+  out('\n▶ A-var. Presentaciones con precio propio (1 unidad / Pack x2, mismo ID Dropi)');
+  {
+    const va = require('../utils/variantAdapter');
+    const pres = { id: 97, name: 'Lanzador', price: 27.99, costPrice: 8, dropiProductId: '156158', isBundle: false, dropiItems: [
+      { id: 'u1', dropiId: '156158', value: '1 unidad', qty: 1, price: 27.99 },
+      { id: 'x2', dropiId: '156158', value: 'Pack x2', qty: 2, price: 37.99 }] };
+    assert('unitPrice: precio de la variante elegida', va.unitPrice(pres, 'x2') === 37.99 && va.unitPrice(pres, 'u1') === 27.99);
+    assert('unitPrice: sin selección o selección inexistente → products.price', va.unitPrice(pres, null) === 27.99 && va.unitPrice(pres, 'zz') === 27.99);
+    const noPrice = { price: 40, dropiItems: [{ id: '501', value: 'Azul' }, { id: '502', value: 'Rojo' }] };
+    assert('variante sin price → products.price (como hoy)', va.unitPrice(noPrice, '502') === 40 && va.variantQty(noPrice, '502') === 1 && !va.hasVariantPrices(noPrice));
+    assert('pack (isBundle) ignora price por fila → products.price', va.unitPrice({ price: 37.99, isBundle: true, dropiItems: [{ id: '1', price: 1 }] }, '1') === 37.99);
+    assert('producto simple sin dropiItems → products.price', va.unitPrice({ price: 12.5 }, undefined) === 12.5);
+    const line = (sel, amount) => auto.buildDropiLines({ items: [{ ...pres, OrderProduct: { amount, selectedDropiId: sel } }] });
+    const x2 = line('x2', 1);
+    assert('Pack x2 → Dropi 156158 SIMPLE × 2, precio × cantidad = 37,99', x2.problems.length === 0 && x2.lines[0].id === 156158 && x2.lines[0].quantity === 2
+      && !x2.lines[0].variationId && Math.round(x2.lines[0].price * x2.lines[0].quantity * 100) / 100 === 37.99, JSON.stringify(x2));
+    const x2b = line('x2', 3);
+    assert('3 × Pack x2 → 6 unidades Dropi, total 113,97', x2b.lines[0].quantity === 6 && Math.round(x2b.lines[0].price * 6 * 100) / 100 === 113.97);
+    const u1 = line('u1', 2);
+    assert('2 × 1 unidad → 2 unidades a 27,99', u1.lines[0].quantity === 2 && u1.lines[0].price === 27.99 && u1.lines[0].id === 156158);
+    assert('presentación inexistente o sin elegir → variant_mismatch (no despacha)', line('zz', 1).problems[0]?.type === 'variant_mismatch' && line(undefined, 1).problems[0]?.type === 'variant_mismatch');
+    const simple = auto.buildDropiLines({ items: [{ id: 5, name: 's', price: 40, dropiProductId: '1001', OrderProduct: { amount: 2 } }] });
+    assert('producto sin variantes intacto: 1001 × 2 a 40', simple.lines[0].id === 1001 && simple.lines[0].quantity === 2 && simple.lines[0].price === 40 && !simple.lines[0].variationId);
+    const { addItemSchema, addItemGuestSchema } = require('../schemaODtos/orderSchema');
+    const forged = { orderId: 1, productId: 97, amount: 1, selectedDropiId: 'x2', price: 0.01 };
+    assert('add-item con price del cliente → rechazado por Joi (usuario e invitado)', Boolean(addItemSchema.validate(forged).error) && Boolean(addItemGuestSchema.validate(forged).error));
+    const { updateProductSchema } = require('../schemaODtos/productSchema');
+    assert('panel: dropiItems admite price/qty/dropiId y rechaza price ≤ 0 o dropiId no numérico',
+      !updateProductSchema.validate({ dropiItems: pres.dropiItems }).error
+      && Boolean(updateProductSchema.validate({ dropiItems: [{ id: 'x', price: 0 }] }).error)
+      && Boolean(updateProductSchema.validate({ dropiItems: [{ id: 'x', dropiId: 'abc' }] }).error));
+  }
+
   out('\n▶ A-stock. Dropi sin dato de stock → null (antes -1)');
   {
     const { normalizeProduct } = require('../integrations/dropi/dropiAdapter');
@@ -534,6 +567,38 @@ async function partB({ schema }) {
   const oVar = await order(await customer(), [[variant, 1, { selectedDropiId: '502' }]]);
   await svc.confirmCod(oVar.id, (await models.Customer.findByPk(oVar.customerId)).userId);
   assert('variante exacta → product id + variation_id', calls.at(-1).products[0].id === 1001 && calls.at(-1).products[0].variation_id === 502);
+
+  out('\n▶ B6-var. Presentaciones con precio propio: el servidor fija el precio y la qty Dropi');
+  {
+    await sequelize.query('ALTER TABLE orders_products DROP CONSTRAINT IF EXISTS orders_products_order_id_product_id_key');
+    const pres = await P({ price: 27.99, costPrice: 4, dropiProductId: '156158', dropiItems: [
+      { id: 'u1', dropiId: '156158', value: '1 unidad', qty: 1, price: 27.99 },
+      { id: 'x2', dropiId: '156158', value: 'Pack x2', qty: 2, price: 37.99 }] });
+    const cV = await customer();
+    const me = { sub: cV.userId, role: 'customer' };
+    const cart = await order(cV, []);
+    // Manipulación: el cliente manda price/unitPriceGross → el servicio no los guarda.
+    const ln = await svc.addItem({ orderId: cart.id, productId: pres.id, amount: 1, selectedDropiId: 'x2', price: 0.01, unitPriceGross: 0.01 }, me);
+    assert('add-item no guarda un precio del cliente (unit_price_gross NULL)', (await models.OrderProduct.findByPk(ln.id)).unitPriceGross === null);
+    const bad = await svc.addItem({ orderId: cart.id, productId: pres.id, amount: 1, selectedDropiId: 'zz' }, me).catch((e) => e);
+    const none = await svc.addItem({ orderId: cart.id, productId: pres.id, amount: 1 }, me).catch((e) => e);
+    assert('presentación inexistente o sin elegir → 400', bad?.output?.statusCode === 400 && none?.output?.statusCode === 400);
+    const n = calls.length;
+    await svc.confirmCod(cart.id, cV.userId);
+    const r = await reload(cart.id);
+    const sent = calls.at(-1);
+    assert('total del pedido = precio del Pack x2 (37,99), no 0,01 ni 27,99', Number(r.total) === 37.99, String(r.total));
+    assert('Dropi: 156158 SIMPLE × 2 y total_order = 37,99', calls.length === n + 1 && sent.products[0].id === 156158 && sent.products[0].quantity === 2 && !sent.products[0].variation_id
+      && Math.round(sent.products[0].price * sent.products[0].quantity * 100) / 100 === 37.99, JSON.stringify(sent?.products));
+    const cU = await customer();
+    const oU = await order(cU, [[pres, 2, { selectedDropiId: 'u1' }]]);
+    const chk = await svc.checkout(oU.id, cU.userId, 0);
+    assert('checkout (DeUna) 2 × 1 unidad → total 55,98', Number((await reload(oU.id)).total) === 55.98 && chk.orderId === oU.id, String((await reload(oU.id)).total));
+    const cS = await customer();
+    const oS = await order(cS, [[good, 1]]);
+    await svc.confirmCod(oS.id, cS.userId);
+    assert('producto sin variantes intacto: total = products.price (40)', Number((await reload(oS.id)).total) === 40);
+  }
   await blocked('sin ciudad verificada', await customer({ city: 'Pueblo Desconocido' }), [[good, 1]], 'incomplete_address');
   await blocked('teléfono inválido', await customer({ phone: '123', phoneTwo: null }), [[good, 1]], 'incomplete_address');
   await blocked('margen insuficiente (coste alto)', await customer(), [[await P({ costPrice: 22 }), 1]], 'margin_insufficient');

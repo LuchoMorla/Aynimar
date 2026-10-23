@@ -3,7 +3,11 @@
 /**
  * @typedef {{ label: string, image?: string, stock?: number }} VariantValue
  * @typedef {{ option: string, values: VariantValue[] }} VariantGroup
- * @typedef {{ id: string, value?: string, name?: string, qty?: number }} DropiItem
+ * @typedef {{ id: string, value?: string, name?: string, qty?: number, price?: number, dropiId?: string }} DropiItem
+ *   Presentación (isBundle=false): `id` es la clave que elige el cliente (selectedDropiId);
+ *   `price` (opcional) sustituye a products.price; `qty` (opcional) = unidades Dropi por
+ *   unidad vendida; `dropiId` (opcional) = producto Dropi a despachar cuando varias
+ *   presentaciones comparten el mismo ID (p. ej. «1 unidad» y «Pack x2»).
  * @typedef {{ id: string, label: string }} NormalizedVariant
  * @typedef {{ productId: number, productName: string, isBundle: boolean, variants: NormalizedVariant[], dispatchDescription: string }} ProductPayload
  */
@@ -136,7 +140,42 @@ function buildDropiItemsFromVariants(variantsJson, parentExternalId) {
   return items.length > 0 ? items : [{ id: String(parentExternalId), qty: 1 }];
 }
 
+/**
+ * Entrada de dropiItems elegida por el cliente (solo productos con variantes; nunca packs).
+ * @returns {DropiItem|null}
+ */
+function selectedVariant(product, selectedDropiId) {
+  if (product?.isBundle === true || selectedDropiId == null || selectedDropiId === '') return null;
+  const items = Array.isArray(product?.dropiItems) ? product.dropiItems : [];
+  return items.find((d) => d && String(d.id) === String(selectedDropiId)) || null;
+}
+
+/**
+ * Precio unitario AUTORITATIVO de una línea: el `price` de la variante elegida si lo
+ * trae (> 0); si no, products.price. Nunca usa un precio enviado por el cliente.
+ */
+function unitPrice(product, selectedDropiId) {
+  const p = Number(selectedVariant(product, selectedDropiId)?.price);
+  return Number.isFinite(p) && p > 0 ? p : product.price;
+}
+
+/** Unidades Dropi por unidad vendida de la variante elegida (1 si no la define). */
+function variantQty(product, selectedDropiId) {
+  const q = selectedVariant(product, selectedDropiId)?.qty;
+  return Number.isInteger(q) && q >= 1 ? q : 1;
+}
+
+/** true si alguna variante (no pack) define su propio precio. */
+function hasVariantPrices(product) {
+  return product?.isBundle !== true && Array.isArray(product?.dropiItems) &&
+    product.dropiItems.some((d) => d && d.price != null);
+}
+
 module.exports = {
+  selectedVariant,
+  unitPrice,
+  variantQty,
+  hasVariantPrices,
   parseVariantGroups,
   resolveVariantLabel,
   buildDispatchDescription,

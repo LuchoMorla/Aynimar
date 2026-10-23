@@ -20,8 +20,8 @@ const PUBLIC_PRODUCT_FIELDS = [
 
 // Proyección a la forma pública. Se aplica sobre el objeto ya leído (no solo vía
 // `attributes` en SQL) para que un campo interno nunca salga aunque cambie la query.
-// dropiItems: la tienda necesita {id, value, qty} para el selector de variantes y
-// el resumen de pack (selectedDropiId vuelve en el carrito); nada más del JSONB sale.
+// dropiItems: la tienda necesita {id, value, qty, price} para el selector de variantes
+// (precio por presentación) y el resumen de pack; dropiId (proveedor) NO sale.
 function toPublicProduct(product) {
   const row = product && typeof product.toJSON === 'function' ? product.toJSON() : product;
   const out = {};
@@ -30,7 +30,7 @@ function toPublicProduct(product) {
   }
   if (Array.isArray(out.dropiItems)) {
     out.dropiItems = out.dropiItems.map((item) => ({
-      id: item?.id, value: item?.value, qty: item?.qty,
+      id: item?.id, value: item?.value, qty: item?.qty, price: item?.price,
     }));
   }
   if (row.category) {

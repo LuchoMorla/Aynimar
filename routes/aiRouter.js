@@ -14,6 +14,7 @@ const reviews                 = require('../Services/creativeReviewService');
 const ctoInbox                = require('../Services/ctoInboxService');
 const socialPub               = require('../Services/socialPublisherService');
 const { callTelegram }        = require('../utils/telegramNotify');
+const { unitPrice, hasVariantPrices } = require('../utils/variantAdapter');
 const {
   optimizeProductCopy,
   NEURO_SYSTEM_PROMPT,
@@ -787,14 +788,18 @@ async function executeTool(name, args, clientActions, estadoActualizado, ctx = {
       const product = Number.isSafeInteger(id) && id > 0
         ? await models.Product.findOne({
             where: { id, isDeleted: false, ...shopVisible(ctx.channel) },
-            attributes: ['id', 'name', 'price', 'stock', 'description', 'image'],
+            attributes: ['id', 'name', 'price', 'stock', 'description', 'image', 'isBundle', 'dropiItems'],
           })
         : null;
       if (!product) return { error: 'Producto no encontrado. Verifica el ID.' };
+      const presentaciones = hasVariantPrices(product)
+        ? product.dropiItems.map((d) => ({ nombre: d.value || d.id, precio: unitPrice(product, d.id) }))
+        : undefined;
       return {
         id:          product.id,
         nombre:      product.name,
         precio:      product.price,
+        ...(presentaciones ? { presentaciones } : {}),
         stock:       product.stock ?? 'disponible',
         descripcion: product.description,
         imagen:      product.image || null,

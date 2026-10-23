@@ -29,13 +29,16 @@ const attributes     = Joi.object().allow(null);     // JSONB key-value metadata
 // Bundle: one Aynimar product maps to multiple Dropi product IDs dispatched in one order.
 // Bundle items OR variant options — shared field, mode determined by isBundle.
 // Bundle:   [{ id, qty }]
-// Variants: [{ id, value, name? }]
+// Variants: [{ id, value, name?, price?, qty?, dropiId? }] — price/qty por presentación
+//   (p. ej. «Pack x2»); dropiId = producto Dropi a despachar si difiere de `id`.
 const dropiItems = Joi.array()
   .items(Joi.object({
-    id:    Joi.string().required(),
-    qty:   Joi.number().integer().min(1).optional(),
-    value: Joi.string().allow('', null).optional(),
-    name:  Joi.string().allow('', null).optional(),
+    id:      Joi.string().required(),
+    qty:     Joi.number().integer().min(1).optional(),
+    value:   Joi.string().allow('', null).optional(),
+    name:    Joi.string().allow('', null).optional(),
+    price:   Joi.number().positive().precision(2).allow(null).optional(),
+    dropiId: Joi.string().pattern(/^\d{1,12}$/).allow(null).optional(),
   }))
   .allow(null);
 const isBundle = Joi.boolean().allow(null);

@@ -377,11 +377,13 @@ async function decide(id, body, userId) {
         const next = params.dropiProductId.trim();
         const prev = dropiIdOf(p) || null;
         const items = Array.isArray(p.dropiItems) ? p.dropiItems : [];
-        const matched = prev && items.some((x) => String(x?.id) === prev);
+        // Presentaciones: el ID Dropi vive en dropiId; `id` es la clave que eligió el cliente.
+        const matched = prev && items.some((x) => String(x?.dropiId ?? x?.id) === prev);
         if (!matched && p.isBundle === true && items.length) {
           throw boom.badData('producto pack: el ID anterior no está en sus componentes; edita el pack manualmente');
         }
-        const dropiItems = matched ? items.map((x) => (String(x?.id) === prev ? { ...x, id: next } : x)) : [{ id: next, qty: 1 }];
+        const swap = (x) => (x?.dropiId != null ? { ...x, dropiId: next } : { ...x, id: next });
+        const dropiItems = matched ? items.map((x) => (String(x?.dropiId ?? x?.id) === prev ? swap(x) : x)) : [{ id: next, qty: 1 }];
         Object.assign(recorded, { dropiProductId: next, previousDropiProductId: prev, previousDropiItems: p.dropiItems ?? null });
         await p.update({ dropiProductId: next, dropiItems }, { transaction });
       }
