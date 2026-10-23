@@ -91,12 +91,22 @@ publicación (POST/PATCH, `[A-Za-z0-9_.-]{1,64}`, p. ej. `s1_oct26` del calendar
 | Variable | Red | Secreta |
 |---|---|---|
 | `SOCIAL_ALLOWED_NETWORKS` | lista blanca | No |
+| `SOCIAL_AUTO_APPROVE_ORGANIC` (`true` activa; por defecto apagado) | autoaprobación de campañas `content_type=organico` | No |
 | `SOCIAL_NETWORK_CHANNELS`, `SOCIAL_VIDEO_HOSTS`, `SOCIAL_RETRY_BASE_MS`, `SOCIAL_WORKER_INTERVAL_MS`, `SOCIAL_LOCK_TIMEOUT_MS`, `SOCIAL_MAX_LATE_MS` | ajustes | No |
 | `META_SYSTEM_USER_TOKEN` (+ `META_IG_USER_ID`, `META_PAGE_ID`, `META_GRAPH_VERSION`) | Instagram / Facebook | Token sí |
 | `BUFFER_API_KEY` (+ `BUFFER_CHANNEL_TIKTOK`, `BUFFER_CHANNEL_YOUTUBE`) | TikTok / YouTube vía Buffer | Clave sí |
 | `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` (+ `YOUTUBE_PRIVACY`, por defecto `private`) | YouTube API propia | Secret y refresh sí |
 
 Las cargan el propietario en Railway (primero staging), nunca un agente.
+
+### Autoaprobación orgánica
+
+Con `SOCIAL_AUTO_APPROVE_ORGANIC=true`, `POST /pieces/:id/review` de una pieza cuya campaña tiene
+`contentType: "organico"` aprueba el paquete en el acto (evento `approved`, actor `auto:organico`)
+por el mismo `decidePackage` que el botón: hash del paquete, encolado una sola vez, UTM y pausa global
+(`social.publisher.enabled`, `/stop`) intactos. El propietario sigue recibiendo vídeo y fichas en
+Telegram, sin botones. Otras campañas siguen necesitando el botón Aprobar. Las redes con vía
+`manual` quedan en `manual_required` (sin kit automático en este modo).
 
 ## Pruebas
 

@@ -142,6 +142,12 @@ async function partA() {
   const { PublishError } = require('../integrations/social/http');
   const svc = require('../Services/socialPublisherService');
 
+  out('\n▶ A0. Autoaprobación orgánica (interruptor apagado por defecto)');
+  const org = { campaign_content_type: 'Organico' };
+  assert('sin SOCIAL_AUTO_APPROVE_ORGANIC → nunca autoaprueba', !svc.autoApprovesOrganic(org, {}));
+  assert('interruptor ON + campaña orgánica → autoaprueba', svc.autoApprovesOrganic(org, { SOCIAL_AUTO_APPROVE_ORGANIC: 'true' }) && svc.autoApprovesOrganic({ campaign_content_type: 'orgánico' }, { SOCIAL_AUTO_APPROVE_ORGANIC: 'true' }));
+  assert('interruptor ON + campaña no orgánica / valor ≠ "true" → no', !svc.autoApprovesOrganic({ campaign_content_type: 'reel' }, { SOCIAL_AUTO_APPROVE_ORGANIC: 'true' }) && !svc.autoApprovesOrganic({}, { SOCIAL_AUTO_APPROVE_ORGANIC: 'true' }) && !svc.autoApprovesOrganic(org, { SOCIAL_AUTO_APPROVE_ORGANIC: '1' }));
+
   out('\n▶ A1. Hash del paquete y zona horaria');
   const piece = { ref: 'v82xabc', version: 1, video_sha256: VIDEO_SHA };
   const posts = [
@@ -601,6 +607,39 @@ async function partB({ raw, schema }) {
     await msg('/estado');
     await until(async () => tg.slice(n).some((c) => c.method === 'sendMessage'));
     assert('/estado incluye la cola social y el interruptor del publicador', tg.slice(n).some((c) => c.method === 'sendMessage' && c.body.text.includes('Cola social:') && c.body.text.includes('published=') && c.body.text.includes('social.publisher.enabled): ON')));
+
+    out('\n▶ B10. Autoaprobación orgánica (SOCIAL_AUTO_APPROVE_ORGANIC)');
+    const oc = await svc.createCampaign({ productId: 82, name: 'v82 orgánico', contentType: 'organico' });
+    const orgPiece = async (k2) => {
+      const p = await svc.createPiece(oc.id, { ref: `v82xorg${k2}`, version: 1, videoSha256: VIDEO_SHA, videoUrl: VIDEO_URL, width: 1080, height: 1920, durationS: 14, bytes: VIDEO.length });
+      const post = await svc.addPost(p.id, { network: 'mock', scheduledAt: when(-1), caption: `orgánico ${k2}`, utmCampaign: 'v82_oct26' });
+      return { id: p.id, post };
+    };
+    const O1 = await orgPiece(1);
+    const o1 = await svc.sendForReview(O1.id, 'test');
+    assert('interruptor OFF (por defecto): campaña orgánica queda pending con botones', !o1.autoApproved && (await review(o1.ref)).status === 'pending' && tg.at(-1).body.reply_markup?.inline_keyboard?.[0]?.length === 3);
+    process.env.SOCIAL_AUTO_APPROVE_ORGANIC = 'true';
+    try {
+      const NO = await piece('no orgánica con interruptor ON');
+      assert('interruptor ON + campaña no orgánica → pending (requiere botón)', (await review(NO.ref)).status === 'pending');
+      await setEnabled(false);
+      const O2 = await orgPiece(2);
+      n = tg.length;
+      const o2 = await svc.sendForReview(O2.id, 'cto');
+      const op = (await postsOf(O2.id))[0];
+      const last = tg.at(-1);
+      assert('interruptor ON + orgánica → aprobada y encolada (hash aprobado = hash enviado)', o2.autoApproved === true && o2.queued === 1 && (await review(o2.ref)).status === 'approved' && op.status === 'queued' && op.approved_hash === o2.packageHash);
+      assert('Telegram recibe vídeo + ficha + aviso sin botones', tg.slice(n).some((c) => c.method === 'sendVideo') && last.body.text.includes('Auto-aprobado') && !last.body.reply_markup);
+      assert('historial: sent + approved con actor auto:organico', (await sel('SELECT event, actor FROM social_approval_events WHERE piece_id = :p ORDER BY id', { p: O2.id })).map((e) => `${e.event}:${e.actor}`).join() === 'sent:cto,approved:auto:organico');
+      assert('UTM orgánico con la campaña del calendario', op.utm_link.includes('utm_medium=organic&utm_campaign=v82_oct26&utm_content=v82xorg2'));
+      assert('reenviar el paquete ya aprobado → 409 (no hay borradores)', (await callApi('POST', `/pieces/${O2.id}/review`)).status === 409);
+      await worker.runOnce({ notify: async () => {} });
+      assert('pausa global /stop → la autoaprobada no sale', (await postsOf(O2.id))[0].status === 'queued' && pubsOf(op.id) === 0);
+      await setEnabled(true);
+      await worker.runOnce({ notify: async () => {} });
+      await worker.runOnce({ notify: async () => {} });
+      assert('publicador ON → sale exactamente una vez', (await postsOf(O2.id))[0].status === 'published' && pubsOf(op.id) === 1);
+    } finally { delete process.env.SOCIAL_AUTO_APPROVE_ORGANIC; }
   } finally {
     if (server) server.close();
     await sequelize.close().catch(() => {});

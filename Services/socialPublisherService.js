@@ -94,13 +94,23 @@ function urlHasSha(url, sha) {
   try { return !!sha && decodeURIComponent(new URL(url).pathname).toLowerCase().includes(String(sha).toLowerCase()); } catch { return false; }
 }
 
+/**
+ * Autoaprobación orgánica (apagada por defecto): con SOCIAL_AUTO_APPROVE_ORGANIC=true, un paquete
+ * de una campaña con content_type 'organico' se aprueba al enviarse a revisión (actor auto:organico).
+ * Mismo camino que el botón Aprobar: hash del paquete, encolado una vez, pausa global y UTM intactos.
+ */
+const ORGANIC_TYPES = ['organico', 'orgánico', 'organic'];
+function autoApprovesOrganic(piece, env = process.env) {
+  return env.SOCIAL_AUTO_APPROVE_ORGANIC === 'true' && ORGANIC_TYPES.includes(String(piece?.campaign_content_type || '').trim().toLowerCase());
+}
+
 const isPackageRef = (ref) => /^s\d+x/.test(String(ref || ''));
 const newReviewRef = (pieceId) => `s${pieceId}x${Date.now().toString(36)}${crypto.randomBytes(2).toString('hex')}`;
 
 // ── Lectura del paquete ──────────────────────────────────────────────────────
 
 async function loadPackage(pieceId, t, { lock = false } = {}) {
-  const [piece] = await select(`SELECT p.*, c.product_id FROM social_pieces p JOIN social_campaigns c ON c.id = p.campaign_id WHERE p.id = :id${lock ? ' FOR UPDATE OF p' : ''}`, { id: pieceId }, t);
+  const [piece] = await select(`SELECT p.*, c.product_id, c.content_type AS campaign_content_type FROM social_pieces p JOIN social_campaigns c ON c.id = p.campaign_id WHERE p.id = :id${lock ? ' FOR UPDATE OF p' : ''}`, { id: pieceId }, t);
   if (!piece) return { piece: null, posts: [] };
   const posts = await select('SELECT * FROM social_posts WHERE piece_id = :id ORDER BY network', { id: pieceId }, t);
   return { piece, posts };
@@ -298,6 +308,15 @@ async function sendForReview(pieceId, actor, { callTelegram = require('../utils/
     }
   }
   const nets = posts.filter((x) => x.status === 'draft').map((p) => `${p.network} ${localTime(p.scheduled_at, p.timezone)}`).join('\n');
+  if (autoApprovesOrganic(piece)) {
+    // El propietario ya vio vídeo y fichas; sin botones. /stop sigue pausando la cola.
+    const d = await decidePackage(ref, 'ap', null, 'auto:organico');
+    const text = d.changed
+      ? `🤖 Auto-aprobado (contenido orgánico, SOCIAL_AUTO_APPROVE_ORGANIC). Programadas ${d.queued.length}, manuales ${d.manual.length}. Salen a su hora si el publicador está ON; /stop pausa todo.`
+      : '⚠️ No se auto-aprobó (el paquete cambió o ya estaba decidido). Reenvíalo a revisión.';
+    await callTelegram('sendMessage', { chat_id: chat, reply_to_message_id: v.message_id, text: `Ref: ${ref}\nPaquete ${hash.slice(0, 12)}\n${nets}\n\n${text}` });
+    return { ref, packageHash: hash, posts: posts.length, autoApproved: d.changed, queued: (d.queued || []).length, manual: (d.manual || []).length };
+  }
   const final = await callTelegram('sendMessage', {
     chat_id: chat, reply_to_message_id: v.message_id, reply_markup: { inline_keyboard: [buttons] },
     text: `Ref: ${ref}\nPaquete ${hash.slice(0, 12)}\n${nets}\n\nAprobar publica EXACTAMENTE este vídeo, textos, redes y horarios. Cualquier cambio posterior anula la aprobación.`,
@@ -316,7 +335,7 @@ const ACTION_STATUS = { ap: 'approved', rj: 'rejected', ch: 'changes_requested' 
  *  - aprobar encola SOLO las publicaciones 'draft' de esa pieza (vía api/buffer) o las
  *    marca manual_required (vía manual). Rechazar / pedir cambios nunca encola.
  */
-async function decidePackage(ref, action, adminId) {
+async function decidePackage(ref, action, adminId, actor = adminId) {
   const status = ACTION_STATUS[action];
   if (!status) throw new Error(`acción desconocida: ${action}`);
   return sequelize.transaction(async (t) => {
@@ -331,12 +350,12 @@ async function decidePackage(ref, action, adminId) {
     if (action === 'ap' && hash !== row.package_hash) {
       await sequelize.query('UPDATE creative_reviews SET superseded_at = now(), updated_at = now() WHERE ref = :ref', { replacements: { ref }, transaction: t });
       await sequelize.query("UPDATE social_pieces SET approval_status = 'invalidated', updated_at = now() WHERE id = :id", { replacements: { id: piece.id }, transaction: t });
-      await addEvent(t, { pieceId: piece.id, reviewRef: ref, event: 'approve_rejected_stale', hash, actor: adminId, note: 'el paquete cambió después de enviarse' });
+      await addEvent(t, { pieceId: piece.id, reviewRef: ref, event: 'approve_rejected_stale', hash, actor, note: 'el paquete cambió después de enviarse' });
       return { changed: false, stale: true, review };
     }
     await sequelize.query('UPDATE creative_reviews SET status = :status, decided_at = now(), decided_by = :adminId, updated_at = now() WHERE ref = :ref', { replacements: { status, adminId, ref }, transaction: t });
     await sequelize.query('UPDATE social_pieces SET approval_status = :status, approved_hash = :ah, updated_at = now() WHERE id = :id', { replacements: { status, ah: action === 'ap' ? hash : null, id: piece.id }, transaction: t });
-    await addEvent(t, { pieceId: piece.id, reviewRef: ref, event: status, hash, actor: adminId });
+    await addEvent(t, { pieceId: piece.id, reviewRef: ref, event: status, hash, actor });
     review.status = status;
     if (action !== 'ap') return { changed: true, review, queued: [], manual: [] };
     const moved = await returning(
@@ -400,7 +419,7 @@ async function queueSummary() {
 }
 
 module.exports = {
-  DEFAULT_TZ, packageHash, toUtc, localTime, isValidTimeZone, isAllowedVideoUrl, isPackageRef, newReviewRef,
+  DEFAULT_TZ, packageHash, toUtc, autoApprovesOrganic, localTime, isValidTimeZone, isAllowedVideoUrl, isPackageRef, newReviewRef,
   loadPackage, createCampaign, listCampaigns, createPiece, addPost, updatePost, sendForReview, decidePackage,
   calendar, statusPanel, queueSummary, isEnabled, setEnabled, urlHasSha, ACTION_STATUS, PUBLISHER_KEY,
 };
