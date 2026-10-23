@@ -12,6 +12,7 @@ const { enqueueVideo }        = require('../libs/videoQueue');
 const { newRef }              = require('../integrations/videoService');
 const reviews                 = require('../Services/creativeReviewService');
 const ctoInbox                = require('../Services/ctoInboxService');
+const opsRequests             = require('../Services/telegramOpsRequestService');
 const socialPub               = require('../Services/socialPublisherService');
 const { callTelegram }        = require('../utils/telegramNotify');
 const { unitPrice, hasVariantPrices } = require('../utils/variantAdapter');
@@ -1356,6 +1357,8 @@ router.post('/telegram/webhook', async (req, res) => {
       return;
     }
     if (verdict.action === 'cq') await ctoInbox.handleCallback(cq, verdict.ref);
+    // 'en' = encargos al CTO/CEO (menú del dueño).
+    else if (verdict.action === 'en') await opsRequests.handleCallback(cq, verdict.ref);
     // Ref o<id> = confirmación de envío de un pedido a Dropi (modo supervisado).
     else if (/^o\d+$/.test(verdict.ref)) {
       await require('../Services/orderAutomationService').handleTelegramCallback(cq, verdict, answerCallback)
@@ -1382,6 +1385,8 @@ router.post('/telegram/webhook', async (req, res) => {
   if (update.message && String(msg.from?.id) === String(allowedChatId)) {
     const cmd = /^\/(estado|stop|reanudar)(?:@\w+)?$/i.exec(text);
     if (cmd) { await handleAdminCommand(cmd[1].toLowerCase()); return; }
+    // /start /menu /encargo /encargos /cancelar: menú del dueño y encargos al CTO/CEO.
+    if (await opsRequests.handleCommand(msg, text)) return;
     const replied = msg.reply_to_message;
     if (replied?.from?.is_bot && text && !/^\d{6}$/.test(text)) {
       const qid = ctoInbox.questionId(replied.text || replied.caption);
@@ -1389,6 +1394,8 @@ router.post('/telegram/webhook', async (req, res) => {
       const ref = /Ref: ([A-Za-z0-9_-]{1,32})/.exec(replied.caption || replied.text || '')?.[1];
       if (ref && await saveChangeRequestSafe(ref, text, msg.message_id)) return;
     }
+    // Tras «💬 Pedir al CTO / CEO», el siguiente texto es el encargo (6 dígitos solos → 2FA).
+    if (await opsRequests.handleText(msg, text)) return;
   }
 
   const codeMatch = text.match(/\b(\d{6})\b/);

@@ -4,7 +4,7 @@
   "description": "circular economy and recycling application",
   "main": "index.js",
   "scripts": {
-    "test": "node scripts/smoke-test.js && node scripts/telegram-security-test.js && node scripts/finance-test.js && node scripts/video-engine-test.js && node scripts/order-idor-test.js && node scripts/telegram-approvals-test.js && node scripts/cto-inbox-test.js && node scripts/catalog-health-test.js && node scripts/order-alerts-test.js && node scripts/supplier-candidates-test.js && node scripts/coupon-auth-test.js && node scripts/hub-adapter-test.js && node scripts/track-lookup-test.js && node scripts/social-publisher-test.js && node scripts/pricing-quote-test.js",
+    "test": "node scripts/smoke-test.js && node scripts/telegram-security-test.js && node scripts/finance-test.js && node scripts/video-engine-test.js && node scripts/order-idor-test.js && node scripts/telegram-approvals-test.js && node scripts/cto-inbox-test.js && node scripts/catalog-health-test.js && node scripts/order-alerts-test.js && node scripts/supplier-candidates-test.js && node scripts/coupon-auth-test.js && node scripts/hub-adapter-test.js && node scripts/track-lookup-test.js && node scripts/social-publisher-test.js && node scripts/pricing-quote-test.js && node scripts/telegram-ops-requests-test.js",
     "smoke-test": "node scripts/smoke-test.js",
     "health-check": "node scripts/health-check.js",
     "post-deploy": "node scripts/post-deploy.js",

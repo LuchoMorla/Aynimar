@@ -42,6 +42,14 @@ Para que el CTO (sin acceso entrante) pregunte y lea respuestas. Sin variables n
 - **Leer**: `railway run -e staging -s Aynimar-staging -- node scripts/cto-ask.js inbox [after]` → `GET /api/v1/ai/cto/inbox?after=<id>` en `BACKEND_URL` o, si no existe (staging), `https://$RAILWAY_PUBLIC_DOMAIN`. Header `X-CTO-Key` = HMAC-SHA256(`TELEGRAM_WEBHOOK_SECRET`, `aynimar-cto-inbox-v1`) en hex, comparado en tiempo constante. Sin secreto → 503; clave inválida → 403; `after` inválido → 400. Rotar el secreto invalida la clave y los botones.
 - Pruebas: `scripts/cto-inbox-test.js` (incluido en `npm test`).
 
+## Encargos al CTO / CEO (menú del dueño)
+
+Mismo puente que Pescafast, con el bot y las variables actuales (sin variables nuevas). `Services/telegramOpsRequestService.js`, tabla `telegram_ops_requests` (migración aditiva `20261023000001`).
+
+- **Bot** (solo `message` nuevo del admin, from y chat; botones `mk:en:<new|cto|ceo|list>:<hmac16>`): `/start` o `/menu` muestran «💬 Pedir al CTO / CEO» y «📋 Mis encargos». Tras «Pedir», el siguiente texto es el encargo (por defecto CTO; 🛠/🧭 para cambiar; caduca a los 30 min; estado en `app_settings` clave `ops.encargo.pending`). `/encargo [texto]`, `/encargos` (últimos 5), `/cancelar`. Respuesta «📨 Recibido (#id)…». `request_id = tg-<chat>-<message_id>`: un reintento del webhook no duplica. Prioridad: comandos existentes → respuestas a `Pregunta CTO-`/`Ref:` → encargo pendiente → 2FA; un texto de **solo 6 dígitos** nunca es encargo. Notas de voz: se pide texto (el bot no transcribe). El texto nunca va a logs.
+- **Equipo** (sin API): `ops-ceo-cto/tools/encargos-aynimar.sh [listar] | responder ID "texto"` lee las credenciales de `railway variables --kv` por tubería, en memoria; `responder` envía con el bot de producción y después marca `respondida` con la fila bloqueada (sin reenvíos; si Telegram falla no se marca).
+- Pruebas: `scripts/telegram-ops-requests-test.js` (incluido en `npm test`).
+
 ## Variables nuevas
 
 | Variable | Entorno | Secreta |

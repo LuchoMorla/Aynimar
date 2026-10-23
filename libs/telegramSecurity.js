@@ -23,8 +23,9 @@ const WEBHOOK_SECRET_RE = /^[A-Za-z0-9_-]{1,256}$/;
 const KNOWN_UPDATE_TYPES = ['message', 'edited_message', 'channel_post', 'callback_query'];
 
 // Acciones admitidas en callback_data: aprobar, rechazar, solicitar cambios,
-// y 'cq' = opción de una pregunta del CTO (ref "<qid>_<n>", Services/ctoInboxService.js).
-const CALLBACK_ACTIONS = ['ap', 'rj', 'ch', 'cq'];
+// 'cq' = opción de una pregunta del CTO (ref "<qid>_<n>", Services/ctoInboxService.js)
+// y 'en' = encargos al CTO/CEO (ref new|cto|ceo|list, Services/telegramOpsRequestService.js).
+const CALLBACK_ACTIONS = ['ap', 'rj', 'ch', 'cq', 'en'];
 // mk:<accion>:<ref>:<firma> — ref = id opaco de la autorización (F2).
 const CALLBACK_RE = /^mk:([a-z]{2}):([A-Za-z0-9_-]{1,32}):([A-Za-z0-9_-]{16})$/;
 
