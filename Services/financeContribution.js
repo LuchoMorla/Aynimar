@@ -235,4 +235,60 @@ function classifyProfitability(result, targetMargin = 0.30) {
 
 const pct = (x) => (x === null || x === undefined ? '?' : `${Math.round(x * 1000) / 10}%`);
 
-module.exports = { contributionPerOrder, minProfitablePrice, simulatePrices, classifyProfitability, pct };
+/**
+ * Política de precio oficial (ops-ceo-cto/finanzas/formula-precio.md, CEO-008):
+ *   PVP = [coste + flete·(1+r)/(1−r)] / (1 − M) × (1 + IVA), redondeado hacia arriba a X,99.
+ * Defaults en código (cambiar variables en Railway redespliega main); un valor
+ * inválido en el entorno se ignora y queda el default.
+ */
+function envRate(name, def, { allowOne = false } = {}) {
+  const raw = process.env[name];
+  const v = Number(raw);
+  if (raw === undefined || raw === '' || !Number.isFinite(v) || v < 0 || (allowOne ? v > 1 : v >= 1)) return def;
+  return v;
+}
+function getPricingPolicy() {
+  return {
+    targetMargin: envRate('PRICING_TARGET_MARGIN', 0.30),
+    rejectRate: envRate('PRICING_REJECT_RATE', 0.30),
+    vatOnSales: process.env.PRICING_VAT_ON_SALES !== 'false',
+    codCommission: envRate('PRICING_COD_COMMISSION', 0),
+  };
+}
+
+/** Redondeo comercial hacia ARRIBA al siguiente X,99 (nunca baja del piso). = a_99 de formula_precio.py */
+const roundUp99 = (p) => round2(Math.ceil(Math.round((p + 0.01) * 1e6) / 1e6) - 0.01);
+
+/**
+ * Cotización sin estado para el panel: PVP mínimo y recomendado (X,99) con la
+ * política vigente, y margen/contribución al PVP dado (o al recomendado si no
+ * llega). Contribución = por pedido DESPACHADO (incluye el reparto de rechazos).
+ * Nunca escribe nada.
+ */
+function quotePrice({ coste, flete, pvp }) {
+  const policy = getPricingPolicy();
+  const taxRate = policy.vatOnSales ? TAX_RATE : 0;
+  const base = {
+    qty: 1, cost: coste, costIncludesVat: false, shipping: flete,
+    returnRate: policy.rejectRate, returnCost: flete, commissionRate: policy.codCommission, taxRate,
+  };
+  const min = minProfitablePrice({ ...base, targetMargin: policy.targetMargin });
+  const minPvp = min.valid ? min.minPvp : null;
+  const recommendedPvp = minPvp === null ? null : roundUp99(minPvp);
+  const evaluatedPvp = pvp ?? recommendedPvp;
+  const c = evaluatedPvp ? contributionPerOrder({ ...base, pvp: evaluatedPvp }) : null;
+  return {
+    policy: { ...policy, taxRate },
+    minPvp,
+    recommendedPvp,
+    evaluatedPvp,
+    marginOnNet: c ? c.marginOnNet : null,
+    contributionPerOrder: c ? c.contribution : null,
+    warnings: min.warnings,
+  };
+}
+
+module.exports = {
+  contributionPerOrder, minProfitablePrice, simulatePrices, classifyProfitability, pct,
+  getPricingPolicy, roundUp99, quotePrice,
+};
