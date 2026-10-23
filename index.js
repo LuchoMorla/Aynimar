@@ -260,6 +260,8 @@ const server = app.listen(puerto, '0.0.0.0', () => {
 
   notifyDeployHealth();   // deploy health report to Telegram on every Railway restart
   registerTelegramWebhook(); // non-blocking — failures are logged, never crash the server
+  // Cola social en Postgres: solo arranca si SOCIAL_ALLOWED_NETWORKS autoriza alguna red.
+  require('./workers/socialPublishWorker').start();
 });
 
 server.on('error', (err) => {

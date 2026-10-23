@@ -72,11 +72,13 @@ async function callTelegram(method, payload) {
   const token = getTelegramToken();
   if (!token) return null;
   try {
+    // FormData (subida de archivo, p. ej. sendVideo con bytes) → multipart y timeout largo.
+    const isForm = payload instanceof FormData;
     const resp = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(payload),
-      signal:  AbortSignal.timeout(15000),
+      headers: isForm ? undefined : { 'Content-Type': 'application/json' },
+      body:    isForm ? payload : JSON.stringify(payload),
+      signal:  AbortSignal.timeout(isForm ? 120000 : 15000),
     });
     const data = await resp.json().catch(() => ({}));
     if (!data.ok) {

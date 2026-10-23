@@ -34,13 +34,19 @@ async function decide(ref, action, adminId) {
   return { changed: count === 1, review };
 }
 
-/** Guarda el texto de cambios solo si la pieza está en changes_requested. */
+/**
+ * Guarda el texto de cambios (changes_requested) o el motivo del rechazo (rejected).
+ * Nunca en pending/approved. Dos UPDATE condicionados en vez de IN para mantener el WHERE simple.
+ */
 async function saveChangeRequest(ref, text) {
-  const [count] = await models.CreativeReview.update(
-    { changeRequest: String(text).slice(0, 2000) },
-    { where: { ref, status: 'changes_requested' } }
-  );
-  return count === 1;
+  for (const status of ['changes_requested', 'rejected']) {
+    const [count] = await models.CreativeReview.update(
+      { changeRequest: String(text).slice(0, 2000) },
+      { where: { ref, status } }
+    );
+    if (count === 1) return true;
+  }
+  return false;
 }
 
 function latest(limit = 10) {

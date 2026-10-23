@@ -87,6 +87,8 @@ CR.findByPk = async (ref) => (store.has(ref) ? { ...store.get(ref) } : null);
 CR.findAll = async ({ limit }) => [...store.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
 models.AppSetting.findOne = async ({ where }) => (settings.has(where.key) ? { key: where.key, value: settings.get(where.key) } : null);
 models.AppSetting.upsert = async ({ key, value }) => { settings.set(key, value); return [{}]; };
+// Cola social (SQL directo): sin BD en esta suite; se prueba en scripts/social-publisher-test.js.
+require('../Services/socialPublisherService').queueSummary = async () => 'vacía';
 
 const sec = require('../libs/telegramSecurity');
 const vs = require('../integrations/videoService');
@@ -259,9 +261,9 @@ async function main() {
     await post(msg('/reanudar', { from: 555555555, chat: 555555555 }));
     assert('/estado y /reanudar desde otro chat → sin respuesta ni cambios', since(n).length === 0 && !settings.has('social.enabled'));
     await post(msg('/reanudar'));
-    assert('/reanudar (admin) → social.enabled = true', settings.get('social.enabled') === 'true');
+    assert('/reanudar (admin) → social.enabled = true y social.publisher.enabled = true', settings.get('social.enabled') === 'true' && settings.get('social.publisher.enabled') === 'true');
     await post(msg('/stop'));
-    assert('/stop (admin) → social.enabled = false', settings.get('social.enabled') === 'false');
+    assert('/stop (admin) → social.enabled = false y social.publisher.enabled = false', settings.get('social.enabled') === 'false' && settings.get('social.publisher.enabled') === 'false');
     assert('cambio del interruptor queda en el log', logs.some((l) => l.includes('interruptor de publicación → ON')) && logs.some((l) => l.includes('interruptor de publicación → OFF')));
     await post(msg('/stop', { from: 555555555, chat: 555555555 }));
     await post(msg('/reanudar', { from: 555555555, chat: ADMIN }));

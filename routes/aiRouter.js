@@ -12,6 +12,7 @@ const { enqueueVideo }        = require('../libs/videoQueue');
 const { newRef }              = require('../integrations/videoService');
 const reviews                 = require('../Services/creativeReviewService');
 const ctoInbox                = require('../Services/ctoInboxService');
+const socialPub               = require('../Services/socialPublisherService');
 const { callTelegram }        = require('../utils/telegramNotify');
 const {
   optimizeProductCopy,
@@ -1224,8 +1225,10 @@ function publishKit(r) {
 
 async function handleReviewCallback(cq, { action, ref }) {
   let result;
+  // Refs 's<pieza>x…' = paquete del publicador social (vídeo + redes + textos + horarios).
+  const isPackage = socialPub.isPackageRef(ref);
   try {
-    result = await reviews.decide(ref, action, cq.from.id);
+    result = isPackage ? await socialPub.decidePackage(ref, action, cq.from.id) : await reviews.decide(ref, action, cq.from.id);
   } catch (err) {
     console.error(`[Telegram Webhook] no se pudo registrar la decisión de ${ref}: ${err.name}`);
     await answerCallback(cq.id, '⚠️ No se pudo registrar la decisión. Inténtalo de nuevo.');
@@ -1238,6 +1241,12 @@ async function handleReviewCallback(cq, { action, ref }) {
     return;
   }
   const label = reviews.STATUS_LABEL[review.status] || review.status;
+  if (result.stale || result.superseded) {
+    console.warn(`[Telegram Webhook] ${ref} paquete modificado/reenviado; aprobación no aplicada.`);
+    await answerCallback(cq.id, '⚠️ El paquete cambió: necesita una nueva revisión.');
+    if (result.stale) await adminMessage(`⚠️ Ref: ${ref}\nEl paquete cambió después de enviarse (texto, red, horario o vídeo). No se aprobó ni se encoló nada. Reenvíalo a revisión.`);
+    return;
+  }
   if (!changed) {
     console.log(`[Telegram Webhook] ${ref} ya decidida (${review.status}); sin cambios.`);
     await answerCallback(cq.id, `Ya decidido: ${label}`);
@@ -1253,14 +1262,27 @@ async function handleReviewCallback(cq, { action, ref }) {
     // Quitar botones (evita doble clic) y añadir el estado al caption; si no se
     // puede editar, el estado va como respuesta al vídeo.
     await callTelegram('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } });
-    const caption = `${String(cq.message.caption || '').slice(0, 960)}\n\nEstado: ${label}`;
-    const edited = await callTelegram('editMessageCaption', { chat_id: chatId, message_id: messageId, caption, reply_markup: { inline_keyboard: [] } });
+    const edited = cq.message.text != null
+      ? await callTelegram('editMessageText', { chat_id: chatId, message_id: messageId, text: `${String(cq.message.text).slice(0, 3900)}\n\nEstado: ${label}`, reply_markup: { inline_keyboard: [] } })
+      : await callTelegram('editMessageCaption', { chat_id: chatId, message_id: messageId, caption: `${String(cq.message.caption || '').slice(0, 960)}\n\nEstado: ${label}`, reply_markup: { inline_keyboard: [] } });
     if (!edited) await adminMessage(`Estado de ${ref}: ${label}`, replyTo);
   }
 
-  if (review.status === 'approved') await adminMessage(publishKit(review), { parse_mode: 'HTML', ...replyTo });
-  else if (review.status === 'rejected') await adminMessage(`❌ Pieza ${ref} rechazada. No se publicará.`, replyTo);
+  if (review.status === 'approved' && isPackage) await packageApproved(ref, result, replyTo);
+  else if (review.status === 'approved') await adminMessage(publishKit(review), { parse_mode: 'HTML', ...replyTo });
+  else if (review.status === 'rejected') await adminMessage(`❌ Ref: ${ref} rechazada. No se publicará.\nSi quieres, responde a este mensaje con el motivo.`, replyTo);
   else await adminMessage(`✏️ Ref: ${ref}\nResponde (Responder) a este mensaje o al vídeo con los cambios que quieres.`, replyTo);
+}
+
+/** Paquete aprobado: resumen de lo encolado y kit manual de las redes con vía manual. */
+async function packageApproved(ref, { queued, manual }, replyTo) {
+  const line = (p) => `• ${p.network} (${p.channel}) — ${socialPub.localTime(p.scheduled_at, p.timezone)}`;
+  const enabled = await socialPub.isEnabled().catch(() => false);
+  await adminMessage(`✅ Ref: ${ref} aprobado.\nProgramadas (${queued.length}):\n${queued.map(line).join('\n') || '—'}\n` +
+    `Manuales (${manual.length}):\n${manual.map(line).join('\n') || '—'}\n\nPublicación automática: ${enabled ? 'ON' : 'OFF — /reanudar para activarla'}.`, replyTo);
+  for (const p of manual) {
+    await adminMessage(publishKit({ ref, network: p.network, caption: p.caption, utmLink: p.utm_link, productionCostUsd: null }), { parse_mode: 'HTML', ...replyTo });
+  }
 }
 
 /** true si el texto se guardó como cambios de una pieza en changes_requested. */
@@ -1280,16 +1302,18 @@ async function saveChangeRequestSafe(ref, text, messageId) {
 async function handleAdminCommand(cmd) {
   try {
     if (cmd === 'estado') {
-      const [rows, social] = await Promise.all([reviews.latest(10), reviews.isSocialEnabled()]);
+      const [rows, social, publisher, queue] = await Promise.all([reviews.latest(10), reviews.isSocialEnabled(), socialPub.isEnabled().catch(() => false), socialPub.queueSummary().catch(() => 'no disponible')]);
       const lines = rows.map((r) => `• ${r.ref} · producto ${r.productId} · ${r.variant || '-'} · ${r.network || '-'} — ${reviews.STATUS_LABEL[r.status] || r.status}`);
-      await adminMessage(`Últimas piezas:\n${lines.join('\n') || '(ninguna)'}\n\nInterruptor de publicación (${reviews.SOCIAL_KEY}): ${social ? 'ON' : 'OFF'}`);
+      await adminMessage(`Últimas piezas:\n${lines.join('\n') || '(ninguna)'}\n\nInterruptor de publicación (${reviews.SOCIAL_KEY}): ${social ? 'ON' : 'OFF'}\nPublicador social (${socialPub.PUBLISHER_KEY}): ${publisher ? 'ON' : 'OFF'}\nCola social: ${queue}`);
       return;
     }
     // /start lo envía Telegram al abrir el bot: no puede encender la publicación.
     const enabled = cmd === 'reanudar';
-    await reviews.setSocialEnabled(enabled);
+    await Promise.all([reviews.setSocialEnabled(enabled), socialPub.setEnabled(enabled)]);
     console.log(`[Social] interruptor de publicación → ${enabled ? 'ON' : 'OFF'} (admin vía Telegram).`);
-    await adminMessage(`Interruptor de publicación: ${enabled ? 'ON' : 'OFF'}.\nNo hay publicador automático: la publicación sigue siendo manual con el kit.`);
+    await adminMessage(`Interruptor de publicación: ${enabled ? 'ON' : 'OFF'}.\n${enabled
+      ? 'Solo se publican paquetes aprobados, en redes de la lista blanca y con credenciales configuradas.'
+      : 'Pausa global: el worker no publicará nada (lo programado queda en cola).'}`);
   } catch (err) {
     console.error(`[Telegram Webhook] comando /${cmd} falló: ${err.name}`);
     await adminMessage(`⚠️ No se pudo ejecutar /${cmd}.`);
