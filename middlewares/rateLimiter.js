@@ -62,4 +62,14 @@ const trackLookupOrderLimiter = rateLimit({
   },
 });
 
-module.exports = { generalLimiter, authLimiter, trackLookupLimiter, trackLookupOrderLimiter };
+// 10 requests per 15 min per IP — POST /ai/nutria/session-close (público, llama al LLM y a Telegram).
+const nutriaSessionCloseLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  // Siempre 200 como antes (el front lo llama sin esperar respuesta): solo se omite el informe.
+  handler: (req, res) => res.json({ ok: true }),
+});
+
+module.exports = { generalLimiter, authLimiter, trackLookupLimiter, trackLookupOrderLimiter, nutriaSessionCloseLimiter };

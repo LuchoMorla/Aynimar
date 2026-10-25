@@ -7,6 +7,7 @@ const OpenAI   = require('openai');
 const { Op }   = require('sequelize');
 const Joi      = require('joi');
 const { checkRoles, optionalAuth } = require('../middlewares/authHandler');
+const { nutriaSessionCloseLimiter } = require('../middlewares/rateLimiter');
 const validatorHandler        = require('../middlewares/validatorHandler');
 const { enqueueVideo }        = require('../libs/videoQueue');
 const { newRef }              = require('../integrations/videoService');
@@ -1418,7 +1419,15 @@ router.post('/telegram/webhook', async (req, res) => {
 // ── POST /api/v1/ai/nutria/session-close ─────────────────────────────────────
 // Generates emotional analytics and sends a session report to Telegram.
 // Always returns 200 — non-fatal.
-router.post('/nutria/session-close', async (req, res) => {
+// Privacidad (auditoría ayni-play/01): a Telegram solo va el análisis agregado,
+// nunca texto del chat ni datos personales (se enmascaran correos y números
+// largos que el LLM pudiera copiar). Límite por IP para frenar abuso.
+// ponytail: el historial sigue yendo al LLM sin aviso; falta aviso/consentimiento en la tienda.
+const redactPii = (s) => s
+  .replace(/[^\s@<>]+@[^\s@<>]+\.[a-z]{2,}/gi, '[dato oculto]')
+  .replace(/\+?\d[\d\s().-]{5,}\d/g, '[dato oculto]');
+
+router.post('/nutria/session-close', nutriaSessionCloseLimiter, async (req, res) => {
   try {
     const { history } = req.body;
 
@@ -1447,7 +1456,8 @@ router.post('/nutria/session-close', async (req, res) => {
             'Responde ÚNICAMENTE con un objeto JSON válido (sin markdown) con estas claves exactas: ' +
             'emocion_inicial (string), emocion_final (string), nivel_interes (número 1-10), ' +
             'productos_mencionados (array de strings), puntos_friccion (array de strings), ' +
-            'resultado ("compro"|"abandono"|"pendiente"|"escalo_soporte").',
+            'resultado ("compro"|"abandono"|"pendiente"|"escalo_soporte"). ' +
+            'No incluyas nombres, teléfonos, correos, direcciones ni frases literales del cliente.',
         },
         ...safeHistory,
         { role: 'user', content: 'Genera el análisis JSON de esta sesión.' },
@@ -1463,7 +1473,7 @@ router.post('/nutria/session-close', async (req, res) => {
 
     // El análisis lo genera el LLM a partir de texto del usuario: se escapa
     // (parse_mode HTML) y se acota cada campo.
-    const f    = (v, n = 80) => escHtml(String(v ?? 'n/a').slice(0, n));
+    const f    = (v, n = 80) => escHtml(redactPii(String(v ?? 'n/a')).slice(0, n));
     const list = (v, empty) => (Array.isArray(v) ? v.slice(0, 8).map((x) => f(x)).join(', ') : '') || empty;
     const msg =
       `📊 <b>Reporte de Sesión NutrIA</b>\n\n` +
