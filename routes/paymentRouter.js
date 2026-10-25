@@ -75,10 +75,10 @@ router.post(
       const haveRecyclerId = await recyclerService.findByUserId(body.userId);
       if (body.userRole === 'customer' && !haveRecyclerId) {
         const findCostumer = await customerService.findByUserId(body.userId);
-        const newRecycler = await recyclerService.createRecyclerByCustomer(
-          findCostumer
-        );
-        return res.status(201).json(newRecycler);
+        // R8: antes devolvía el Recycler y el front guardaba su id como
+        // paymentId → el primer add-commodity fallaba. Ahora se crea el perfil
+        // y se continúa para devolver siempre un Payment.
+        await recyclerService.createRecyclerByCustomer(findCostumer);
       }
       const newPayment = await service.create(body);
       res.status(201).json(newPayment);
