@@ -73,6 +73,7 @@ function routerApi(app) {
     routerV1.use('/hub',          require('./hubRouter')); // hub WhatsApp: FLAG_NUTRIA_HUB + HUB_SHARED_SECRET, si no 404
     routerV1.use('/social',      socialRouter);
     routerV1.use('/pricing',     require('./pricingRouter')); // cotización admin, sin estado
+    routerV1.use('/shipping',    require('./shippingRouter')); // Smart Shipping: flag app_settings.smart_shipping (off)
 
     // WooCommerce emulation layer — mounted at root level (not under /api/v1)
     // so Dropi can reach it at the standard WC path: /wp-json/wc/v3/

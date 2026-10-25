@@ -1539,8 +1539,8 @@ suite('DeUna/Comprobante — schema Joi, roles y aislamiento de orderTotals (Pas
   const orderServiceSource = fs.readFileSync(path.join(__dirname, '..', 'Services', 'orderService.js'), 'utf8');
   assert("_finalizeAndDispatch conserva los defaults paymentMethod='cod', paymentStatus='pending' (cero cambio de comportamiento para confirmCod)",
     /paymentMethod\s*=\s*'cod'/.test(orderServiceSource) && /paymentStatus\s*=\s*'pending'/.test(orderServiceSource));
-  assert('confirmCod sigue llamando _finalizeAndDispatch SOLO con { userId, attribution } — no le pasa paymentMethod/paymentStatus (usa los defaults de COD intactos)',
-    /confirmCod\(orderId, userId, attribution\)\s*\{\s*(?:return|const result = await) this\._finalizeAndDispatch\(orderId,\s*\{\s*userId,\s*attribution\s*\}\);/.test(orderServiceSource.replace(/\s+/g, ' ')));
+  assert('confirmCod sigue llamando _finalizeAndDispatch SOLO con { userId, attribution[, shippingQuote] } — no le pasa paymentMethod/paymentStatus (usa los defaults de COD intactos)',
+    /confirmCod\(orderId, userId, attribution(?:, shippingQuote)?\)\s*\{\s*(?:return|const result = await) this\._finalizeAndDispatch\(orderId,\s*\{\s*userId,\s*attribution(?:,\s*shippingQuote)?\s*\}\);/.test(orderServiceSource.replace(/\s+/g, ' ')));
   assert('confirmPaymentProof existe y delega en _finalizeAndDispatch con paymentMethod/paymentStatus explícitos (mismo camino que confirmCod, sin duplicar la lógica de stock/lock/despacho)',
     /confirmPaymentProof\(orderId,\s*\{\s*paymentMethod,\s*paymentStatus\s*\}\)/.test(orderServiceSource.replace(/\s+/g, ' ')));
 

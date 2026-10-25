@@ -53,6 +53,21 @@ function computeOrderTotals(lineItems) {
 }
 
 /**
+ * Smart Shipping (Fase B): totales con el recargo de envío elegido.
+ * `computeOrderTotals` NO se toca (convención de este archivo). El recargo ya
+ * incluye IVA, igual que el PVP: el IVA se extrae hacia atrás del total.
+ * @param {Array<{price:number|string, qty:number|string}>} lineItems
+ * @param {number} shippingCharge  Recargo al cliente (≥ 0), IVA incluido.
+ * @returns {{ subtotal:number, tax:number, total:number }}  subtotal = solo productos.
+ */
+function computeOrderTotalsWithShipping(lineItems, shippingCharge) {
+  const { subtotal } = computeOrderTotals(lineItems);
+  const total = round2(subtotal + Math.max(0, Number(shippingCharge) || 0));
+  const tax = round2(total - round2(total / (1 + TAX_RATE)));
+  return { subtotal, tax, total };
+}
+
+/**
  * Tax Engine — conversión NETO → BRUTO/PVP (spec docs/PRICING_ENGINE_SPEC.md,
  * sección B.4; Pricing Engine — Paso 4).
  *
@@ -142,6 +157,7 @@ module.exports = {
   TAX_RATE,
   round2,
   computeOrderTotals,
+  computeOrderTotalsWithShipping,
   toGross,
   extractFromGross,
   computeCreditRedemption,

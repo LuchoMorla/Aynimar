@@ -878,6 +878,8 @@ module.exports = {
   realDispatchedToday,
   ecuadorDayStart,
   buildShipping,
+  knownCities,
+  norm,
   EXCEPTION_TYPES,
   BLOCKING_TYPES,
   RESOLUTIONS,

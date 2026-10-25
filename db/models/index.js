@@ -25,6 +25,7 @@ const { PaymentProof, PaymentProofSchema } = require('./paymentProofModel');
 const { CreativeReview, CreativeReviewSchema } = require('./creativeReviewModel');
 const { CatalogIssue, CatalogIssueSchema } = require('./catalogIssueModel');
 const { TelegramOpsRequest, TelegramOpsRequestSchema } = require('./telegramOpsRequestModel');
+const { ShippingQuote, ShippingQuoteSchema } = require('./shippingQuoteModel');
 
 
 function setupModels(sequelize) {
@@ -54,6 +55,7 @@ function setupModels(sequelize) {
   CreativeReview.init(CreativeReviewSchema, CreativeReview.config(sequelize));
   CatalogIssue.init(CatalogIssueSchema, CatalogIssue.config(sequelize));
   TelegramOpsRequest.init(TelegramOpsRequestSchema, TelegramOpsRequest.config(sequelize));
+  ShippingQuote.init(ShippingQuoteSchema, ShippingQuote.config(sequelize));
 
   User.associate(sequelize.models);
   Customer.associate(sequelize.models);

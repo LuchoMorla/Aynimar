@@ -223,8 +223,8 @@ router.post(
   async (req, res, next) => {
     try {
       const userId = req.user.sub;
-      const { orderId, creditsToApply, attribution } = req.body;
-      const summary = await service.checkout(orderId, userId, creditsToApply, sanitizeAttribution(attribution));
+      const { orderId, creditsToApply, attribution, quoteId, optionId } = req.body;
+      const summary = await service.checkout(orderId, userId, creditsToApply, sanitizeAttribution(attribution), { quoteId, optionId });
       res.status(200).json(summary);
     } catch (error) {
       next(error);
@@ -449,7 +449,8 @@ router.post(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const result = await service.confirmCod(id, req.user.sub, sanitizeAttribution(req.body?.attribution));
+      const result = await service.confirmCod(id, req.user.sub, sanitizeAttribution(req.body?.attribution),
+        { quoteId: req.body?.quoteId, optionId: req.body?.optionId });
       res.status(200).json(result);
     } catch (error) {
       next(error);

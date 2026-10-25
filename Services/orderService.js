@@ -4,7 +4,8 @@ const sequelize = require('../libs/sequelize');
 const { models } = sequelize;
 const { Op } = require('sequelize');
 const WalletService = require('./walletService');
-const { computeOrderTotals, computeCreditRedemption, isTerminalStateOrder } = require('./orderTotals');
+const { computeOrderTotals, computeOrderTotalsWithShipping, computeCreditRedemption, isTerminalStateOrder, round2 } = require('./orderTotals');
+const shipping = require('./shippingQuoteService');
 // Objeto (no desestructurado) para que los tests puedan sustituir las llamadas a Dropi.
 const dropi = require('../integrations/dropi/dropiAdapter');
 const automation = require('./orderAutomationService');
@@ -425,7 +426,11 @@ class OrderService {
   //   confirma un comprobante aprobado pasa 'deuna'/'paid' explícitamente.
   //   attribution — opcional (tienda, ya validado por Joi). Solo se guarda si
   //   la orden aún no tiene una (checkout() pudo fijarla antes).
-  async _finalizeAndDispatch(orderId, { userId, paymentMethod = 'cod', paymentStatus = 'pending', attribution } = {}) {
+  //   shippingQuote — {quoteId, optionId} de Smart Shipping. Solo se usa con el
+  //   flag app_settings.smart_shipping encendido; apagado, el flujo es el de siempre.
+  async _finalizeAndDispatch(orderId, { userId, paymentMethod = 'cod', paymentStatus = 'pending', attribution, shippingQuote } = {}) {
+    // Fuera de la transacción: un error al leer el flag no aborta la txn (fail-closed = apagado).
+    const shipCfg = await shipping.getConfig();
     // ── FASE 1: transacción DB (rápida, sin llamadas externas) ─────────────
     await sequelize.transaction(async (t) => {
       // Lock SÓLO la fila de la orden — `SELECT ... FROM orders WHERE id=? FOR
@@ -476,6 +481,7 @@ class OrderService {
       // Stock: re-leer cada producto CON lock, verificar y descontar dentro de
       // la transacción (cierra la ventana TOCTOU y evita stock negativo).
       const lineItems = [];
+      const shipLines = [];
       for (const it of items) {
         const product = await models.Product.findByPk(it.productId, {
           lock: t.LOCK.UPDATE,
@@ -496,13 +502,24 @@ class OrderService {
         }
         // Precio de la variante elegida (o products.price): nunca el del cliente.
         lineItems.push({ price: unitPrice(product, it.selectedDropiId), qty });
+        shipLines.push(shipping.lineFor(it, product));
+      }
+
+      // Smart Shipping (flag encendido): recálculo obligatorio en servidor.
+      // Créditos parciales: el envío ya se fijó en checkout(); COD exige que esa
+      // cotización fuera contra entrega (con recaudo).
+      let ship = null;
+      if (shipCfg.enabled && !fromPartialCredit) {
+        ship = await shipping.applyQuote({ t, order: ord, userId, ...shippingQuote, paymentMethod, lines: shipLines, cfg: shipCfg });
+      } else if (shipCfg.enabled && paymentMethod === 'cod') {
+        await shipping.assertUsedQuoteMethod(t, ord.id, 'cod');
       }
 
       // Totales: para créditos parciales, checkout() ya los fijó — no se
       // recalculan (perderíamos el contexto del crédito aplicado).
       const totals = fromPartialCredit
         ? {}
-        : computeOrderTotals(lineItems);
+        : ship ? computeOrderTotalsWithShipping(lineItems, ship.charge) : computeOrderTotals(lineItems);
 
       await ord.update(
         {
@@ -516,9 +533,11 @@ class OrderService {
           // no se sobrescribe al aprobar el comprobante.
           confirmedAt:           ord.confirmedAt ?? new Date(),
           ...(attribution && !ord.attribution ? { attribution } : {}),
+          ...(ship ? { carrierName: ship.carrierName } : {}),
         },
         { transaction: t }
       );
+      if (ship) await shipping.persistOnOrder(t, ord.id, ship);
     });
 
     // ── FASE 2: post-commit ────────────────────────────────────────────────
@@ -953,8 +972,8 @@ class OrderService {
   // _finalizeAndDispatch.
   // trackingToken: solo tras pasar el control de propiedad de _finalizeAndDispatch
   // (el dueño que confirma); /gracias lo usa para /orders/track/:token.
-  async confirmCod(orderId, userId, attribution) {
-    const result = await this._finalizeAndDispatch(orderId, { userId, attribution });
+  async confirmCod(orderId, userId, attribution, shippingQuote) {
+    const result = await this._finalizeAndDispatch(orderId, { userId, attribution, shippingQuote });
     return { ...result, trackingToken: await this._ensureTrackingToken({ id: result.orderId }) };
   }
 
@@ -1264,8 +1283,9 @@ class OrderService {
    * @param {number} creditsToApply   Non-negative integer — credits the user wants to use
    * @returns {Promise<CheckoutSummary>}
    */
-  async checkout(orderId, userId, creditsToApply = 0, attribution) {
+  async checkout(orderId, userId, creditsToApply = 0, attribution, shippingQuote) {
     const walletService = new WalletService();
+    const shipCfg = await shipping.getConfig(); // fuera de la txn; fail-closed = apagado
 
     const summary = await sequelize.transaction(async (t) => {
 
@@ -1346,6 +1366,7 @@ class OrderService {
 
       // ── 6. Validate stock and calculate totals ────────────────────────────
       const lineItems = [];
+      const shipLines = [];
       for (const item of cartItems) {
         const product = productMap.get(item.productId);
         const quantity = item.amount;
@@ -1359,19 +1380,27 @@ class OrderService {
         }
 
         lineItems.push({ price: unitPrice(product, item.selectedDropiId), qty: quantity });
+        shipLines.push(shipping.lineFor(item, product));
       }
+
+      // Smart Shipping (flag encendido): el envío se fija aquí (DeUna / créditos
+      // parciales). Los créditos solo descuentan productos, nunca el recargo.
+      const ship = shipCfg.enabled
+        ? await shipping.applyQuote({ t, order, userId, ...shippingQuote, paymentMethod: null, lines: shipLines, cfg: shipCfg })
+        : null;
 
       // Fórmula única de totales/IVA (Services/orderTotals.js). `subtotal` ya
       // incluye IVA (product.price = PVP final); `tax` es el desglose
       // informativo extraído hacia atrás, nunca se vuelve a sumar.
-      const { subtotal, tax } = computeOrderTotals(lineItems);
+      const { subtotal, tax } = ship ? computeOrderTotalsWithShipping(lineItems, ship.charge) : computeOrderTotals(lineItems);
 
       // ── 7. Calculate credit discount ───────────────────────────────────────
       // Cap credits at floor(subtotal): credits are integers, so we cannot
       // apply 5 credits against a $4.99 item (that would be a 1¢ gain). El
       // crédito descuenta directamente del subtotal (que ya incluye IVA) —
       // no genera un nuevo cálculo de impuesto sobre el saldo.
-      const { creditsUsed, amountToPay } = computeCreditRedemption(subtotal, creditsToApply);
+      const { creditsUsed, amountToPay: productsToPay } = computeCreditRedemption(subtotal, creditsToApply);
+      const amountToPay = ship ? round2(productsToPay + ship.charge) : productsToPay;
 
       // ── 8. Redeem credits — inside the same transaction ────────────────────
       // If the wallet has insufficient balance, redeemCredits throws a
@@ -1410,9 +1439,11 @@ class OrderService {
           total: amountToPay,
           confirmedAt: new Date(),
           ...(attribution ? { attribution } : {}),
+          ...(ship ? { carrierName: ship.carrierName } : {}),
         },
         { transaction: t }
       );
+      if (ship) await shipping.persistOnOrder(t, order.id, ship);
 
       // ── 10. Return checkout summary ────────────────────────────────────────
       return {
@@ -1424,6 +1455,7 @@ class OrderService {
         paymentStatus,
         paymentMethod,
         itemCount: cartItems.length,
+        ...(ship ? { shippingCharge: ship.charge, carrierName: ship.carrierName } : {}),
       };
     });
     // Pagado 100 % con créditos: no pasa por _finalizeAndDispatch, se avisa aquí.

@@ -110,8 +110,15 @@ function sanitizeAttribution(value) {
   return error || !clean || !Object.keys(clean).length ? null : clean;
 }
 
+// Smart Shipping: solo se usan con app_settings.smart_shipping encendido.
+const shippingQuoteFields = {
+  quoteId: Joi.string().guid({ version: 'uuidv4' }).optional(),
+  optionId: Joi.string().pattern(/^c\d{1,4}$/).optional(),
+};
+
 const confirmCodSchema = Joi.object({
   attribution: Joi.any().optional(),
+  ...shippingQuoteFields,
 });
 
 const checkoutSchema = Joi.object({
@@ -120,6 +127,7 @@ const checkoutSchema = Joi.object({
   // Integer credits the user wants to redeem (0 = no credits, omit = same).
   // The service caps this at floor(subtotal) automatically.
   creditsToApply: Joi.number().integer().min(0).default(0),
+  ...shippingQuoteFields,
 });
 
 // POST /orders/track/lookup: pedido + correo o teléfono del pedido.
