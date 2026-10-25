@@ -20,6 +20,14 @@ function hoursFromNow(h) {
   return new Date(Date.now() + h * 60 * 60 * 1000);
 }
 
+// Créditos por retos (incluye el «regalo» de 20–75 créditos al CREAR un pedido
+// de 20–75 $, auditoría R2: reembolso del 100 %). APAGADO por defecto.
+// Reactivar NO es solo poner true: exige una regla aprobada por Luis que
+// verifique el pedido en servidor (propio, entregado, respeta el margen ≥30 %)
+// en lugar de orderAmountUsd. scripts/creditos-security-test.js falla si es true.
+// Ver docs/decisions/2026-10-25-creditos-gamificacion.md.
+const CHALLENGE_CREDITS_ENABLED = false;
+
 // Plantillas de retos de compra (70 % del pool)
 const PURCHASE_TEMPLATES = [
   { slug: 'buy_30_today',  title: 'Compra por $30 hoy', description: 'Realiza un pedido de al menos $30 antes de medianoche.',           type: 'order', rewardCredits: 30, threshold: 30,  ttlHours: null },
@@ -121,7 +129,8 @@ router.get(
           title:         tpl.title,
           description:   tpl.description,
           type:          tpl.type,
-          rewardCredits: tpl.rewardCredits,
+          // Apagado: no prometer créditos que no se acreditan (veracidad).
+          rewardCredits: CHALLENGE_CREDITS_ENABLED ? tpl.rewardCredits : 0,
           threshold:     tpl.threshold,        // null si no es de compra
           deadline:      deadline.toISOString(),
           deadlineMs:    deadline.getTime() - now.getTime(), // ms restantes al momento de respuesta
@@ -136,7 +145,10 @@ router.get(
         (r) => !r.isDaily && !r.completed && !enriched.find((e) => e.slug === r.slug)
       );
 
-      res.json([...enriched, ...permanent]);
+      res.json([
+        ...enriched,
+        ...permanent.map((p) => ({ ...p, rewardCredits: CHALLENGE_CREDITS_ENABLED ? p.rewardCredits : 0 })),
+      ]);
     } catch (error) {
       next(error);
     }
@@ -151,7 +163,8 @@ router.get(
  * para slugs de plantilla sin fila en BD, sin control de «ya completado»:
  * cualquier usuario podía acuñar créditos sin límite. Ahora solo marca el reto
  * como completado (una vez por día; repetir o no tenerlo asignado hoy devuelve 409) y responde
- * `credited: 0`. `orderAmountUsd` se ignora: nunca decide créditos.
+ * `credited: 0`. Con CHALLENGE_CREDITS_ENABLED=false (por defecto)
+ * `orderAmountUsd` se ignora: nunca decide créditos.
  */
 router.post(
   '/complete-challenge',
@@ -159,7 +172,7 @@ router.post(
   async (req, res, next) => {
     try {
       const userId = req.user.sub;
-      const { slug } = req.body;
+      const { slug, orderAmountUsd } = req.body;
       const today  = new Date().toISOString().slice(0, 10);
 
       if (!slug) return res.status(400).json({ message: 'slug requerido' });
@@ -167,7 +180,7 @@ router.post(
       const tpl = [...PURCHASE_TEMPLATES, ...SEED_TEMPLATES].find((t) => t.slug === slug);
 
       const [challenge] = await sequelize.query(
-        `SELECT id FROM gamification_challenges WHERE slug = :slug AND active = true LIMIT 1`,
+        `SELECT id, reward_credits FROM gamification_challenges WHERE slug = :slug AND active = true LIMIT 1`,
         { replacements: { slug }, type: QueryTypes.SELECT }
       );
       if (!challenge && !tpl) return res.status(404).json({ message: 'Reto no encontrado' });
@@ -185,13 +198,28 @@ router.post(
         if (!rows.length) return res.status(409).json({ message: 'Reto ya completado o no asignado hoy' });
       }
 
+      // Regla original de créditos, conservada sin cambios pero APAGADA (R2).
+      // ponytail: confía en orderAmountUsd del cliente; sustituir por el total
+      // de un pedido verificado en servidor antes de encenderla.
+      let credited = 0;
+      if (CHALLENGE_CREDITS_ENABLED) {
+        if (tpl?.threshold != null && parseFloat(orderAmountUsd ?? 0) < tpl.threshold) {
+          return res.status(422).json({ message: `El pedido debe superar $${tpl.threshold}`, threshold: tpl.threshold });
+        }
+        credited = challenge?.reward_credits ?? tpl?.rewardCredits ?? 0;
+        await sequelize.query(
+          `UPDATE wallets SET credit = credit + :credits WHERE user_id = :userId`,
+          { replacements: { credits: credited, userId }, type: QueryTypes.UPDATE }
+        );
+      }
+
       // Calcular descuento aleatorio (5–15%) para el cofre (solo visual, no se aplica)
       const chestDiscountPct = 5 + Math.floor(Math.random() * 11); // 5..15
 
       res.json({
-        credited: 0,
+        credited,
         chestDiscountPct,
-        message: '¡Reto completado!',
+        message: credited ? `¡Reto completado! +${credited} créditos` : '¡Reto completado!',
       });
     } catch (error) {
       next(error);
@@ -200,3 +228,4 @@ router.post(
 );
 
 module.exports = router;
+module.exports.CHALLENGE_CREDITS_ENABLED = CHALLENGE_CREDITS_ENABLED;
