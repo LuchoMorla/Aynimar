@@ -13,6 +13,8 @@ const FLAGS = {
   dropi_retry_v2:         process.env.FLAG_DROPI_RETRY_V2          === 'true',
   cart_recovery_email:    process.env.FLAG_CART_RECOVERY_EMAIL     === 'true',
   woocommerce_mirror:     process.env.FLAG_WOOCOMMERCE_MIRROR      === 'true',
+  // NutrIA: prompt honesto (auditoría ayni-play/01). Off = prompt actual.
+  nutria_prompt_honesto:  process.env.FLAG_NUTRIA_PROMPT_HONESTO   === 'true',
 };
 
 /**
