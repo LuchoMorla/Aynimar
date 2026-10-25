@@ -1,7 +1,7 @@
 const express  = require('express');
 const passport = require('passport');
 const { QueryTypes } = require('sequelize');
-const { sequelize } = require('../libs/sequelize');
+const sequelize = require('../libs/sequelize'); // exporta la instancia, no { sequelize }
 
 const router = express.Router();
 

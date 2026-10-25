@@ -49,10 +49,8 @@ async function main() {
 
   const spy = () => { const f = async (...a) => { f.calls.push(a); return f.ret; }; f.calls = []; return f; };
 
-  // gamificationRouter hace `const { sequelize } = require('../libs/sequelize')`,
-  // que hoy es undefined (el módulo exporta la instancia) → sus rutas dan 500.
-  // El alias permite probar la lógica como si ese import estuviera corregido.
-  if (!sequelize.sequelize) sequelize.sequelize = sequelize;
+  // Sin alias `sequelize.sequelize`: si gamificationRouter vuelve a importar
+  // `{ sequelize }` (undefined), sus rutas dan 500 y los asserts de abajo fallan.
 
   const { logErrors, ormErrorHandler, boomErrorHandler, errorHandler } = require('../middlewares/errorsHandler');
   const gamification = require('../routes/gamificationRouter');
@@ -102,6 +100,10 @@ async function main() {
   sqlHandler = () => [];
   r = await call('POST', '/gamification/complete-challenge', CUST, { slug: 'no_existe' });
   assert('slug inexistente → 404', r.status === 404, r.text);
+  sqlHandler = () => [];
+  r = await call('GET', '/gamification/daily-challenges', CUST);
+  assert('daily-challenges → 200 (import de sequelize correcto)', r.status === 200 && Array.isArray(r.json), r.text);
+  assert('daily-challenges no promete créditos (rewardCredits 0)', Array.isArray(r.json) && r.json.length > 0 && r.json.every((c) => c.rewardCredits === 0), r.text);
 
   // ── 2. Recicladores (R3) ───────────────────────────────────────────────────
   console.log('\n▶ IDOR recicladores');
