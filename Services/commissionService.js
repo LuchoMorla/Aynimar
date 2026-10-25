@@ -77,20 +77,33 @@ class CommissionService {
       );
     }
 
-    // ── Prevent double-liquidation ────────────────────────────────────────────
-    const alreadyLiquidated = await models.WalletTransaction.findOne({
-      where: { referenceId: paymentWasteId, referenceType: 'payment_waste' },
-    });
-    if (alreadyLiquidated) {
-      throw boom.conflict(
-        `PaymentWaste ${paymentWasteId} has already been liquidated ` +
-        `(transaction #${alreadyLiquidated.id})`
-      );
-    }
+    // Fuera de la transacción: crea la wallet si falta (idempotente por el
+    // índice único de user_id).
+    const { wallet: ownWallet } = await walletService.findOrCreateForUser(userId);
 
-    // ── Atomic: credit wallet + write audit row ───────────────────────────────
+    // ── Atomic: anti-duplicado + credit wallet + write audit row ──────────────
     const result = await sequelize.transaction(async (t) => {
-      const { wallet } = await walletService.findOrCreateForUser(userId);
+      // Bloquear la fila payments_wastes serializa liquidaciones simultáneas
+      // del mismo material: la segunda espera y luego ve la fila del ledger
+      // (auditoría R6). ponytail: sin índice UNIQUE(reference_type, reference_id);
+      // añadirlo con migración si se liquida desde más de un camino.
+      await models.PaymentWaste.findByPk(paymentWasteId, { transaction: t, lock: t.LOCK.UPDATE });
+
+      // ── Prevent double-liquidation ──────────────────────────────────────────
+      const alreadyLiquidated = await models.WalletTransaction.findOne({
+        where: { referenceId: paymentWasteId, referenceType: 'payment_waste' },
+        transaction: t,
+      });
+      if (alreadyLiquidated) {
+        throw boom.conflict(
+          `PaymentWaste ${paymentWasteId} has already been liquidated ` +
+          `(transaction #${alreadyLiquidated.id})`
+        );
+      }
+
+      // Releer la wallet con FOR UPDATE: sin esto, un canje simultáneo en el
+      // checkout podía perder la actualización (lectura-escritura sin bloqueo).
+      const wallet = await models.Wallet.findByPk(ownWallet.id, { transaction: t, lock: t.LOCK.UPDATE });
 
       const updatedWallet = await wallet.update(
         { credit: wallet.credit + netCredits },
