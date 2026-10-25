@@ -18,7 +18,6 @@ const typeCount = Joi.string();
 const countNumber = Joi.string();
 const paymentDate = Joi.string();
 const stateOfThePayment = Joi.string().empty('');
-const userId = Joi.number().integer();
 const email = Joi.string().email();
 const password = Joi.string();
 const role = Joi.string().empty('');
@@ -70,7 +69,7 @@ const updateRecyclerSchema = Joi.object({
   countNumber,
   paymentDate,
   stateOfThePayment,
-  userId
+  // userId NO se puede cambiar: reasignaba el perfil y sus liquidaciones (R3)
 });
 
 module.exports = { getRecyclerSchema, createRecyclerSchema, updateRecyclerSchema };

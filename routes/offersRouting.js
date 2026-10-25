@@ -4,11 +4,13 @@ const passport = require('passport');
 
 const { checkRoles } = require('../middlewares/authHandler');
 const OffersService = require('../Services/offersService');
+const OrderService = require('../Services/orderService');
 const validatorHandler = require('../middlewares/validatorHandler');
 const { paramsOfferSchema, updateOfferSchema } = require('../schemaODtos/offersSchema');
 
 const router = express.Router();
 const service = new OffersService();
+const orderService = new OrderService();
 
 router.get(
   '/',
@@ -32,7 +34,7 @@ router.get(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      const offer = await service.findOne(id);
+      const offer = await service.findOneForUser(id, req.user);
       res.json(offer);
     } catch (error) {
       next(error);
@@ -49,6 +51,7 @@ router.patch(
   async (req, res, next) => {
     try {
       const { id } = req.params;
+      await service.findOneForUser(id, req.user); // IDOR (R4)
       const offer = await service.update(id, req.body);
       res.json(offer);
     } catch (error) {
@@ -66,6 +69,7 @@ router.delete(
   async (req, res, next) => {
     try {
       const { id } = req.params;
+      await service.findOneForUser(id, req.user); // IDOR (R4)
       const offer = await service.delete(id);
       res.json(offer);
     } catch (error) {
@@ -81,6 +85,7 @@ router.get(
   async (req, res, next) => {
     try {
       const { id } = req.params;
+      await orderService.assertBusinessAccess(id, req.user); // IDOR (R4)
       const offers = await service.findBusiness(id);
       res.json(offers);
     } catch (error) {

@@ -9,8 +9,9 @@ const createOfferSchema = Joi.object({
   status,
 });
 
+// paymentId no se puede cambiar: reapuntar una oferta a otro pago saltaba el
+// control de propiedad (R4/R11). El panel solo envía status.
 const updateOfferSchema = Joi.object({
-  paymentId: idPayment,
   status,
 });
 

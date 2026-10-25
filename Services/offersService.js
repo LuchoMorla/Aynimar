@@ -1,5 +1,7 @@
 const boom = require('@hapi/boom');
-const { models } = require('../libs/sequelize');
+const sequelize = require('../libs/sequelize');
+
+const { models } = sequelize;
 
 class OffersService {
 
@@ -34,6 +36,25 @@ class OffersService {
       }]
     });
 
+    return offer;
+  }
+
+  // IDOR (auditoría R4): admin, cualquier oferta; business_owner, solo las
+  // ofertas cuyo pago incluye un residuo de un negocio suyo. Si no → 404.
+  async findOneForUser(id, { sub, role }) {
+    const offer = await this.findOne(id);
+    if (!offer) throw boom.notFound('Offer not found');
+    if (role === 'admin') return offer;
+    const [rows] = await sequelize.query(
+      `SELECT 1 FROM payments_wastes pw
+         JOIN wastes w           ON w.id  = pw.waste_id
+         JOIN business b         ON b.id  = w.business_id
+         JOIN bussiness_owner bo ON bo.id = b.business_owner_id
+        WHERE pw.payment_id = :paymentId AND bo.user_id = :userId
+        LIMIT 1`,
+      { replacements: { paymentId: offer.paymentId, userId: sub } }
+    );
+    if (!rows.length) throw boom.notFound('Offer not found');
     return offer;
   }
 
@@ -72,13 +93,14 @@ class OffersService {
 
   async delete(id) {
     const offer = await models.Offers.findByPk(id);
+    if (!offer) throw boom.notFound('Offer not found');
     const paymentWaste = await models.PaymentWaste.findOne({
       where: {
         paymentId: offer.paymentId
       }
     });
 
-    await paymentWaste.destroy();
+    if (paymentWaste) await paymentWaste.destroy();
     await offer.destroy();
 
     return offer;

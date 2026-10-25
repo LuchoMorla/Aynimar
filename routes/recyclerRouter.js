@@ -1,7 +1,7 @@
 const express = require('express');
 const passport = require('passport');
 
-const { checkRoles } = require('../middlewares/authHandler');
+const { checkRoles, assertUserAccess } = require('../middlewares/authHandler');
 
 const RecyclerService = require('../Services/recyclerService');
 const validationHandler = require('../middlewares/validatorHandler');
@@ -36,6 +36,8 @@ router.get(
     try {
       const { id } = req.params;
       const recycler = await service.findOne(id);
+      // IDOR: solo el propio perfil (cédula, cuenta bancaria…); admin, cualquiera.
+      assertUserAccess(recycler.userId, req.user);
       res.json(recycler);
     } catch (error) {
       next(error);
@@ -66,6 +68,8 @@ router.patch(
     try {
       const { id } = req.params;
       const body = req.body;
+      // IDOR: solo el propio perfil; admin, cualquiera.
+      assertUserAccess((await service.findOne(id)).userId, req.user);
       const updateRecycler = await service.update(id, body);
       res.status(201).json(updateRecycler);
     } catch (error) {
@@ -82,6 +86,8 @@ router.delete(
   async (req, res, next) => {
     try {
       const { id } = req.params;
+      // IDOR: solo el propio perfil; admin, cualquiera.
+      assertUserAccess((await service.findOne(id)).userId, req.user);
       res.status(200).json(await service.delete(id));
     } catch (error) {
       next(error);

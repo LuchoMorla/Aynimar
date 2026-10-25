@@ -1,7 +1,7 @@
 const expressModule = require('express');
 const passport = require('passport');
 
-const { checkRoles } = require('../middlewares/authHandler');
+const { checkRoles, assertUserAccess } = require('../middlewares/authHandler');
 
 const validatorHandler = require('../middlewares/validatorHandler');
 const {
@@ -52,6 +52,8 @@ router.get(
     try {
       const { id } = req.params;
       const wallet = await service.findOne(id);
+      // IDOR (R5): solo la wallet propia; admin, cualquiera. Ajena → 404.
+      assertUserAccess(wallet.userId, req.user);
       res.json(wallet);
     } catch (error) {
       next(error);
