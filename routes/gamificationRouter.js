@@ -146,73 +146,52 @@ router.get(
 /**
  * POST /api/v1/gamification/complete-challenge
  *
- * Valida que el challenge no haya expirado y que el monto (si aplica)
- * supere el threshold. Acredita créditos al wallet si pasa.
+ * SEGURIDAD (auditoría ayni-play/02, R1): este endpoint NO acredita créditos.
+ * Antes acreditaba `rewardCredits` confiando en `orderAmountUsd` del cliente y,
+ * para slugs de plantilla sin fila en BD, sin control de «ya completado»:
+ * cualquier usuario podía acuñar créditos sin límite. Ahora solo marca el reto
+ * como completado (una vez por día; repetir o no tenerlo asignado hoy devuelve 409) y responde
+ * `credited: 0`. `orderAmountUsd` se ignora: nunca decide créditos.
  */
 router.post(
   '/complete-challenge',
   passport.authenticate('jwt', { session: false }),
   async (req, res, next) => {
     try {
-      const userId         = req.user.sub;
-      const { slug, orderAmountUsd } = req.body;
-      const today          = new Date().toISOString().slice(0, 10);
+      const userId = req.user.sub;
+      const { slug } = req.body;
+      const today  = new Date().toISOString().slice(0, 10);
 
       if (!slug) return res.status(400).json({ message: 'slug requerido' });
 
-      // Buscar plantilla para validar threshold y deadline
       const tpl = [...PURCHASE_TEMPLATES, ...SEED_TEMPLATES].find((t) => t.slug === slug);
 
-      // Validar threshold si es reto de compra
-      if (tpl?.threshold != null) {
-        const amount = parseFloat(orderAmountUsd ?? 0);
-        if (amount < tpl.threshold) {
-          return res.status(422).json({
-            message: `El pedido debe superar $${tpl.threshold}`,
-            threshold: tpl.threshold,
-            received: amount,
-          });
-        }
-      }
-
       const [challenge] = await sequelize.query(
-        `SELECT id, reward_credits FROM gamification_challenges WHERE slug = :slug AND active = true LIMIT 1`,
+        `SELECT id FROM gamification_challenges WHERE slug = :slug AND active = true LIMIT 1`,
         { replacements: { slug }, type: QueryTypes.SELECT }
       );
+      if (!challenge && !tpl) return res.status(404).json({ message: 'Reto no encontrado' });
 
-      // Si el reto no existe en DB, usar el crédito de la plantilla directamente
-      const rewardCredits = challenge?.reward_credits ?? tpl?.rewardCredits ?? 0;
-      const challengeId   = challenge?.id;
-
-      if (challengeId) {
-        const [uc] = await sequelize.query(
-          `SELECT completed FROM gamification_user_challenges
-           WHERE user_id = :userId AND challenge_id = :challengeId AND assigned_date = :today LIMIT 1`,
-          { replacements: { userId, challengeId, today }, type: QueryTypes.SELECT }
-        );
-        if (uc?.completed) return res.status(409).json({ message: 'Reto ya completado hoy' });
-
-        await sequelize.query(
+      if (challenge) {
+        // UPDATE condicional: atómico, una segunda llamada no vuelve a contar.
+        const [rows] = await sequelize.query(
           `UPDATE gamification_user_challenges
            SET completed = true, completed_at = NOW()
-           WHERE user_id = :userId AND challenge_id = :challengeId AND assigned_date = :today`,
-          { replacements: { userId, challengeId, today }, type: QueryTypes.UPDATE }
+           WHERE user_id = :userId AND challenge_id = :challengeId AND assigned_date = :today
+             AND completed = false
+           RETURNING 1`,
+          { replacements: { userId, challengeId: challenge.id, today } }
         );
+        if (!rows.length) return res.status(409).json({ message: 'Reto ya completado o no asignado hoy' });
       }
 
-      // Acreditar créditos en wallet
-      await sequelize.query(
-        `UPDATE wallets SET credit = credit + :credits WHERE user_id = :userId`,
-        { replacements: { credits: rewardCredits, userId }, type: QueryTypes.UPDATE }
-      );
-
-      // Calcular descuento aleatorio (5–15%) para el cofre
+      // Calcular descuento aleatorio (5–15%) para el cofre (solo visual, no se aplica)
       const chestDiscountPct = 5 + Math.floor(Math.random() * 11); // 5..15
 
       res.json({
-        credited: rewardCredits,
+        credited: 0,
         chestDiscountPct,
-        message: `¡Reto completado! +${rewardCredits} créditos`,
+        message: '¡Reto completado!',
       });
     } catch (error) {
       next(error);
