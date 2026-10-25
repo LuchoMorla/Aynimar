@@ -184,7 +184,17 @@ async function createQuote({ orderId, userId, city, department, paymentMethod })
  * Marca la cotización como usada. Devuelve lo que se persiste en la orden.
  */
 async function applyQuote({ t, order, userId, quoteId, optionId, paymentMethod, lines, cfg }) {
-  if (!quoteId || !optionId) throw boom.badRequest('Falta la cotización de envío (quoteId y optionId)');
+  if (!quoteId || !optionId) {
+    // Sin cotización (fallback «A coordinar» o fallo de red al cotizar): se re-evalúa la
+    // cobertura con la ciudad del cliente en BD. Sin opciones → flujo actual sin recargo
+    // (null); con opciones → 409 para que el front re-cotice. Nunca un recargo no mostrado.
+    // checkout() (paymentMethod null) es el camino DeUna → se evalúa sin recaudo.
+    const cust = await models.Customer.findByPk(order.customerId, { attributes: ['id', 'city'], transaction: t });
+    const c = await resolveCity(cust?.city);
+    const has = c && (await computeOptions(cfg, lines, c.id, paymentMethod || 'deuna')).options.length > 0;
+    if (has) throw conflict('SHIPPING_QUOTE_REQUIRED', 'Hay opciones de envío para tu ciudad: cotiza antes de confirmar');
+    return null;
+  }
   const q = await models.ShippingQuote.findByPk(quoteId, { lock: t.LOCK.UPDATE, transaction: t });
   if (!q || q.orderId !== order.id || q.userId !== userId) throw conflict('SHIPPING_QUOTE_INVALID', 'La cotización de envío no corresponde a este pedido');
   if (q.usedAt) throw conflict('SHIPPING_QUOTE_USED', 'La cotización de envío ya se usó');

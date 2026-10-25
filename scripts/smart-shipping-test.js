@@ -146,7 +146,8 @@ async function main() {
     assert('Laar: precio 8,36, recargo 2,31, total 35,30', laar.quotedPrice === 8.36 && laar.surcharge === 2.31 && laar.total === 35.3, JSON.stringify(laar));
 
     console.log('\n▶ Flag ON: confirmar (recálculo en servidor)');
-    assert('sin cotización → 400', (await post('/orders/12/confirm-cod', {})).status === 400);
+    const noQ = await post('/orders/12/confirm-cod', {});
+    assert('sin cotización y CON cobertura → 409 SHIPPING_QUOTE_REQUIRED (sin confirmar)', noQ.status === 409 && noQ.body.code === 'SHIPPING_QUOTE_REQUIRED' && ORDERS[12].state === 'carrito', noQ.text);
     assert('recargo enviado por el cliente → 400 (Joi)', (await post('/orders/12/confirm-cod', { quoteId: q1.body.quoteId, optionId: 'c1', surcharge: 0 })).status === 400);
     const q13 = await quote(13);
     const foreign = await post('/orders/12/confirm-cod', { quoteId: q13.body.quoteId, optionId: 'c1' });
@@ -182,6 +183,21 @@ async function main() {
     QUOTES.get(q2.body.quoteId).expiresAt = new Date(Date.now() - 1000);
     const exp = await post('/orders/12/confirm-cod', { quoteId: q2.body.quoteId, optionId: 'c2' });
     assert('cotización vencida → 409', exp.status === 409 && exp.body.code === 'SHIPPING_QUOTE_EXPIRED', exp.text);
+
+    console.log('\n▶ Flag ON: sin cotización y sin cobertura → flujo actual sin recargo');
+    reset();
+    CUSTOMER_CITY = 'Atlantis'; // ciudad sin id Dropi
+    const fb = await post('/orders/12/confirm-cod', {});
+    const fbCh = lastUpdate(12);
+    assert('confirm-cod → 200, total = subtotal, sin carrierName ni columnas shipping_*', fb.status === 200 && fbCh.total === 32.99 && !('carrierName' in fbCh) && rawQueries.length === 0 && fb.body.total === 32.99, `${fb.text} ${JSON.stringify(fbCh)}`);
+    reset();
+    PRODUCTS[101].dropiProductId = '999'; // producto sin tarifa en la tabla
+    const fb2 = await post('/orders/12/confirm-cod', {});
+    assert('producto sin tarifa → 200 sin recargo', fb2.status === 200 && lastUpdate(12).total === 32.99 && rawQueries.length === 0, fb2.text);
+    PRODUCTS[101].dropiProductId = '112598';
+    reset();
+    const fb3 = await post('/orders/checkout', { orderId: 12 }); // DeUna en Macas: la semilla no tiene tarifa sin recaudo
+    assert('checkout sin cotización y sin tarifa del método → 200 sin recargo', fb3.status === 200 && lastUpdate(12).total === 32.99 && !('shippingCharge' in fb3.body), fb3.text);
 
     console.log('\n▶ Flag ON: checkout (DeUna) y política');
     reset();
