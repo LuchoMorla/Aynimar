@@ -28,7 +28,7 @@ const createBusinessOwnerUserIdSchema = Joi.object({
   name: name.required(),
   lastName: lastName.required(),
   identityNumber: identityNumber.required(),
-  userId: userId.required()
+  userId // opcional: el servidor usa el del JWT (compat. con el panel)
 });
 
 const updateBusinessOwnerSchema = Joi.object({

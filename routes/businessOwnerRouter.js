@@ -1,6 +1,7 @@
 const express = require('express');
 const passport = require('passport');
 
+const boom = require('@hapi/boom');
 const { checkRoles } = require('../middlewares/authHandler');
 const BusinessOwnerService = require('../Services/businessOwnerService');
 const validatorHandler = require('../middlewares/validatorHandler');
@@ -74,11 +75,18 @@ router.post(
 
 router.post(
   '/by-user',
+  passport.authenticate('jwt', { session: false }),
   validatorHandler(createBusinessOwnerUserIdSchema, 'body'),
   async (req, res, next) => {
     try {
-      const body = req.body;
-      res.status(201).json(await service.createByUser(body));
+      // Seguridad (auditoría ayni-play/03): antes era público y aceptaba
+      // cualquier userId → cambiaba su rol y devolvía un JWT suyo (toma de
+      // cuenta). Ahora solo el propio usuario autenticado; userId ajeno → 403.
+      const { sub } = req.user;
+      if (req.body.userId != null && Number(req.body.userId) !== Number(sub)) {
+        throw boom.forbidden('no tienes permiso para ejecutar esta acción');
+      }
+      res.status(201).json(await service.createByUser({ ...req.body, userId: sub }));
     } catch (error) {
       next(error);
     }

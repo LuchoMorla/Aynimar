@@ -133,7 +133,8 @@ class BusinessOwnerService {
       throw boom.notFound('User not found');
     }
 
-    await user.update({ role: 'business_owner' });
+    // Nunca degradar a un admin.
+    if (user.role !== 'admin') await user.update({ role: 'business_owner' });
 
     await models.BusinessOwner.create(data, {
       include: ['user'],
