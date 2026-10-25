@@ -158,13 +158,19 @@ async function main() {
     n = tg.length;
     await post(msg('/cancelar'));
     assert('/cancelar → limpia y no guarda', pending() === null && /Cancelado/.test(sent(n)[0]?.body.text) && rows.length === 2);
+    n = tg.length;
     await post(msg('texto suelto sin encargo pendiente'));
-    assert('sin encargo pendiente, el texto se ignora como antes', rows.length === 2);
+    assert('sin encargo pendiente, el texto directo es encargo al CTO', rows.length === 3 && rows[2].recipient === 'cto' && /^📨 Recibido \(#3\)/.test(sent(n)[0]?.body.text));
+    await post(msg('CEO: revisa el margen del 100'));
+    assert('texto directo que empieza por «CEO» → encargo al CEO', rows.length === 4 && rows[3].recipient === 'ceo');
     await post(msg('código 111222'));
-    assert('2FA sin encargo pendiente intacto', twoFA.at(-1) === '111222');
+    assert('2FA sin encargo pendiente intacto (no es encargo)', twoFA.at(-1) === '111222' && rows.length === 4);
+    await post(msg('ok'));
+    assert('texto < 3 letras sin pendiente → se ignora', rows.length === 4);
     settings.set(svc.PENDING_KEY, JSON.stringify({ to: 'ceo', at: Date.now() - svc.PENDING_TTL_MS - 1 }));
     await post(msg('esto llega tarde'));
-    assert('estado caducado (> 30 min) → no se guarda', rows.length === 2);
+    assert('estado caducado (> 30 min) → va como encargo directo al CTO', rows.length === 5 && rows[4].recipient === 'cto');
+    rows.splice(2); // las pruebas siguientes cuentan desde #3
 
     out('\n▶ /encargo y /encargos');
     n = tg.length;

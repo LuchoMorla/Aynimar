@@ -4,6 +4,7 @@
 /**
  * Encargos del dueño al CTO (Claude) o al CEO (Codex) desde el bot de Telegram.
  * Mismo puente que Pescafast, con el bot y las variables actuales (sin variables nuevas):
+ *   cualquier texto del dueño es un encargo (al CTO; al CEO si empieza por «CEO»);
  *   «💬 Pedir al CTO / CEO» → el siguiente texto del dueño es el encargo (por defecto, CTO);
  *   «📋 Mis encargos»       → últimos 5 con su estado;
  *   /start · /menu · /encargo [texto] · /encargos · /cancelar.
@@ -133,7 +134,12 @@ async function handleText(msg, text) {
     console.error(`[Encargos] no se pudo leer el estado: ${err.name}`);
     return false;
   }
-  if (!pending) return false;
+  if (!pending) {
+    // Escribir directamente al bot también es un encargo (Luis, 25-oct): al CTO, o al CEO si empieza por «CEO».
+    // Un texto con un código de 6 dígitos sigue yendo al 2FA de Dropi; notas de voz o fotos sueltas se ignoran.
+    if (text.length < 3 || /\b\d{6}\b/.test(text)) return false;
+    pending = { to: /^ceo\b/i.test(text) ? 'ceo' : 'cto' };
+  }
   const chatId = msg.chat.id;
   if (!text) {
     // Notas de voz, fotos, etc.: el bot todavía no las transcribe.
