@@ -223,8 +223,8 @@ router.post(
   async (req, res, next) => {
     try {
       const userId = req.user.sub;
-      const { orderId, creditsToApply, attribution, quoteId, optionId } = req.body;
-      const summary = await service.checkout(orderId, userId, creditsToApply, sanitizeAttribution(attribution), { quoteId, optionId });
+      const { orderId, creditsToApply, attribution, quoteId, optionId, paymentMethod } = req.body;
+      const summary = await service.checkout(orderId, userId, creditsToApply, sanitizeAttribution(attribution), { quoteId, optionId, paymentMethod });
       res.status(200).json(summary);
     } catch (error) {
       next(error);

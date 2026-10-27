@@ -1385,8 +1385,11 @@ class OrderService {
 
       // Smart Shipping (flag encendido): el envío se fija aquí (DeUna / créditos
       // parciales). Los créditos solo descuentan productos, nunca el recargo.
+      // paymentMethod = cómo se pagará el saldo ('cod' tras créditos parciales): una
+      // cotización de otro método falla AQUÍ, antes de redimir créditos (la orden sigue
+      // en carrito); antes fallaba en confirm-cod con la orden ya comprada.
       const ship = shipCfg.enabled
-        ? await shipping.applyQuote({ t, order, userId, ...shippingQuote, paymentMethod: null, lines: shipLines, cfg: shipCfg })
+        ? await shipping.applyQuote({ t, order, userId, ...shippingQuote, paymentMethod: shippingQuote?.paymentMethod || null, lines: shipLines, cfg: shipCfg })
         : null;
 
       // Fórmula única de totales/IVA (Services/orderTotals.js). `subtotal` ya

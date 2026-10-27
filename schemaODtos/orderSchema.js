@@ -128,6 +128,9 @@ const checkoutSchema = Joi.object({
   // The service caps this at floor(subtotal) automatically.
   creditsToApply: Joi.number().integer().min(0).default(0),
   ...shippingQuoteFields,
+  // Smart Shipping: método con el que se pagará el saldo (créditos parciales + COD → 'cod').
+  // Omitido = comportamiento previo (se evalúa sin recaudo).
+  paymentMethod: Joi.string().valid('cod', 'deuna').optional(),
 });
 
 // POST /orders/track/lookup: pedido + correo o teléfono del pedido.

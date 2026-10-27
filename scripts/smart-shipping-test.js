@@ -213,6 +213,37 @@ async function main() {
     updates.length = 0;
     const codAfter = await post('/orders/12/confirm-cod', {});
     assert('créditos parciales + COD con cotización DeUna → 409', codAfter.status === 409 && codAfter.body.code === 'SHIPPING_QUOTE_INVALID', codAfter.text);
+    console.log('\n▶ Fase D: créditos parciales + saldo contra entrega');
+    const redeemed = [];
+    require('../Services/walletService').prototype.redeemCredits = async (uid, n) => { redeemed.push(n); };
+    reset();
+    setFlag(ON); // semilla: Macas tiene tarifa COD (Laar/Servientrega) y no DeUna
+    const ckReq = await post('/orders/checkout', { orderId: 12, creditsToApply: 5, paymentMethod: 'cod' });
+    assert('sin cotización, saldo COD con cobertura COD → 409 REQUIRED; sigue en carrito y sin redimir',
+      ckReq.status === 409 && ckReq.body.code === 'SHIPPING_QUOTE_REQUIRED' && ORDERS[12].state === 'carrito' && !redeemed.length, ckReq.text);
+    assert('checkout con paymentMethod inválido → 400', (await post('/orders/checkout', { orderId: 12, paymentMethod: 'tarjeta' })).status === 400);
+    setFlag({ ...ON, adapter: 'mock' });
+    const qDe = await quote(12, { paymentMethod: 'deuna' });
+    const mis = await post('/orders/checkout', { orderId: 12, creditsToApply: 5, paymentMethod: 'cod', quoteId: qDe.body.quoteId, optionId: 'c2' });
+    assert('cotización DeUna + saldo COD → 409 en checkout (antes de redimir); cotización sin usar',
+      mis.status === 409 && mis.body.code === 'SHIPPING_QUOTE_INVALID' && ORDERS[12].state === 'carrito' && !redeemed.length && QUOTES.get(qDe.body.quoteId).usedAt == null, mis.text);
+    const qCod = await quote(12);
+    const oCod = qCod.body.options.find((o) => o.optionId === 'c2');
+    const due = Math.round((32.99 - 5 + oCod.surcharge) * 100) / 100;
+    const gross = Math.round((32.99 + oCod.surcharge) * 100) / 100;
+    updates.length = 0;
+    const part = await post('/orders/checkout', { orderId: 12, creditsToApply: 5, paymentMethod: 'cod', quoteId: qCod.body.quoteId, optionId: 'c2' });
+    const pCh = lastUpdate(12);
+    assert('créditos parciales + COD cotizado: saldo = productos − créditos + recargo',
+      part.status === 200 && oCod.surcharge > 0 && part.body.creditsApplied === 5 && part.body.amountToPay === due && pCh.total === due
+      && pCh.subtotal === 32.99 && pCh.paymentMethod === 'credits_partial' && redeemed[0] === 5, `${part.text} ${JSON.stringify(pCh)}`);
+    assert('IVA no duplicado: tax extraído de productos + recargo (nunca sumado sobre el saldo)',
+      pCh.tax === Math.round((gross - Math.round((gross / 1.15) * 100) / 100) * 100) / 100, JSON.stringify(pCh));
+    updates.length = 0;
+    const fin = await post('/orders/12/confirm-cod', {});
+    const fCh = lastUpdate(12);
+    assert('confirm-cod tras créditos parciales → 200; cobra el mismo saldo, pago cod, sin re-cotizar',
+      fin.status === 200 && fCh.paymentMethod === 'cod' && !('total' in fCh) && fin.body.total === due && rawQueries.length === 1, `${fin.text} ${JSON.stringify(fCh)}`);
     reset();
     setFlag({ ...ON, policy: { mode: 'absorb' } });
     const qa = await quote();
