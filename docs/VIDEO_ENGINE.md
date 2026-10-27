@@ -57,3 +57,33 @@ node scripts/render-product-video.js 82 v2 "Agua y comida en un solo lugar" --ou
 
 `npm test` incluye `scripts/video-engine-test.js`. El render real solo corre con `FFMPEG_PATH` apuntando a un binario;
 sin él se salta con aviso.
+
+## QA de movimiento y montaje de clips (rama `feat/motion-qa`, herramientas offline)
+
+No corren en Railway ni en `npm test`: necesitan python3 con `opencv-python` y `numpy`.
+
+**Filtro antes de Telegram (`feat/video-pipeline`).** `sendForReview` ejecuta `motion-qa.py --min-real 0.6` sobre el mp4
+y añade una línea al caption de revisión, encima de `Ref:`. **Nunca bloquea ni hace fallar el envío**: Luis decide.
+- PASA → `QA de movimiento: PASA, movimiento X %`.
+- FALLA → `⚠️ Vídeo de fotos, movimiento X % (QA bajo el 60 %)` (lo normal en el motor de fotos con Ken Burns).
+- Sin python3/OpenCV, error, salida ilegible o más de 90 s → `QA de movimiento: QA no ejecutado` (en Railway hoy, porque
+  la imagen nixpacks solo trae nodejs y ffmpeg).
+- `MOTION_QA_PYTHON` (opcional): intérprete con OpenCV; por defecto `python3`. El resultado se registra en el log
+  (`[Video] <ref> QA movimiento: …`), no en BD.
+
+- `scripts/motion-qa.py vídeo.mp4 [--min-real 0.6]` → JSON con % de duración con movimiento real, tramos estáticos,
+  planos y PASA/FALLA (código 0/1). Compensa la transformación global (afín LK+RANSAC refinada con ECC, dos capas)
+  y descarta rótulos fijos; lo que queda es acción real. `--min-real 0.25` para cribar material bruto de proveedor.
+  Medido: v82b 7,4 % FALLA · v82c 31,2 % FALLA · v82d 76,4 % PASA.
+- `scripts/supplier-clip-edit.py guion.json salida.mp4` → 1080x1920 con vídeos/fotos del proveedor y clips pagados
+  o genéricos, subtítulos ASS, ducking, −14 LUFS y CTA; ejecuta el QA y sale con 1 si la pieza no es apta.
+  Las fotos entran como plano fijo (sin Ken Burns) y el QA las cuenta como estáticas.
+- Marca de agua del proveedor: `"delogo": [x, y, w, h]` (o lista de cajas) por plano, en píxeles del clip/foto original
+  (delogo de ffmpeg, como `WM_A` en v82d). Caja manual: la detección automática (región estática de alto contraste)
+  se probó y no aísla la marca semitransparente del producto/fondo, también estáticos.
+- Prueba: `python3 scripts/motion-qa-test.py` (sintética; con `FFMPEG_PATH` prueba también el montaje).
+
+| Qué | Por qué | Descartado |
+|---|---|---|
+| Residuo tras compensar afín + mínimo con "sin mover" + umbral relativo al gradiente | Ken Burns y rótulos fijos dan ~0; un borde desalineado 0,3 px no cuenta | Flujo óptico denso (ruidoso en fondos desenfocados), solo diferencia de fotogramas (el zoom cuenta como movimiento) |
+| Python + OpenCV, fuera de la API | Ya instalado en la máquina de producción de contenido; coste 0 | Añadir opencv al backend Node |
