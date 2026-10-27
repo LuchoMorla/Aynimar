@@ -49,7 +49,8 @@ function run(bin, args, timeoutMs) {
   return new Promise((resolve, reject) => {
     const p = spawn(bin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     // Prioridad baja: la API comparte CPU con ffmpeg (numReplicas=1).
-    try { os.setPriority(p.pid, 10); } catch { /* sin permiso o proceso ya terminado */ }
+    // Sin pid (binario inexistente) setPriority(undefined) bajaría la prioridad de la propia API.
+    try { if (p.pid) os.setPriority(p.pid, 10); } catch { /* sin permiso o proceso ya terminado */ }
     let err = '';
     p.stderr.on('data', (d) => { err = (err + d).slice(-4000); });
     const t = setTimeout(() => { p.kill('SIGKILL'); reject(new Error('ffmpeg timeout')); }, timeoutMs);
@@ -195,6 +196,46 @@ function newRef(productId) {
   return `v${productId}x${Date.now().toString(36)}${crypto.randomBytes(2).toString('hex')}`;
 }
 
+const MOTION_QA_SCRIPT = path.join(__dirname, '../scripts/motion-qa.py');
+const MOTION_QA_MIN_REAL = 0.6; // pieza montada (ver docs/VIDEO_ENGINE.md)
+
+/**
+ * QA de movimiento (scripts/motion-qa.py). Nunca lanza: sin python3/OpenCV, timeout
+ * o salida ilegible → { ran:false }. Solo informa; no bloquea el envío.
+ * ponytail: ~75 s por pieza de 17 s en un portátil; RANSAC da ±10 pts entre ejecuciones.
+ * @returns {Promise<{ran:true, pass:boolean, pct:number}|{ran:false, reason:string}>}
+ */
+function motionQa(file, { python = process.env.MOTION_QA_PYTHON || 'python3', script = MOTION_QA_SCRIPT, timeoutMs = 90000 } = {}) {
+  return new Promise((resolve) => {
+    let out = '', done = false;
+    const finish = (r) => { if (!done) { done = true; clearTimeout(t); resolve(r); } };
+    let p;
+    try {
+      p = spawn(python, [script, file, '--min-real', String(MOTION_QA_MIN_REAL), '--sin-pares'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch { return resolve({ ran: false, reason: 'python no disponible' }); }
+    // Sin pid (binario inexistente) setPriority(undefined) bajaría la prioridad de la propia API.
+    try { if (p.pid) os.setPriority(p.pid, 10); } catch { /* sin permiso o ya terminó */ }
+    const t = setTimeout(() => { p.kill('SIGKILL'); finish({ ran: false, reason: 'timeout' }); }, timeoutMs);
+    p.stdout.on('data', (d) => { out = (out + d).slice(-20000); });
+    p.on('error', () => finish({ ran: false, reason: 'python no disponible' }));
+    p.on('close', (code) => {
+      let r = null;
+      try { r = JSON.parse(out); } catch { /* sin OpenCV: traceback por stderr, stdout vacío */ }
+      const pct = Number(r?.pct_movimiento_real);
+      if ((code === 0 || code === 1) && Number.isFinite(pct) && ['PASA', 'FALLA'].includes(r.veredicto)) {
+        finish({ ran: true, pass: r.veredicto === 'PASA', pct });
+      } else finish({ ran: false, reason: r?.error ? 'vídeo ilegible' : 'python3/OpenCV no disponible' });
+    });
+  });
+}
+
+/** Línea para el caption de revisión: Luis decide; el QA no bloquea. */
+function qaLabel(qa) {
+  if (!qa.ran) return 'QA de movimiento: QA no ejecutado';
+  const pct = `${String(qa.pct).replace('.', ',')} %`;
+  return qa.pass ? `QA de movimiento: PASA, movimiento ${pct}` : `⚠️ Vídeo de fotos, movimiento ${pct} (QA bajo el ${Math.round(MOTION_QA_MIN_REAL * 100)} %)`;
+}
+
 /**
  * Envía el mp4 a Telegram para revisión y registra la fila pending (F2).
  * Si la BD falla, el vídeo ya está en el chat: se avisa al admin y no se lanza
@@ -202,7 +243,9 @@ function newRef(productId) {
  */
 async function sendForReview({ file, product, variant, benefit, network, ref }) {
   const link = storeLink(product.id, { network, campaign: `video_${variant}`, ref });
-  const caption = `Vídeo ${variant.toUpperCase()} para revisión\n${shortName(product.name)} · $${Number(product.price).toFixed(2)}\nBeneficio: ${String(benefit).replace(/\s+/g, ' ').trim()}\nRef: ${ref}\n${link}`;
+  const qa = await motionQa(file);
+  console.log(`[Video] ${ref} QA movimiento: ${qa.ran ? `${qa.pass ? 'PASA' : 'FALLA'} ${qa.pct}%` : `no ejecutado (${qa.reason})`}`);
+  const caption = `Vídeo ${variant.toUpperCase()} para revisión\n${shortName(product.name)} · $${Number(product.price).toFixed(2)}\nBeneficio: ${String(benefit).replace(/\s+/g, ' ').trim()}\n${qaLabel(qa)}\nRef: ${ref}\n${link}`;
   const { sendTelegramVideo } = require('../utils/telegramNotify');
   const tg = await sendTelegramVideo(file, caption, ref);
   if (!tg.ok) throw new Error(`Telegram no aceptó el vídeo ${ref}`);
@@ -219,7 +262,7 @@ async function sendForReview({ file, product, variant, benefit, network, ref }) 
     const { sendTelegramNotification } = require('../utils/telegramNotify');
     await sendTelegramNotification(`⚠️ El vídeo ${ref} se envió pero no se pudo registrar su revisión: sus botones no funcionarán. Genera de nuevo la pieza.`);
   }
-  return tg;
+  return { ...tg, qa };
 }
 
 /**
@@ -241,13 +284,13 @@ async function createProductVideo({ productId, variant, benefit, network = 'inst
     console.log(`[Video] ${ref} producto=${productId} ${variant} ${(r.bytes / 1e6).toFixed(1)}MB ${r.durationS}s render=${((Date.now() - t0) / 1000).toFixed(1)}s`);
     if (!send) return { ...r, ref };
     const tg = await sendForReview({ file, product, variant, benefit, network, ref });
-    return { ...r, ref, fileId: tg.fileId };
+    return { ...r, ref, fileId: tg.fileId, qa: tg.qa };
   } finally {
     if (!outPath) fs.rmSync(file, { force: true });
   }
 }
 
 module.exports = {
-  renderProductVideo, createProductVideo, buildTexts, productImages, storeLink, storeBaseUrl, newRef, socialCaption, sendForReview,
+  renderProductVideo, createProductVideo, buildTexts, productImages, storeLink, storeBaseUrl, newRef, socialCaption, sendForReview, motionQa, qaLabel,
   wrap, shortName, isAllowedImageUrl, ALLOWED_IMAGE_HOSTS, VARIANTS, FONT_FILE,
 };

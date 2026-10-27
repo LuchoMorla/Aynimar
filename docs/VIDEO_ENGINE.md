@@ -62,6 +62,15 @@ sin él se salta con aviso.
 
 No corren en Railway ni en `npm test`: necesitan python3 con `opencv-python` y `numpy`.
 
+**Filtro antes de Telegram (`feat/video-pipeline`).** `sendForReview` ejecuta `motion-qa.py --min-real 0.6` sobre el mp4
+y añade una línea al caption de revisión, encima de `Ref:`. **Nunca bloquea ni hace fallar el envío**: Luis decide.
+- PASA → `QA de movimiento: PASA, movimiento X %`.
+- FALLA → `⚠️ Vídeo de fotos, movimiento X % (QA bajo el 60 %)` (lo normal en el motor de fotos con Ken Burns).
+- Sin python3/OpenCV, error, salida ilegible o más de 90 s → `QA de movimiento: QA no ejecutado` (en Railway hoy, porque
+  la imagen nixpacks solo trae nodejs y ffmpeg).
+- `MOTION_QA_PYTHON` (opcional): intérprete con OpenCV; por defecto `python3`. El resultado se registra en el log
+  (`[Video] <ref> QA movimiento: …`), no en BD.
+
 - `scripts/motion-qa.py vídeo.mp4 [--min-real 0.6]` → JSON con % de duración con movimiento real, tramos estáticos,
   planos y PASA/FALLA (código 0/1). Compensa la transformación global (afín LK+RANSAC refinada con ECC, dos capas)
   y descarta rótulos fijos; lo que queda es acción real. `--min-real 0.25` para cribar material bruto de proveedor.

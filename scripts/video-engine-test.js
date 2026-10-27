@@ -184,6 +184,30 @@ async function main() {
     vs.createProductVideo = origCreate;
   }
 
+  console.log('\n▶ QA de movimiento (nunca bloquea ni lanza)');
+  const qaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qatest-'));
+  const fake = (name, body) => { const f = path.join(qaDir, `${name}.js`); fs.writeFileSync(f, body); return { python: process.execPath, script: f }; };
+  const json = (o, code) => `process.stdout.write(${JSON.stringify(JSON.stringify(o))}); process.exitCode = ${code};`;
+  try {
+    const pasa = await vs.motionQa('x.mp4', fake('pasa', json({ pct_movimiento_real: 76.4, veredicto: 'PASA' }, 0)));
+    assert('PASA → ran, pass, pct', pasa.ran && pasa.pass && pasa.pct === 76.4);
+    assert('etiqueta PASA con coma decimal', vs.qaLabel(pasa) === 'QA de movimiento: PASA, movimiento 76,4 %', vs.qaLabel(pasa));
+    const falla = await vs.motionQa('x.mp4', fake('falla', json({ pct_movimiento_real: 8, veredicto: 'FALLA' }, 1)));
+    assert('FALLA → ran, !pass', falla.ran && !falla.pass && falla.pct === 8);
+    assert('etiqueta FALLA = «vídeo de fotos, movimiento X %» (no bloquea)', vs.qaLabel(falla) === '⚠️ Vídeo de fotos, movimiento 8 % (QA bajo el 60 %)', vs.qaLabel(falla));
+    const err = await vs.motionQa('x.mp4', fake('err', json({ error: 'no se puede abrir' }, 2)));
+    assert('error del script (código 2) → no ejecutado', !err.ran && /ilegible/.test(err.reason));
+    const sinCv = await vs.motionQa('x.mp4', fake('sincv', "process.stderr.write('ModuleNotFoundError: cv2'); process.exitCode = 1;"));
+    assert('sin OpenCV (traceback, stdout vacío) → no ejecutado', !sinCv.ran && /OpenCV/.test(sinCv.reason));
+    const basura = await vs.motionQa('x.mp4', fake('basura', json({ pct_movimiento_real: 'x', veredicto: 'PASA' }, 0)));
+    assert('JSON sin pct numérico → no ejecutado', !basura.ran);
+    const noPy = await vs.motionQa('x.mp4', { python: '/nonexistent/python3' });
+    assert('sin python3 → no ejecutado, sin lanzar', !noPy.ran && /no disponible/.test(noPy.reason));
+    const slow = await vs.motionQa('x.mp4', { ...fake('slow', 'setTimeout(() => {}, 10000);'), timeoutMs: 300 });
+    assert('timeout → no ejecutado (proceso matado)', !slow.ran && slow.reason === 'timeout');
+    assert('etiqueta «QA no ejecutado»', vs.qaLabel(noPy) === 'QA de movimiento: QA no ejecutado');
+  } finally { fs.rmSync(qaDir, { recursive: true, force: true }); }
+
   console.log('\n▶ Render real con ffmpeg (imagen sintética, texto con comillas/dos puntos/%)');
   const ff = process.env.FFMPEG_PATH;
   if (!ff || !fs.existsSync(ff)) {
@@ -213,6 +237,9 @@ async function main() {
       assert('tamaño < 50 MB (límite sendVideo)', r.bytes > 0 && r.bytes < 50e6);
       const dec = spawnSync(ff, ['-v', 'error', '-i', out, '-f', 'null', '-'], { encoding: 'utf8' });
       assert('decodifica sin errores', dec.status === 0 && !dec.stderr.trim(), dec.stderr.slice(0, 300));
+      const qa = await vs.motionQa(out);
+      if (!qa.ran) console.warn(`  ⚠️  QA real no ejecutado (${qa.reason}): python3/OpenCV no disponibles.`);
+      else assert(`QA real: vídeo de fotos con zoom → FALLA (movimiento ${qa.pct} %)`, !qa.pass && qa.pct < 60);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

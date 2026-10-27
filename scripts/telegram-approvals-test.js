@@ -106,6 +106,7 @@ async function main() {
   assert('sendVideo devuelve file_id y message_id', sent.ok && sent.fileId === 'FILEID-555' && sent.messageId === 555);
   assert('fila pending con ref, producto, variante, red, file_id y message_id', row?.status === 'pending' && row.productId === 82 && row.variant === 'v1' && row.network === 'tiktok' && row.telegramFileId === 'FILEID-555' && row.telegramMessageId === 555);
   assert('link UTM guardado', row?.utmLink === vs.storeLink(82, { network: 'tiktok', campaign: 'video_v1', ref: REF }));
+  assert('caption de revisión marcado «QA no ejecutado» (mp4 falso) y no bloquea', sent.qa?.ran === false && tg.some((c) => c.method === 'sendVideo' && /QA no ejecutado\nRef: /.test(c.form?.get('caption') || '')));
   assert('coste de producción registrado (motor ffmpeg = 0)', row?.productionCostUsd === 0);
   assert('caption para la red con beneficio, precio y link', row?.caption.includes('Agua fresca siempre') && row.caption.includes('$24.90') && row.caption.includes(row.utmLink));
   dbDown = true;
