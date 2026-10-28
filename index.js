@@ -79,6 +79,7 @@ app.get('/health', (req, res) => {
 
   // El token de integración solo hace falta con el transporte http (ni WOO_CONSUMER_SECRET ni
   // DROPI_ORDER_TOKEN cuentan). Con transporte mock (por defecto) su ausencia no degrada.
+  // Sin cambios de contrato: mismos campos que antes; el aviso de deploy usa libs/deployHealth.
   const degraded = !groqKey || !jwtSecret || (process.env.DROPI_ORDER_TRANSPORT === 'http' && !orderToken);
 
   res.status(degraded ? 200 : 200).json({
@@ -197,16 +198,8 @@ async function notifyDeployHealth() {
   const chatId = getAdminChatId();
   if (!token || !chatId) return; // Telegram not configured — skip silently
 
-  const checks = {
-    jwt_secret:        !!process.env.JWT_SECRET,
-    dropi_integration_key: !!process.env.DROPI_INTEGRATION_KEY,
-    groq_api_key:      !!(process.env.GROQ_API_KEY || process.env.GROQ_IA_KEY),
-    telegram_bot:      !!process.env.TELEGRAM_BOT_TOKEN,
-  };
-
-  const criticalFails = Object.entries(checks)
-    .filter(([, ok]) => !ok)
-    .map(([k]) => k);
+  // Misma regla que /health: DROPI_INTEGRATION_KEY solo con transporte http (el servidor usa login + Worker).
+  const { checks, missing: criticalFails } = require('./libs/deployHealth').deployHealthChecks();
 
   const statusLine = criticalFails.length === 0
     ? '✅ <b>Deploy OK — sistema estable</b>'
